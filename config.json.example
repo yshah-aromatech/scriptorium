@@ -1,0 +1,12 @@
+{
+  "scriptsRepo": "https://github.com/YOUR_ORG/your-powershell-scripts-repo",
+  "branch": "main",
+  "dataDir": "~/.psscripts",
+  "n8nWebhookUrl": "",
+  "pwshBin": "pwsh",
+  "monitorIntervalMs": 1000,
+  "logTailKb": 64,
+  "runTimeoutMinutes": 0,
+  "maxOutputLines": 5000,
+  "openRouterModel": "google/gemini-3.1-flash-lite"
+}
