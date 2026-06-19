@@ -80,13 +80,13 @@ One folder per script:
 ```
 your-scripts-repo/
 ├── backup-db/
-│   ├── main.ps1        # entry point (main.ps1, <folder>.ps1, run.ps1, or set in script.json)
+│   ├── main.ps1        # entry point (see resolution order below)
 │   └── script.json     # optional: {"entry": "...", "description": "...", "args": ["-Flag"]}
 └── cleanup-tmp/
     └── main.ps1
 ```
 
-Loose `.ps1` files in the repo root also work. No module manifest needed — dependencies are detected from `#Requires -Modules`, `using module`, and `Import-Module` statements in your code and installed on demand into the script's module dir.
+The entry point for each folder is resolved in this order: `script.json`'s `"entry"`, then `main.ps1`, `<folder>.ps1`, or `run.ps1` (matched case-insensitively), then — if none of those exist — the only `.ps1` in the folder (or the first alphabetically if there are several). So a folder containing a single arbitrarily-named `.ps1` is detected automatically; use `script.json` `"entry"` to pick a specific file when a folder has more than one. Loose `.ps1` files in the repo root also work. No module manifest needed — dependencies are detected from `#Requires -Modules`, `using module`, and `Import-Module` statements in your code and installed on demand into the script's module dir.
 
 ## Per-script .env files
 

@@ -66,13 +66,30 @@ function Get-PssScripts {
             try { $meta = Get-Content $metaFile -Raw | ConvertFrom-Json } catch { }
         }
         $entry = $null
-        $candidates = @()
-        if ($meta -and $meta.PSObject.Properties['entry'] -and $meta.entry) { $candidates += [string]$meta.entry }
-        $candidates += 'main.ps1', "$($dir.Name).ps1", 'run.ps1'
-        foreach ($c in $candidates) {
-            $p = Join-Path $dir.FullName $c
-            if (Test-Path $p) { $entry = $p; break }
+
+        # explicit entry from script.json wins (may be a relative path with subfolders)
+        if ($meta -and $meta.PSObject.Properties['entry'] -and $meta.entry) {
+            $p = Join-Path $dir.FullName ([string]$meta.entry)
+            if (Test-Path $p) { $entry = (Resolve-Path -LiteralPath $p).Path }
         }
+
+        # all .ps1 files in this folder (one level), used for matching + fallback.
+        # matched/compared case-insensitively because the server FS is case-sensitive.
+        $ps1Files = @(Get-ChildItem $dir.FullName -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -ieq '.ps1' } | Sort-Object Name)
+
+        if (-not $entry) {
+            foreach ($c in 'main.ps1', "$($dir.Name).ps1", 'run.ps1') {
+                $match = $ps1Files | Where-Object { $_.Name -ieq $c } | Select-Object -First 1
+                if ($match) { $entry = $match.FullName; break }
+            }
+        }
+
+        # fallback: no conventional entry — use the sole .ps1 in the folder.
+        # if several exist and none is conventional, take the first alphabetically
+        # (set "entry" in script.json to disambiguate).
+        if (-not $entry -and $ps1Files.Count -gt 0) { $entry = $ps1Files[0].FullName }
+
         if (-not $entry) { continue }
 
         $scriptArgs = @()
