@@ -26,26 +26,37 @@ function Sync-PssRepo {
 
     $dir = $paths.ScriptsDir
     $branch = [string]$cfg.branch
-    $gitOut = $null
 
     if (-not (Test-Path (Join-Path $dir '.git'))) {
         & $emit "cloning $repo (branch $branch)..."
         $gitOut = git clone --branch $branch $url $dir 2>&1
+        foreach ($l in $gitOut) { if ("$l") { & $emit "$l" } }
+        $ok = ($LASTEXITCODE -eq 0)
     } else {
         & $emit "syncing $repo (hard reset to origin/$branch)..."
         git -C $dir remote set-url origin $url 2>&1 | Out-Null  # refresh token
-        $gitOut = @(
-            git -C $dir fetch origin 2>&1
-            git -C $dir checkout $branch 2>&1
-            git -C $dir reset --hard "origin/$branch" 2>&1
+        # each step's exit code is checked individually — a failed fetch (e.g.
+        # expired token) must fail the sync, not be masked by a later step
+        $steps = @(
+            , @('fetch', 'origin')
+            , @('checkout', $branch)
+            , @('reset', '--hard', "origin/$branch")
             # clean untracked files but keep local .env files
-            git -C $dir clean -fdx -e '.env' -e '**/.env' 2>&1
+            , @('clean', '-fdx', '-e', '.env', '-e', '**/.env')
         )
+        $ok = $true
+        foreach ($step in $steps) {
+            $gitOut = git -C $dir @step 2>&1
+            foreach ($l in $gitOut) { if ("$l") { & $emit "$l" } }
+            if ($LASTEXITCODE -ne 0) {
+                & $emit "git $($step[0]) failed (exit $LASTEXITCODE)"
+                $ok = $false
+                break
+            }
+        }
     }
-    foreach ($l in $gitOut) { if ("$l") { & $emit "$l" } }
 
-    $ok = ($LASTEXITCODE -eq 0)
-    & $emit $(if ($ok) { 'sync complete' } else { "sync FAILED (exit $LASTEXITCODE) — check GITHUB_TOKEN in .env" })
+    & $emit $(if ($ok) { 'sync complete' } else { 'sync FAILED — check GITHUB_TOKEN in .env' })
     $ok
 }
 
@@ -96,16 +107,22 @@ function Get-PssScripts {
         if ($meta -and $meta.PSObject.Properties['args'] -and $meta.args) { $scriptArgs = @($meta.args | ForEach-Object { "$_" }) }
         $desc = ''
         if ($meta -and $meta.PSObject.Properties['description'] -and $meta.description) { $desc = [string]$meta.description }
+        # optional per-script timeout — overrides the global runTimeoutMinutes
+        $timeout = $null
+        if ($meta -and $meta.PSObject.Properties['timeoutMinutes'] -and $null -ne ($meta.timeoutMinutes -as [double])) {
+            $timeout = [double]$meta.timeoutMinutes
+        }
 
         $scripts.Add([pscustomobject]@{
-                Name        = $dir.Name
-                Dir         = $dir.FullName
-                Entry       = $entry
-                Args        = $scriptArgs
-                Description = $desc
-                EnvFile     = Join-Path $dir.FullName '.env'
-                EnvExample  = Join-Path $dir.FullName '.env.example'
-                ModuleDir   = Join-Path $paths.ModulesDir $dir.Name
+                Name           = $dir.Name
+                Dir            = $dir.FullName
+                Entry          = $entry
+                Args           = $scriptArgs
+                Description    = $desc
+                TimeoutMinutes = $timeout
+                EnvFile        = Join-Path $dir.FullName '.env'
+                EnvExample     = Join-Path $dir.FullName '.env.example'
+                ModuleDir      = Join-Path $paths.ModulesDir $dir.Name
             })
     }
 
@@ -113,14 +130,15 @@ function Get-PssScripts {
     foreach ($file in (Get-ChildItem $root -File -Filter '*.ps1' | Sort-Object Name)) {
         $name = [IO.Path]::GetFileNameWithoutExtension($file.Name)
         $scripts.Add([pscustomobject]@{
-                Name        = $name
-                Dir         = $root
-                Entry       = $file.FullName
-                Args        = @()
-                Description = ''
-                EnvFile     = Join-Path $root "$name.env"
-                EnvExample  = Join-Path $root "$name.env.example"
-                ModuleDir   = Join-Path $paths.ModulesDir $name
+                Name           = $name
+                Dir            = $root
+                Entry          = $file.FullName
+                Args           = @()
+                Description    = ''
+                TimeoutMinutes = $null
+                EnvFile        = Join-Path $root "$name.env"
+                EnvExample     = Join-Path $root "$name.env.example"
+                ModuleDir      = Join-Path $paths.ModulesDir $name
             })
     }
 

@@ -8,5 +8,10 @@
   "logTailKb": 64,
   "runTimeoutMinutes": 0,
   "maxOutputLines": 5000,
-  "openRouterModel": "google/gemini-3.1-flash-lite"
+  "openRouterModel": "google/gemini-3.1-flash-lite",
+  "syncOnLaunch": false,
+  "logRetentionDays": 30,
+  "historyMaxLines": 5000,
+  "webhookTimeoutSec": 15,
+  "colorMode": "auto"
 }

@@ -4,6 +4,8 @@ $script:AppDir = $null
 $script:Config = $null
 $script:Paths = $null
 $script:Secrets = [System.Collections.Generic.List[string]]::new()
+$script:ConfigWarnings = [System.Collections.Generic.List[string]]::new()
+$script:ColorMode = 'truecolor'   # truecolor | 256
 
 # ---------------------------------------------------------------------------
 # Night Owl (dark) palette — https://terminalcolors.com/themes/night-owl/dark/
@@ -25,21 +27,44 @@ $script:NightOwl = [ordered]@{
     BrCyan   = '#7fdbca'
 }
 
-function ConvertTo-AnsiFg {
+# Nearest xterm-256 index for a 24-bit color (6x6x6 cube + grayscale ramp),
+# used when the terminal doesn't advertise truecolor.
+function ConvertTo-Ansi256Index {
+    param([int]$R, [int]$G, [int]$B)
+    $steps = 0, 95, 135, 175, 215, 255
+    $q = { param($v) $best = 0; for ($i = 1; $i -lt 6; $i++) { if ([Math]::Abs($steps[$i] - $v) -lt [Math]::Abs($steps[$best] - $v)) { $best = $i } }; $best }
+    $qr = & $q $R; $qg = & $q $G; $qb = & $q $B
+    $cubeIdx = 16 + 36 * $qr + 6 * $qg + $qb
+    $cubeDist = [Math]::Pow($steps[$qr] - $R, 2) + [Math]::Pow($steps[$qg] - $G, 2) + [Math]::Pow($steps[$qb] - $B, 2)
+
+    $avg = [int](($R + $G + $B) / 3)
+    $gi = [Math]::Min(23, [Math]::Max(0, [int][Math]::Round(($avg - 8) / 10.0)))
+    $gv = 8 + 10 * $gi
+    $grayIdx = 232 + $gi
+    $grayDist = [Math]::Pow($gv - $R, 2) + [Math]::Pow($gv - $G, 2) + [Math]::Pow($gv - $B, 2)
+
+    if ($grayDist -lt $cubeDist) { $grayIdx } else { $cubeIdx }
+}
+
+function ConvertFrom-PssHex {
     param([string]$Hex)
     $h = $Hex.TrimStart('#')
-    $r = [Convert]::ToInt32($h.Substring(0, 2), 16)
-    $g = [Convert]::ToInt32($h.Substring(2, 2), 16)
-    $b = [Convert]::ToInt32($h.Substring(4, 2), 16)
+    @([Convert]::ToInt32($h.Substring(0, 2), 16),
+        [Convert]::ToInt32($h.Substring(2, 2), 16),
+        [Convert]::ToInt32($h.Substring(4, 2), 16))
+}
+
+function ConvertTo-AnsiFg {
+    param([string]$Hex)
+    $r, $g, $b = ConvertFrom-PssHex $Hex
+    if ($script:ColorMode -eq '256') { return "`e[38;5;$(ConvertTo-Ansi256Index $r $g $b)m" }
     "`e[38;2;$r;$g;${b}m"
 }
 
 function ConvertTo-AnsiBg {
     param([string]$Hex)
-    $h = $Hex.TrimStart('#')
-    $r = [Convert]::ToInt32($h.Substring(0, 2), 16)
-    $g = [Convert]::ToInt32($h.Substring(2, 2), 16)
-    $b = [Convert]::ToInt32($h.Substring(4, 2), 16)
+    $r, $g, $b = ConvertFrom-PssHex $Hex
+    if ($script:ColorMode -eq '256') { return "`e[48;5;$(ConvertTo-Ansi256Index $r $g $b)m" }
     "`e[48;2;$r;$g;${b}m"
 }
 
@@ -87,7 +112,16 @@ $script:ConfigDefaults = [ordered]@{
     runTimeoutMinutes = 0
     maxOutputLines    = 5000
     openRouterModel   = 'google/gemini-3.1-flash-lite'
+    syncOnLaunch      = $false
+    logRetentionDays  = 30
+    historyMaxLines   = 5000
+    webhookTimeoutSec = 15
+    colorMode         = 'auto'      # auto | truecolor | 256
 }
+# keys whose values must parse as numbers — a typo'd string here would
+# otherwise silently disable the feature
+$script:ConfigNumericKeys = @('monitorIntervalMs', 'logTailKb', 'runTimeoutMinutes',
+    'maxOutputLines', 'logRetentionDays', 'historyMaxLines', 'webhookTimeoutSec')
 
 function Initialize-Pss {
     param([Parameter(Mandatory)][string]$AppDir)
@@ -98,17 +132,35 @@ function Initialize-Pss {
     $cfg = [ordered]@{}
     foreach ($k in $script:ConfigDefaults.Keys) { $cfg[$k] = $script:ConfigDefaults[$k] }
     $cfgFile = Join-Path $AppDir 'config.json'
+    $script:ConfigWarnings.Clear()
     if (Test-Path $cfgFile) {
         try {
             $user = Get-Content $cfgFile -Raw | ConvertFrom-Json
             foreach ($prop in $user.PSObject.Properties) {
-                if ($cfg.Contains($prop.Name)) { $cfg[$prop.Name] = $prop.Value }
+                if (-not $cfg.Contains($prop.Name)) {
+                    $script:ConfigWarnings.Add("config.json: unknown key '$($prop.Name)' — ignored (typo?)")
+                    continue
+                }
+                if ($prop.Name -in $script:ConfigNumericKeys -and $null -eq ($prop.Value -as [double])) {
+                    $script:ConfigWarnings.Add("config.json: '$($prop.Name)' must be a number, got '$($prop.Value)' — using default $($cfg[$prop.Name])")
+                    continue
+                }
+                $cfg[$prop.Name] = $prop.Value
             }
         } catch {
             throw "config.json is not valid JSON: $($_.Exception.Message)"
         }
     }
     $script:Config = $cfg
+
+    # color mode: honor config, else detect truecolor support
+    $script:ColorMode = switch ([string]$cfg.colorMode) {
+        'truecolor' { 'truecolor' }
+        '256' { '256' }
+        default {
+            if ($env:COLORTERM -match 'truecolor|24bit') { 'truecolor' } else { '256' }
+        }
+    }
 
     # app .env -> process environment (existing process env wins)
     $envFile = Join-Path $AppDir '.env'
@@ -137,12 +189,45 @@ function Initialize-Pss {
         LogsDir     = Join-Path $dataDir 'logs'
         HistoryFile = Join-Path $dataDir 'history.jsonl'
     }
-    foreach ($d in $script:Paths.DataDir, $script:Paths.ModulesDir, $script:Paths.LogsDir) {
+    $script:Paths.LocksDir = Join-Path $dataDir 'locks'
+    $script:Paths.WebhookQueueFile = Join-Path $dataDir 'webhook-queue.jsonl'
+    foreach ($d in $script:Paths.DataDir, $script:Paths.ModulesDir, $script:Paths.LogsDir, $script:Paths.LocksDir) {
         if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
     }
+
+    Clear-PssOldData
+}
+
+# ---------------------------------------------------------------------------
+# Retention: prune old run logs and cap the history file so a long-lived
+# server never fills its disk. Runs at every startup (TUI and headless).
+# ---------------------------------------------------------------------------
+function Clear-PssOldData {
+    $cfg = $script:Config
+    $paths = $script:Paths
+    try {
+        $days = [double]$cfg.logRetentionDays
+        if ($days -gt 0 -and (Test-Path $paths.LogsDir)) {
+            $cutoff = (Get-Date).AddDays(-$days)
+            Get-ChildItem $paths.LogsDir -File -Filter '*.log' -ErrorAction SilentlyContinue |
+                Where-Object LastWriteTime -lt $cutoff |
+                Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+    try {
+        $max = [int]$cfg.historyMaxLines
+        if ($max -gt 0 -and (Test-Path $paths.HistoryFile)) {
+            $lines = @(Get-Content $paths.HistoryFile -ErrorAction SilentlyContinue)
+            if ($lines.Count -gt $max) {
+                $lines[($lines.Count - $max)..($lines.Count - 1)] |
+                    Set-Content -Path $paths.HistoryFile -Encoding UTF8
+            }
+        }
+    } catch { }
 }
 
 function Get-PssConfig { $script:Config }
+function Get-PssConfigWarnings { @($script:ConfigWarnings) }
 
 # scripts repo URL: SCRIPTS_REPO env var (e.g. via .env) overrides config.json
 function Get-PssScriptsRepo {
@@ -179,9 +264,13 @@ function Read-PssEnvFile {
 # Secret redaction — every secret value is replaced with *** in all output
 # ---------------------------------------------------------------------------
 function Register-PssSecret {
-    param([string]$Name, [string]$Value)
+    # -Force registers the value regardless of the variable name — used for
+    # per-script .env values, which are by definition config the user chose
+    # to keep out of git and out of logs/webhooks.
+    param([string]$Name, [string]$Value, [switch]$Force)
     if (-not $Value -or $Value.Length -lt 8) { return }
-    if ($Name -and $Name -notmatch 'TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT|CREDENTIAL|WEBHOOK') { return }
+    if (-not $Force -and $Name -and
+        $Name -notmatch 'TOKEN|KEY|SECRET|PASSWORD|PASSWD|PASS|PAT|CREDENTIAL|WEBHOOK|AUTH|CONN|DSN|BEARER') { return }
     if (-not $script:Secrets.Contains($Value)) { $script:Secrets.Add($Value) }
 }
 
@@ -195,14 +284,133 @@ function Hide-PssSecret {
 }
 
 # ---------------------------------------------------------------------------
+# Display width — terminal cells, not UTF-16 code units. Emoji/CJK are 2
+# cells, combining marks/ZWJ/variation selectors are 0; everything the TUI
+# pads or wraps must go through these or wide characters shear the layout.
+# ---------------------------------------------------------------------------
+function Get-PssCodepointWidth {
+    param([int]$Cp)
+    if ($Cp -eq 0x200D -or ($Cp -ge 0x0300 -and $Cp -le 0x036F) -or
+        ($Cp -ge 0xFE00 -and $Cp -le 0xFE0F) -or ($Cp -ge 0x20D0 -and $Cp -le 0x20FF)) { return 0 }
+    if (($Cp -ge 0x1100 -and $Cp -le 0x115F) -or
+        ($Cp -ge 0x2E80 -and $Cp -le 0xA4CF) -or
+        ($Cp -ge 0xAC00 -and $Cp -le 0xD7A3) -or
+        ($Cp -ge 0xF900 -and $Cp -le 0xFAFF) -or
+        ($Cp -ge 0xFE30 -and $Cp -le 0xFE4F) -or
+        ($Cp -ge 0xFF00 -and $Cp -le 0xFF60) -or
+        ($Cp -ge 0xFFE0 -and $Cp -le 0xFFE6) -or
+        ($Cp -ge 0x1F300 -and $Cp -le 0x1FAFF) -or
+        ($Cp -ge 0x20000 -and $Cp -le 0x3FFFD)) { return 2 }
+    1
+}
+
+function Get-PssDisplayWidth {
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return 0 }
+    # ASCII fast path — the overwhelmingly common case in the render loop
+    if ($Text -match '^[\x20-\x7e]*$') { return $Text.Length }
+    $w = 0
+    $i = 0
+    while ($i -lt $Text.Length) {
+        $cp = [char]::ConvertToUtf32($Text, $i)
+        $w += Get-PssCodepointWidth $cp
+        $i += [char]::IsSurrogatePair($Text, $i) ? 2 : 1
+    }
+    $w
+}
+
+# Truncate to at most $Width display cells and pad with spaces to exactly
+# $Width. $Ellipsis appends … when truncation happens.
+function Format-PssCell {
+    param([AllowNull()][AllowEmptyString()][string]$Text, [int]$Width, [switch]$Ellipsis)
+    if ($Width -le 0) { return '' }
+    if ($null -eq $Text) { $Text = '' }
+    # ASCII fast path
+    if ($Text -match '^[\x20-\x7e]*$') {
+        if ($Text.Length -le $Width) { return $Text.PadRight($Width) }
+        if ($Ellipsis -and $Width -ge 2) { return $Text.Substring(0, $Width - 1) + '…' }
+        return $Text.Substring(0, $Width)
+    }
+    $w = 0
+    $i = 0
+    $fit = $Text.Length
+    while ($i -lt $Text.Length) {
+        $cp = [char]::ConvertToUtf32($Text, $i)
+        $cw = Get-PssCodepointWidth $cp
+        if ($w + $cw -gt $Width) { $fit = $i; break }
+        $w += $cw
+        $i += [char]::IsSurrogatePair($Text, $i) ? 2 : 1
+        $fit = $i
+    }
+    if ($fit -lt $Text.Length) {
+        if ($Ellipsis -and $Width -ge 2) {
+            return (Format-PssCell -Text $Text -Width ($Width - 1)) + '…'
+        }
+        $Text = $Text.Substring(0, $fit)
+        $w = Get-PssDisplayWidth $Text
+    }
+    $Text + (' ' * [Math]::Max(0, $Width - $w))
+}
+
+# ---------------------------------------------------------------------------
+# Quote-aware argument splitting — `-Message "hello world"` is two tokens,
+# not three. Used by the TUI extra-args prompt and the --args CLI flag.
+# ---------------------------------------------------------------------------
+function Split-PssArguments {
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    $result = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+    $cur = [Text.StringBuilder]::new()
+    $quote = [char]0
+    $hasToken = $false
+    foreach ($ch in $Text.ToCharArray()) {
+        if ($quote -ne [char]0) {
+            if ($ch -eq $quote) { $quote = [char]0 } else { [void]$cur.Append($ch) }
+            continue
+        }
+        if ($ch -eq '"' -or $ch -eq "'") { $quote = $ch; $hasToken = $true; continue }
+        if ([char]::IsWhiteSpace($ch)) {
+            if ($cur.Length -gt 0 -or $hasToken) { $result.Add($cur.ToString()); [void]$cur.Clear(); $hasToken = $false }
+            continue
+        }
+        [void]$cur.Append($ch)
+    }
+    if ($cur.Length -gt 0 -or $hasToken) { $result.Add($cur.ToString()) }
+    $result.ToArray()
+}
+
+# ---------------------------------------------------------------------------
 # Misc helpers
 # ---------------------------------------------------------------------------
+function Get-PssAppVersion {
+    # short commit of the app checkout — shown in the header, '' if unknown
+    try {
+        $v = git -C $script:AppDir rev-parse --short HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and $v) { return "$v".Trim() }
+    } catch { }
+    ''
+}
+
 function Format-PssDuration {
     param([double]$Seconds)
     if ($Seconds -lt 60) { return ('{0:n1}s' -f $Seconds) }
     $ts = [TimeSpan]::FromSeconds($Seconds)
     if ($ts.TotalHours -ge 1) { return ('{0}h{1:d2}m{2:d2}s' -f [int][Math]::Floor($ts.TotalHours), $ts.Minutes, $ts.Seconds) }
     '{0}m{1:d2}s' -f $ts.Minutes, $ts.Seconds
+}
+
+# Compact age/eta: 45s, 12m, 3h, 5d — used in the script list and "next run"
+function Format-PssRelativeTime {
+    param([double]$Seconds)
+    $s = [Math]::Abs($Seconds)
+    if ($s -lt 60) { return ('{0}s' -f [int]$s) }
+    if ($s -lt 3600) { return ('{0}m' -f [int][Math]::Floor($s / 60)) }
+    if ($s -lt 86400) {
+        $h = [int][Math]::Floor($s / 3600)
+        $m = [int][Math]::Floor(($s % 3600) / 60)
+        return $(if ($m -gt 0 -and $h -lt 10) { "${h}h${m}m" } else { "${h}h" })
+    }
+    '{0}d' -f [int][Math]::Floor($s / 86400)
 }
 
 function Copy-PssClipboard {
@@ -224,6 +432,8 @@ function Copy-PssClipboard {
     'copied via OSC 52'
 }
 
-Export-ModuleMember -Function Initialize-Pss, Get-PssConfig, Get-PssScriptsRepo, Get-PssPaths, Get-PssAppDir,
-Get-PssTheme, Read-PssEnvFile, Register-PssSecret, Hide-PssSecret,
-Format-PssDuration, Copy-PssClipboard, ConvertTo-AnsiFg, ConvertTo-AnsiBg
+Export-ModuleMember -Function Initialize-Pss, Get-PssConfig, Get-PssConfigWarnings, Get-PssScriptsRepo,
+Get-PssPaths, Get-PssAppDir, Get-PssAppVersion, Get-PssTheme, Read-PssEnvFile, Register-PssSecret,
+Hide-PssSecret, Format-PssDuration, Format-PssRelativeTime, Copy-PssClipboard,
+ConvertTo-AnsiFg, ConvertTo-AnsiBg, ConvertTo-Ansi256Index,
+Get-PssDisplayWidth, Get-PssCodepointWidth, Format-PssCell, Split-PssArguments, Clear-PssOldData
