@@ -1100,10 +1100,15 @@ function Get-TuiListRows {
         $sched = if ($script:S.Schedules.ContainsKey($scr.Name)) { "$($t.Cyan)@" } else { ' ' }
         $age = Get-TuiAge $(if ($last) { $last.At })
         $ageCol = "$($t.Muted)$($age.PadLeft(3))"
-        $name = Format-TuiPad -Text $scr.Name -Width ($Width - 9)
         $rowFg = $t.Fg
         $rowBg = ''
         if ($idx -eq $sel) { $rowBg = $t.SelBg; $rowFg = $t.White }
+        $name = Format-TuiPad -Text $scr.Name -Width ($Width - 9)
+        # show why a filtered row matched: highlight the filter substring
+        if ($script:S.Filter) {
+            $name = [regex]::Replace($name, '(' + [regex]::Escape($script:S.Filter) + ')',
+                "$($t.BrCyan)" + '$1' + $rowFg, 'IgnoreCase')
+        }
         $rows += "$rowBg $badge$rowBg $rowFg$name$rowBg$ageCol$rowBg $sched$rowBg "
     }
     $rows

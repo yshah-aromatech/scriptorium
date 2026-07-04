@@ -60,6 +60,17 @@ Describe 'list rows' {
         $plain | Should -Match '@'
     }
 
+    It 'highlights the filter substring in matching rows' {
+        $row = & $script:tui {
+            $script:S.Filter = 'alp'
+            $r = @(Get-TuiListRows -Count 1 -Width 30)[0]
+            $script:S.Filter = ''
+            $r
+        }
+        $t = & $script:tui { Get-PssTheme }
+        $row | Should -Match ([regex]::Escape("$($t.BrCyan)alp"))
+    }
+
     It 'shows a spinner on the running script and » on queued scripts' {
         $rows = & $script:tui {
             $script:S.Run = @{ Kind = 'run'; Name = 'alpha' }
