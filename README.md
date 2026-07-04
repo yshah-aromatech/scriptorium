@@ -25,6 +25,7 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 | --- | --- |
 | `↑`/`↓` or `k`/`j` | navigate scripts |
 | `g` / `G` | jump to the top / bottom of the list |
+| `Tab` | switch pane focus — with the output pane focused, `↑`/`↓`/`j`/`k`/`g`/`G` scroll it (focused pane's title is highlighted) |
 | `Enter` / `r` | run selected script (deps checked first, prompt if missing; queued if something is already running) |
 | `a` | run selected script with extra arguments (quotes group words: `-Msg "hello world"`) |
 | `e` | set/edit/remove the cron schedule for the selected script |

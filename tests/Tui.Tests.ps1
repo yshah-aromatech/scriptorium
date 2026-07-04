@@ -233,6 +233,38 @@ Describe 'scrolled-back indicator' {
     }
 }
 
+Describe 'pane focus' {
+    It 'tab toggles focus and j scrolls the output pane when focused' {
+        $r = & $script:tui {
+            $script:S.Mode = 'list'; $script:S.FocusPane = 'list'
+            Invoke-TuiKeyList ([ConsoleKeyInfo]::new([char]9, [ConsoleKey]::Tab, $false, $false, $false))
+            $afterTab = $script:S.FocusPane
+            $script:S.Wrapped.Clear()
+            1..50 | ForEach-Object { $script:S.Wrapped.Add("l$_") }
+            $script:S.Follow = $false; $script:S.Scroll = 0; $script:S.Selected = 0
+            Invoke-TuiKeyList ([ConsoleKeyInfo]::new('j', [ConsoleKey]::J, $false, $false, $false))
+            $res = @($afterTab, $script:S.Scroll, $script:S.Selected)
+            $script:S.FocusPane = 'list'; $script:S.Wrapped.Clear()
+            $script:S.Scroll = 0; $script:S.Follow = $true
+            $res
+        }
+        $r[0] | Should -Be 'output'
+        $r[1] | Should -Be 1      # output scrolled
+        $r[2] | Should -Be 0      # selection untouched
+    }
+
+    It 'j moves the selection when the list pane is focused' {
+        $r = & $script:tui {
+            $script:S.Mode = 'list'; $script:S.FocusPane = 'list'; $script:S.Selected = 0
+            Invoke-TuiKeyList ([ConsoleKeyInfo]::new('j', [ConsoleKey]::J, $false, $false, $false))
+            $sel = $script:S.Selected
+            $script:S.Selected = 0
+            $sel
+        }
+        $r | Should -Be 1
+    }
+}
+
 Describe 'key hints footer' {
     It 'shows list keys in list mode' {
         $line = & $script:tui { $script:S.Mode = 'list'; Get-TuiKeyHints -Width 200 }

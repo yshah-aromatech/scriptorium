@@ -18,6 +18,7 @@ function Start-PssTui {
         Scripts      = @(); Visible = @()
         Selected     = 0
         ListTop      = 0
+        FocusPane    = 'list'   # list|output — tab toggles; j/k etc. follow it
         Filter       = ''
         Statuses     = @{}
         Schedules    = @{}
@@ -163,12 +164,14 @@ function Invoke-TuiMouse {
         $row = $Y - 3
         if ($row -lt 0 -or $row -ge (Get-TuiBodyHeight)) { return }
         if ($X -le ($lw + 1)) {
-            # list pane: select that row
+            # list pane: select that row (and focus the pane)
+            $script:S.FocusPane = 'list'
             $idx = $script:S.ListTop + $row
             if ($idx -lt $script:S.Visible.Count) { $script:S.Selected = $idx }
         }
         elseif ($X -ge ($lw + 3)) {
-            # output pane: clicking a device-login code copies it
+            # output pane: focus it; clicking a device-login code copies it
+            $script:S.FocusPane = 'output'
             Copy-TuiCodeAt -Row $row -Cell ($X - $lw - 3)
         }
     }
@@ -627,6 +630,24 @@ function Invoke-TuiKeyList {
         } else { $script:S.Quit = $true }
         return
     }
+    if ($Key.Key -eq [ConsoleKey]::Tab) {
+        $script:S.FocusPane = if ($script:S.FocusPane -eq 'output') { 'list' } else { 'output' }
+        Set-TuiStatus "focus: $($script:S.FocusPane) pane (j/k scroll it — tab switches back)"
+        return
+    }
+    # with the output pane focused, navigation keys scroll it instead
+    if ($script:S.FocusPane -eq 'output') {
+        switch ($Key.Key) {
+            'UpArrow' { Move-TuiScroll -1; return }
+            'DownArrow' { Move-TuiScroll 1; return }
+        }
+        switch -CaseSensitive ($Key.KeyChar) {
+            'k' { Move-TuiScroll -1; return }
+            'j' { Move-TuiScroll 1; return }
+            'g' { $script:S.Scroll = 0; $script:S.Follow = $false; $script:S.Dirty = $true; return }
+            'G' { $script:S.Follow = $true; $script:S.Dirty = $true; return }
+        }
+    }
     switch ($Key.Key) {
         'UpArrow' { Move-TuiSelection -1; return }
         'DownArrow' { Move-TuiSelection 1; return }
@@ -941,11 +962,14 @@ function Show-TuiFrame {
     $outTitle = " $spin$($script:S.OutTitle) "
     if ($listTitle.Length -gt $lw) { $listTitle = $listTitle.Substring(0, $lw) }
     if ($outTitle.Length -gt $rw) { $outTitle = $outTitle.Substring(0, $rw) }
+    # focused pane's title is highlighted (tab switches)
+    $listTitleColor = if ($script:S.FocusPane -eq 'output') { $t.Blue } else { $t.BrCyan }
+    $outTitleColor = if ($script:S.FocusPane -eq 'output') { $t.BrCyan } else { $t.Blue }
     [void]$sb.Append("$reset$($t.Muted)┌")
-    [void]$sb.Append("$($t.Blue)$listTitle$($t.Muted)")
+    [void]$sb.Append("$listTitleColor$listTitle$($t.Muted)")
     [void]$sb.Append(('─' * [Math]::Max(0, $lw - $listTitle.Length)))
     [void]$sb.Append('┬')
-    [void]$sb.Append("$($t.Blue)$outTitle$($t.Muted)")
+    [void]$sb.Append("$outTitleColor$outTitle$($t.Muted)")
     [void]$sb.Append(('─' * [Math]::Max(0, $rw - $outTitle.Length)))
     [void]$sb.Append("┐$reset`e[K`n")
 
@@ -1214,6 +1238,7 @@ function Get-TuiHelpRows {
         @('/', 'filter the script list (live, esc restores)'),
         @('g / G', 'jump to the top / bottom of the list'),
         @('j / k', 'navigate the list (vim-style)'),
+        @('tab', 'switch pane focus — j/k/g/G scroll the focused pane'),
         @('pgup/pgdn', 'scroll output (end re-engages follow)'),
         @('mouse', 'wheel scrolls output · click selects a script · click an auth code to copy it'),
         @('?', 'this help'),
@@ -1348,7 +1373,7 @@ function Get-TuiKeyHints {
             @(
                 @('enter', 'run'), @('a', 'args'), @('e', 'schedule'), @('v', '.env'), @('s', 'sync'),
                 @('i', 'deps'), @('l', 'lint'), @('u', 'update'), @('h', 'history'), @('x', 'kill'),
-                @('y', 'copy'), @('/', 'filter'), @('?', 'help'), @('q', 'quit')
+                @('y', 'copy'), @('/', 'filter'), @('tab', 'pane'), @('?', 'help'), @('q', 'quit')
             )
         }
     }
