@@ -146,6 +146,24 @@ Describe 'status line' {
         [regex]::Replace($line, "`e\[[0-9;]*m", '') | Should -Match '\+1 queued'
     }
 
+    It 'elides a long missing-module list to the row width' {
+        $line = & $script:tui {
+            $script:S.Mode = 'deps'
+            $script:S.Deps = @{
+                Script  = $script:S.Visible[0]
+                Missing = @(1..15 | ForEach-Object { @{ Display = "Az.VeryLongModuleName$_" } })
+                ExtraArgs = @(); InstallOnly = $false
+            }
+            $r = Get-TuiStatusLine -Width 80
+            $script:S.Mode = 'list'; $script:S.Deps = $null
+            $r
+        }
+        $plain = [regex]::Replace($line, "`e\[[0-9;]*m", '')
+        (Get-PssDisplayWidth $plain) | Should -BeLessOrEqual 80
+        $plain | Should -Match '…'
+        $plain | Should -Match 'esc cancel'
+    }
+
     It 'shows elapsed time for a running task' {
         $line = & $script:tui {
             $script:S.Run = @{ Kind = 'task'; Name = 'sync scripts repo'

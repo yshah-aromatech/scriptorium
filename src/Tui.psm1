@@ -1241,7 +1241,14 @@ function Get-TuiStatusLine {
             $verb = if ($d.InstallOnly) { 'install' } else { 'install & run' }
             $alt = if ($d.InstallOnly) { 'skip' } else { 'run anyway' }
             $names = ($d.Missing | ForEach-Object Display) -join ', '
-            $plain = " ▲ missing modules for $($d.Script.Name): $names  —  y $verb  n $alt  esc cancel"
+            # elide the module list so a long one can't overflow the row
+            $prefix = " ▲ missing modules for $($d.Script.Name): "
+            $suffix = "  —  y $verb  n $alt  esc cancel"
+            $avail = $Width - (Get-PssDisplayWidth $prefix) - $suffix.Length
+            if ($avail -gt 1 -and (Get-PssDisplayWidth $names) -gt $avail) {
+                $names = (Format-PssCell -Text $names -Width $avail -Ellipsis).TrimEnd()
+            }
+            $plain = "$prefix$names$suffix"
             $pad = [Math]::Max(0, $Width - (Get-PssDisplayWidth $plain))
             return " $($t.BrYellow)▲ missing modules for $($d.Script.Name): $names$($t.Fg)  —  $($t.Green)y$($t.Fg) $verb  $($t.Yellow)n$($t.Fg) $alt  $($t.Muted)esc cancel$(' ' * $pad)"
         }
