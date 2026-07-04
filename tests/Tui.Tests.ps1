@@ -167,6 +167,23 @@ Describe 'history rows' {
         $r[2] | Should -Be 'alpha'
     }
 
+    It 'mouse click selects the clicked history row' {
+        $sel = & $script:tui {
+            $script:S.Mode = 'history'
+            $script:S.History = @{
+                Items = @(0..9 | ForEach-Object { [pscustomobject]@{ script = "s$_"; status = 'success' } })
+                Sel = 0; Top = 0; FilterName = ''
+            }
+            # body starts at screen row 3; +2 skips the title and header rows
+            $lw = Get-TuiListWidth
+            Invoke-TuiMouse -Button 0 -X ($lw + 5) -Y (3 + 2 + 4) -Press $true
+            $r = $script:S.History.Sel
+            $script:S.History = $null; $script:S.Mode = 'list'
+            $r
+        }
+        $sel | Should -Be 4
+    }
+
     It 'r on a script no longer in the repo reports it instead of crashing' {
         $r = & $script:tui {
             $script:S.Mode = 'history'

@@ -160,6 +160,16 @@ function Invoke-TuiMouse {
         }
         return
     }
+    if ($script:S.Mode -eq 'history' -and $Press -and $Button -eq 0) {
+        # left click on a history row selects it (title + header rows first)
+        $lw = Get-TuiListWidth
+        $row = $Y - 3
+        if ($X -lt ($lw + 3) -or $row -lt 2 -or $row -ge (Get-TuiBodyHeight)) { return }
+        $hi = $script:S.History
+        $idx = [int]$hi.Top + ($row - 2)
+        if ($idx -lt (Get-TuiHistoryItems).Count) { $hi.Sel = $idx }
+        return
+    }
     if ($script:S.Mode -eq 'list' -and $Press -and $Button -eq 0) {
         # left click (body starts at row 3)
         $lw = Get-TuiListWidth
