@@ -1037,13 +1037,13 @@ function Show-TuiFrame {
     # focused pane's title is highlighted (tab switches)
     $listTitleColor = if ($script:S.FocusPane -eq 'output') { $t.Blue } else { $t.BrCyan }
     $outTitleColor = if ($script:S.FocusPane -eq 'output') { $t.BrCyan } else { $t.Blue }
-    [void]$sb.Append("$reset$($t.Muted)┌")
+    [void]$sb.Append("$reset$($t.Muted)╭")
     [void]$sb.Append("$listTitleColor$listTitle$($t.Muted)")
     [void]$sb.Append(('─' * [Math]::Max(0, $lw - $listTitle.Length)))
     [void]$sb.Append('┬')
     [void]$sb.Append("$outTitleColor$outTitle$($t.Muted)")
     [void]$sb.Append(('─' * [Math]::Max(0, $rw - $outTitle.Length)))
-    [void]$sb.Append("┐$reset`e[K`n")
+    [void]$sb.Append("╮$reset`e[K`n")
 
     # ---- body rows ----------------------------------------------------------
     $leftRows = Get-TuiListRows -Count $body -Width $lw
@@ -1061,9 +1061,9 @@ function Show-TuiFrame {
     $more = Get-TuiMoreBelow -BodyHeight $body
     $note = if ($more -gt 0) { " ▼ $more more — End follows " } else { '' }
     if ($note -and ($note.Length + 2) -gt $rw) { $note = '' }
-    [void]$sb.Append("$reset$($t.Muted)└$('─' * $lw)┴$('─' * ($rw - $note.Length - $(if ($note) { 1 } else { 0 })))")
+    [void]$sb.Append("$reset$($t.Muted)╰$('─' * $lw)┴$('─' * ($rw - $note.Length - $(if ($note) { 1 } else { 0 })))")
     if ($note) { [void]$sb.Append("$($t.BrYellow)$note$($t.Muted)─") }
-    [void]$sb.Append("┘$reset`e[K`n")
+    [void]$sb.Append("╯$reset`e[K`n")
 
     # ---- status line -------------------------------------------------------
     [void]$sb.Append($reset)
