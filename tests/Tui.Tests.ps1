@@ -149,6 +149,37 @@ Describe 'history rows' {
         $all | Should -Match 'when\s+age\s+status\s+script\s+duration'
         $all | Should -Match '\d{2}-\d{2} \d{2}:\d{2}\s+3h'
     }
+
+    It 'r re-runs the selected entry through the normal run flow' {
+        $r = & $script:tui {
+            $script:S.Mode = 'history'
+            $script:S.History = @{ Items = @([pscustomobject]@{ script = 'alpha'; status = 'failure' })
+                Sel = 0; Top = 0; FilterName = '' }
+            $script:S.Run = @{ Kind = 'task'; Name = 'busy' }   # forces the queue path (no real process)
+            Invoke-TuiKeyHistory ([ConsoleKeyInfo]::new('r', [ConsoleKey]::R, $false, $false, $false))
+            $res = @($script:S.Mode, $script:S.Queue.Count,
+                $(if ($script:S.Queue.Count) { $script:S.Queue[0].Script.Name } else { '' }))
+            $script:S.Run = $null; $script:S.Queue.Clear(); $script:S.History = $null; $script:S.Mode = 'list'
+            $res
+        }
+        $r[0] | Should -Be 'list'
+        $r[1] | Should -Be 1
+        $r[2] | Should -Be 'alpha'
+    }
+
+    It 'r on a script no longer in the repo reports it instead of crashing' {
+        $r = & $script:tui {
+            $script:S.Mode = 'history'
+            $script:S.History = @{ Items = @([pscustomobject]@{ script = 'ghost'; status = 'failure' })
+                Sel = 0; Top = 0; FilterName = '' }
+            Invoke-TuiKeyHistory ([ConsoleKeyInfo]::new('r', [ConsoleKey]::R, $false, $false, $false))
+            $res = @($script:S.Mode, $script:S.StatusMsg)
+            $script:S.History = $null; $script:S.Mode = 'list'; $script:S.StatusMsg = ''
+            $res
+        }
+        $r[0] | Should -Be 'history'
+        $r[1] | Should -Match 'not found'
+    }
 }
 
 Describe 'status line' {

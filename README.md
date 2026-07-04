@@ -35,7 +35,7 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 | `l` | lint the selected script with PSScriptAnalyzer |
 | `u` | update PowerShell (apt) + upgrade all script module dirs |
 | `U` | update this app (`git pull --ff-only`; restart to apply) |
-| `h` | run history: `↑`/`↓` select, `Enter` opens that run's log, `f` filters to the selected script |
+| `h` | run history: `↑`/`↓` select, `Enter` opens that run's log, `r` re-runs that script, `f` filters to the selected script |
 | `t` | send a test event to the n8n webhook |
 | `x` / `X` | kill the running script / clear the run queue |
 | `y` | copy the whole output to the clipboard |

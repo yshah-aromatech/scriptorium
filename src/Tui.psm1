@@ -932,6 +932,21 @@ function Invoke-TuiKeyHistory {
     $max = [Math]::Max(0, $items.Count - 1)
     if ($Key.Key -in 'Escape', 'Q' -or $Key.KeyChar -in 'q', 'h') { $script:S.History = $null; $script:S.Mode = 'list'; return }
     if ($Key.Key -eq 'Enter') { Open-TuiHistoryLog; return }
+    if ($Key.KeyChar -ceq 'r') {
+        # re-run the selected entry's script (the usual reason you're here
+        # staring at a failure) — through the normal dep-check/queue flow
+        if ($items.Count -eq 0 -or $hi.Sel -gt $max) { return }
+        $name = "$($items[$hi.Sel].script)"
+        $scr = $script:S.Scripts | Where-Object Name -eq $name | Select-Object -First 1
+        if (-not $scr) { Set-TuiStatus "script '$name' not found — removed from the repo?"; return }
+        $script:S.History = $null
+        $script:S.Mode = 'list'
+        for ($v = 0; $v -lt $script:S.Visible.Count; $v++) {
+            if ($script:S.Visible[$v].Name -eq $name) { $script:S.Selected = $v; break }
+        }
+        Start-TuiRunFlow -Script $scr
+        return
+    }
     if ($Key.KeyChar -ceq 'f') {
         # toggle: filter history to the selected run's script
         if ($hi.FilterName) { $hi.FilterName = '' }
@@ -1244,7 +1259,7 @@ function Get-TuiHistoryRows {
     $items = Get-TuiHistoryItems
     $rows = @()
     $filterTxt = if ($hi.FilterName) { " · filtered: $($hi.FilterName) (f clears)" } else { '' }
-    $rows += "$($t.SelBg)$($t.White)$(Format-TuiPad -Text " run history (newest first)$filterTxt — enter view log · f filter · esc close" -Width $Width)"
+    $rows += "$($t.SelBg)$($t.White)$(Format-TuiPad -Text " run history (newest first)$filterTxt — enter view log · r re-run · f filter · esc close" -Width $Width)"
 
     $fmt = ' {0,-11} {1,4}  {2,-9} {3,-22} {4,8}  cpu {5,5}% {6}  mem {7,7}MB  [{8}]'
     $rows += "$($t.Muted)$(Format-TuiPad -Text (' {0,-11} {1,4}  {2,-9} {3,-22} {4,8}' -f 'when', 'age', 'status', 'script', 'duration') -Width $Width)"
@@ -1298,7 +1313,7 @@ function Get-TuiHelpRows {
         @('l', 'lint the script with PSScriptAnalyzer'),
         @('u', 'update PowerShell (apt) + upgrade script modules'),
         @('U', 'update this app (git pull), restart to apply'),
-        @('h', 'run history: ↑/↓ select · enter view log · f filter by script'),
+        @('h', 'run history: enter view log · r re-run · f filter by script'),
         @('t', 'send a test event to the n8n webhook'),
         @('x / X', 'kill the running script / clear the run queue'),
         @('y / c', 'copy output to clipboard / clear the output panel'),
@@ -1418,7 +1433,7 @@ function Get-TuiKeyHints {
     # editor is open would advertise bindings that don't work there
     $pairs = switch ($script:S.Mode) {
         'history' {
-            @(@('enter', 'view log'), @('f', 'filter script'), @('j/k', 'navigate'),
+            @(@('enter', 'view log'), @('r', 're-run'), @('f', 'filter script'), @('j/k', 'navigate'),
                 @('pgup/pgdn', 'page'), @('esc', 'close'))
         }
         'env' {
