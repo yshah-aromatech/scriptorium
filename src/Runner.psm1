@@ -16,6 +16,9 @@ if (-not $script:PageSize) { $script:PageSize = 4096 }
 # resource sampling reads /proc — absent on non-Linux hosts, where runs
 # still work but CPU/mem stats stay at 0
 $script:HasProc = Test-Path '/proc/self/stat'
+# cpu% is reported relative to the WHOLE machine (all cores = 100%), not one
+# core — a multi-threaded tree must never read as >100%
+$script:CpuCount = [Math]::Max(1, [Environment]::ProcessorCount)
 
 # ---------------------------------------------------------------------------
 # Per-script lock — prevents a cron run and a manual run (or two stacked cron
@@ -283,8 +286,9 @@ function Measure-PssResources {
     if ($Handle.LastSample) {
         $dt = ($now - $Handle.LastSample.Time).TotalSeconds
         if ($dt -gt 0.2) {
-            $cpu = (($jiffies - $Handle.LastSample.Jiffies) / $script:ClkTck) / $dt * 100.0
+            $cpu = (($jiffies - $Handle.LastSample.Jiffies) / $script:ClkTck) / $dt * 100.0 / $script:CpuCount
             if ($cpu -lt 0) { $cpu = 0 }
+            if ($cpu -gt 100) { $cpu = 100 }   # jiffy-granularity rounding can overshoot
             $Handle.CpuSum += $cpu; $Handle.MemSum += $memMb
             if ($cpu -gt $Handle.CpuMax) { $Handle.CpuMax = $cpu }
             if ($memMb -gt $Handle.MemMax) { $Handle.MemMax = $memMb }

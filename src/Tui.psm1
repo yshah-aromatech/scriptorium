@@ -1318,8 +1318,15 @@ function Get-TuiHistoryRows {
     $filterTxt = if ($hi.FilterName) { " · filtered: $($hi.FilterName) (f clears)" } else { '' }
     $rows += "$($t.SelBg)$($t.White)$(Format-TuiPad -Text " run history (newest first)$filterTxt — enter view log · r re-run · f filter · esc close" -Width $Width)"
 
-    $fmt = ' {0,-11} {1,4}  {2,-9} {3,-22} {4,8}  cpu {5,5}% {6}  mem {7,7}MB  [{8}]'
-    $rows += "$($t.Muted)$(Format-TuiPad -Text (' {0,-11} {1,4}  {2,-9} {3,-22} {4,8}' -f 'when', 'age', 'status', 'script', 'duration') -Width $Width)"
+    # script column sized to the longest name on file (clamped) so long names
+    # can't shear the columns to their right; anything longer is ellipsized
+    $scriptW = 6
+    foreach ($it in $items) { $scriptW = [Math]::Max($scriptW, (Get-PssDisplayWidth "$($it.script)")) }
+    $scriptW = [Math]::Min($scriptW, 28)
+    $fmt = ' {0,-11} {1,4}  {2,-9} {3} {4,8}  cpu {5,6} {6}  mem {7,9}  {8}'
+    $hdr = $fmt -f 'when', 'age', 'status', (Format-PssCell -Text 'script' -Width $scriptW),
+    'duration', 'peak', 'trend'.PadRight(10), 'peak', 'trigger'
+    $rows += "$($t.Muted)$(Format-TuiPad -Text $hdr -Width $Width)"
 
     $visible = $Count - 2
     $hi.Sel = [Math]::Min($hi.Sel, [Math]::Max(0, $items.Count - 1))
@@ -1348,8 +1355,9 @@ function Get-TuiHistoryRows {
         $res = $h.resources
         $spark = Get-TuiSparkline -Series $res.cpuSeries -Width 10
         $line = $fmt -f
-        $when, $age, $h.status, $h.script, (Format-PssDuration ([double]$h.durationSec)),
-        $res.cpuMaxPercent, $spark, $res.memMaxMb, $h.trigger
+        $when, $age, $h.status, (Format-PssCell -Text "$($h.script)" -Width $scriptW -Ellipsis),
+        (Format-PssDuration ([double]$h.durationSec)),
+        "$($res.cpuMaxPercent)%", $spark, "$($res.memMaxMb)MB", "[$($h.trigger)]"
         if ($idx -eq $hi.Sel) {
             # accent bar replaces the leading space on the selected row
             $rows += "$($t.SelBg)$($t.Blue)▎$color$(Format-TuiPad -Text $line.Substring(1) -Width ($Width - 1))"

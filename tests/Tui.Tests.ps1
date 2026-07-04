@@ -195,6 +195,30 @@ Describe 'history rows' {
         $all | Should -Match '\d{2}-\d{2} \d{2}:\d{2}\s+3h'
     }
 
+    It 'labels every column and keeps them aligned across name lengths' {
+        $rows = & $script:tui {
+            $mk = { param($n, $s) [pscustomobject]@{
+                    script = $n; status = $s; trigger = 'manual'
+                    startedAt = [datetime]::Now.AddHours(-1); durationSec = 95
+                    resources = [pscustomobject]@{ cpuMaxPercent = 99.9; memMaxMb = 488.7; cpuSeries = @(1, 9) }
+                } }
+            $script:S.History = @{
+                Items = @((& $mk 'short' 'success'), (& $mk 'enable_teams_transcriptions' 'failure'))
+                Sel = 0; Top = 0; FilterName = ''
+            }
+            $r = Get-TuiHistoryRows -Count 8 -Width 120
+            $script:S.History = $null
+            $r
+        }
+        $plain = $rows | ForEach-Object { [regex]::Replace($_, "`e\[[0-9;]*m", '') }
+        # header covers the resource columns too
+        $plain[1] | Should -Match 'cpu\s+peak\s+trend\s+mem\s+peak\s+trigger'
+        # 'cpu' starts at the same offset in both data rows despite name lengths
+        $plain[2].IndexOf(' cpu ') | Should -BeGreaterThan 0
+        $plain[2].IndexOf(' cpu ') | Should -Be ($plain[3].IndexOf(' cpu '))
+        $plain[2].IndexOf(' mem ') | Should -Be ($plain[3].IndexOf(' mem '))
+    }
+
     It 'r re-runs the selected entry through the normal run flow' {
         $r = & $script:tui {
             $script:S.Mode = 'history'
