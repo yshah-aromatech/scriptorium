@@ -250,6 +250,22 @@ Describe 'status line' {
         $plain | Should -Match 'esc cancel'
     }
 
+    It 'colors status messages by kind with an icon' {
+        $lines = & $script:tui {
+            Set-TuiStatus 'sync complete' -Kind ok
+            $ok = Get-TuiStatusLine -Width 120
+            Set-TuiStatus 'sync failed' -Kind err
+            $err = Get-TuiStatusLine -Width 120
+            $script:S.StatusMsg = ''; $script:S.StatusKind = 'info'
+            @($ok, $err)
+        }
+        $t = & $script:tui { Get-PssTheme }
+        $lines[0] | Should -Match ([regex]::Escape($t.Green))
+        [regex]::Replace($lines[0], "`e\[[0-9;]*m", '') | Should -Match '✓ sync complete'
+        $lines[1] | Should -Match ([regex]::Escape($t.Red))
+        [regex]::Replace($lines[1], "`e\[[0-9;]*m", '') | Should -Match '✗ sync failed'
+    }
+
     It 'shows elapsed time for a running task' {
         $line = & $script:tui {
             $script:S.Run = @{ Kind = 'task'; Name = 'sync scripts repo'

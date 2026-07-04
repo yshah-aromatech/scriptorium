@@ -42,6 +42,7 @@ function Start-PssTui {
         AfterTask    = $null
         AfterTaskAlways = $null
         StatusMsg    = ''
+        StatusKind   = 'info'
         StatusMsgAt  = [datetime]::MinValue
         Tick         = 0
         LastSample   = [datetime]::MinValue
@@ -211,7 +212,7 @@ function Copy-TuiCodeAt {
     $word = $line.Substring($start, $end - $start + 1).Trim('.', ',', ':', ';', '"', "'", '(', ')')
     if ($word -cmatch '^[A-Z0-9]{8,10}$') {
         $how = Copy-PssClipboard -Text $word
-        Set-TuiStatus "code $word $how"
+        Set-TuiStatus "code $word $how" -Kind ok
     }
 }
 
@@ -324,8 +325,10 @@ function Clear-TuiOutput {
 }
 
 function Set-TuiStatus {
-    param([string]$Msg)
+    # Kind drives the status line's icon and color: ✓ green / ✗ red / ⚠ yellow
+    param([string]$Msg, [ValidateSet('info', 'ok', 'warn', 'err')][string]$Kind = 'info')
     $script:S.StatusMsg = $Msg
+    $script:S.StatusKind = $Kind
     $script:S.StatusMsgAt = Get-Date
     $script:S.Dirty = $true
 }
@@ -362,7 +365,7 @@ function Start-TuiTask {
     # After runs only on success; AfterAlways runs regardless and receives $ok
     param([string]$Name, [string]$FileName, [string[]]$Arguments,
         [scriptblock]$After = $null, [scriptblock]$AfterAlways = $null)
-    if ($script:S.Run) { Set-TuiStatus 'something is already running — x to kill it first'; return }
+    if ($script:S.Run) { Set-TuiStatus 'something is already running — x to kill it first' -Kind warn; return }
     $script:S.OutTitle = $Name
     Add-TuiBanner -Lead "▶ $Name"
     $script:S.Run = Start-PssTask -Name $Name -FileName $FileName -Arguments $Arguments
@@ -400,7 +403,7 @@ function Update-TuiRun {
                 At          = (Get-Date)
                 DurationSec = [double]$result.durationSec
             }
-            Set-TuiStatus "$($result.script): $($result.status)"
+            Set-TuiStatus "$($result.script): $($result.status)" -Kind $(if ($result.status -eq 'success') { 'ok' } else { 'err' })
         } else {
             $ok = ($h.ExitCode -eq 0)
             if ($ok) { Add-TuiBanner "✓ $($h.Name) · done" }
@@ -422,7 +425,7 @@ function Update-TuiRun {
 function Invoke-TuiSync {
     # runs in a child pwsh via the task machinery so the UI stays responsive
     # during slow clones/fetches (spinner, kill key, scrolling all work)
-    if ($script:S.Run) { Set-TuiStatus 'something is already running — x to kill it first'; return }
+    if ($script:S.Run) { Set-TuiStatus 'something is already running — x to kill it first' -Kind warn; return }
     $app = Get-PssAppDir
     $cfg = Get-PssConfig
     $cmd = @"
@@ -436,7 +439,7 @@ exit ([int](-not `$ok))
         param($ok)
         Update-TuiScripts
         Add-TuiOutput @("$($script:S.Scripts.Count) script(s) discovered")
-        Set-TuiStatus $(if ($ok) { 'sync complete' } else { 'sync failed' })
+        Set-TuiStatus $(if ($ok) { 'sync complete' } else { 'sync failed' }) -Kind $(if ($ok) { 'ok' } else { 'err' })
     }
 }
 
@@ -488,12 +491,12 @@ exit ([int](@(`$results | Where-Object Severity -eq 'Error').Count -gt 0))
 }
 
 function Invoke-TuiSelfUpdate {
-    if ($script:S.Run) { Set-TuiStatus 'something is already running — x to kill it first'; return }
+    if ($script:S.Run) { Set-TuiStatus 'something is already running — x to kill it first' -Kind warn; return }
     $app = Get-PssAppDir
     Start-TuiTask -Name 'update app (git pull --ff-only)' -FileName 'git' `
         -Arguments @('-C', $app, 'pull', '--ff-only') -AfterAlways {
         param($ok)
-        Set-TuiStatus $(if ($ok) { 'app updated — restart psscripts to apply' } else { 'app update failed' })
+        Set-TuiStatus $(if ($ok) { 'app updated — restart psscripts to apply' } else { 'app update failed' }) -Kind $(if ($ok) { 'ok' } else { 'err' })
     }
 }
 
@@ -538,14 +541,14 @@ function Invoke-TuiUpdate {
 function Invoke-TuiCopy {
     $text = ($script:S.Lines -join "`n")
     $how = Copy-PssClipboard -Text $text
-    Set-TuiStatus "output $how"
+    Set-TuiStatus "output $how" -Kind ok
 }
 
 function Invoke-TuiWebhookTest {
     Set-TuiStatus 'sending test event...'
     Show-TuiFrame
     $ok = Send-PssWebhookTest
-    Set-TuiStatus $(if ($ok) { 'webhook test event sent ✓' } else { 'webhook test FAILED — check n8nWebhookUrl' })
+    Set-TuiStatus $(if ($ok) { 'webhook test event sent' } else { 'webhook test FAILED — check n8nWebhookUrl' }) -Kind $(if ($ok) { 'ok' } else { 'err' })
 }
 
 function Open-TuiHistory {
@@ -569,7 +572,7 @@ function Open-TuiHistoryLog {
     if ($items.Count -eq 0 -or $hi.Sel -ge $items.Count) { return }
     $item = $items[$hi.Sel]
     if (-not $item.logFile -or -not (Test-Path "$($item.logFile)")) {
-        Set-TuiStatus "log file not found: $($item.logFile)"
+        Set-TuiStatus "log file not found: $($item.logFile)" -Kind err
         return
     }
     $cfg = Get-PssConfig
@@ -607,18 +610,18 @@ function Open-TuiCronInput {
         $sel2 = Get-TuiSelected
         if (-not $sel2) { return }
         if (-not $value.Trim()) {
-            if (Remove-PssSchedule -Name $sel2.Name) { Set-TuiStatus "schedule removed for $($sel2.Name)" }
-            else { Set-TuiStatus 'failed to update crontab' }
+            if (Remove-PssSchedule -Name $sel2.Name) { Set-TuiStatus "schedule removed for $($sel2.Name)" -Kind ok }
+            else { Set-TuiStatus 'failed to update crontab' -Kind err }
             $script:S.Schedules = Get-PssSchedules
             return
         }
         $conv = Convert-PssToCron -Text $value
-        if (-not $conv.Expression) { Set-TuiStatus "cron: $($conv.Error)"; return }
+        if (-not $conv.Expression) { Set-TuiStatus "cron: $($conv.Error)" -Kind err; return }
         $expr = $conv.Expression
         $name = $sel2.Name
         Open-TuiConfirm -Message "schedule '$name' as:  $expr  ?" -OnYes {
-            if (Set-PssSchedule -Name $name -Expression $expr) { Set-TuiStatus "scheduled $name : $expr" }
-            else { Set-TuiStatus 'failed to update crontab' }
+            if (Set-PssSchedule -Name $name -Expression $expr) { Set-TuiStatus "scheduled $name : $expr" -Kind ok }
+            else { Set-TuiStatus 'failed to update crontab' -Kind err }
             $script:S.Schedules = Get-PssSchedules
         }.GetNewClosure()
     }
@@ -726,7 +729,7 @@ function Invoke-TuiKeyList {
         'x' {
             if ($script:S.Run) {
                 Stop-PssRun -Handle $script:S.Run -Reason 'killed'
-                Set-TuiStatus 'kill signal sent'
+                Set-TuiStatus 'kill signal sent' -Kind warn
             } else { Set-TuiStatus 'nothing is running' }
         }
         'X' {
@@ -882,7 +885,7 @@ function Invoke-TuiKeyEnv {
         if ($ed.Dirty -and -not $ed.EscArmed) {
             # unsaved-changes guard: first esc warns, second discards
             $ed.EscArmed = $true
-            Set-TuiStatus 'unsaved changes — esc again to discard, ctrl+s to save'
+            Set-TuiStatus 'unsaved changes — esc again to discard, ctrl+s to save' -Kind warn
             return
         }
         $script:S.Env = $null; $script:S.Mode = 'list'; Set-TuiStatus '.env edit cancelled'; return
@@ -892,7 +895,7 @@ function Invoke-TuiKeyEnv {
         ($ed.Lines -join "`n") + "`n" | Set-Content -Path $target -NoNewline -Encoding UTF8
         foreach ($kv in (Read-PssEnvFile $target).GetEnumerator()) { Register-PssSecret -Name $kv.Key -Value $kv.Value -Force }
         $script:S.Env = $null; $script:S.Mode = 'list'
-        Set-TuiStatus "saved $(Split-Path $target -Leaf) for $($ed.Script.Name)"
+        Set-TuiStatus "saved $(Split-Path $target -Leaf) for $($ed.Script.Name)" -Kind ok
         return
     }
     $ed.EscArmed = $false
@@ -966,7 +969,7 @@ function Invoke-TuiKeyHistory {
         if ($items.Count -eq 0 -or $hi.Sel -gt $max) { return }
         $name = "$($items[$hi.Sel].script)"
         $scr = $script:S.Scripts | Where-Object Name -eq $name | Select-Object -First 1
-        if (-not $scr) { Set-TuiStatus "script '$name' not found — removed from the repo?"; return }
+        if (-not $scr) { Set-TuiStatus "script '$name' not found — removed from the repo?" -Kind err; return }
         $script:S.History = $null
         $script:S.Mode = 'list'
         for ($v = 0; $v -lt $script:S.Visible.Count; $v++) {
@@ -1427,6 +1430,7 @@ function Get-TuiStatusLine {
     # default status line: run stats or transient message
     $queueTxt = if ($script:S.Queue.Count -gt 0) { "  (+$($script:S.Queue.Count) queued)" } else { '' }
     $left = ''
+    $msgColor = $null
     if ($script:S.Run -and $script:S.Run.Kind -eq 'run') {
         $h = $script:S.Run
         $el = ((Get-Date).ToUniversalTime() - $h.StartedAt).TotalSeconds
@@ -1441,7 +1445,9 @@ function Get-TuiStatusLine {
         }
         $left = " running: $($h.Name)$el$queueTxt"
     } elseif (((Get-Date) - $script:S.StatusMsgAt).TotalSeconds -lt 6 -and $script:S.StatusMsg) {
-        $left = " $($script:S.StatusMsg)"
+        $icon = switch ("$($script:S.StatusKind)") { 'ok' { '✓ ' } 'err' { '✗ ' } 'warn' { '⚠ ' } default { '' } }
+        $left = " $icon$($script:S.StatusMsg)"
+        $msgColor = switch ("$($script:S.StatusKind)") { 'ok' { $t.Green } 'err' { $t.Red } 'warn' { $t.BrYellow } default { $null } }
     } else {
         $sel = Get-TuiSelected
         if ($sel) {
@@ -1454,7 +1460,7 @@ function Get-TuiStatusLine {
             $left = " $($sel.Name): $desc$schedTxt$queueTxt"
         }
     }
-    $color = if ($script:S.Run) { (Get-PssTheme).BrCyan } else { (Get-PssTheme).Muted }
+    $color = if ($script:S.Run) { $t.BrCyan } elseif ($msgColor) { $msgColor } else { $t.Muted }
     "$color$(Format-TuiPad -Text $left -Width $Width)"
 }
 
