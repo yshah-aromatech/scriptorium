@@ -60,6 +60,16 @@ Describe 'list rows' {
         $plain | Should -Match '@'
     }
 
+    It 'marks the selected row with an accent bar, others with a space' {
+        $rows = & $script:tui { $script:S.Selected = 0; Get-TuiListRows -Count 2 -Width 30 }
+        $sel = [regex]::Replace($rows[0], "`e\[[0-9;]*m", '')
+        $other = [regex]::Replace($rows[1], "`e\[[0-9;]*m", '')
+        $sel | Should -Match '^▎'
+        $other | Should -Match '^ '
+        # accent bar must not change the row width
+        Get-PssDisplayWidth $sel | Should -Be 30
+    }
+
     It 'highlights the filter substring in matching rows' {
         $row = & $script:tui {
             $script:S.Filter = 'alp'

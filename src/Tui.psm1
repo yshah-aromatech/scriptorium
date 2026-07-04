@@ -1136,14 +1136,21 @@ function Get-TuiListRows {
         $ageCol = "$($t.Muted)$($age.PadLeft(3))"
         $rowFg = $t.Fg
         $rowBg = ''
-        if ($idx -eq $sel) { $rowBg = $t.SelBg; $rowFg = $t.White }
+        $lead = ' '
+        $nameEnd = ''
+        if ($idx -eq $sel) {
+            $rowBg = $t.SelBg
+            $rowFg = "$($t.Bold)$($t.White)"
+            $nameEnd = "$($t.Reset)$($t.SelBg)"   # drop bold before the age/sched cells
+            $lead = "$($t.Blue)▎"                 # accent bar marks the selection
+        }
         $name = Format-TuiPad -Text $scr.Name -Width ($Width - 9)
         # show why a filtered row matched: highlight the filter substring
         if ($script:S.Filter) {
             $name = [regex]::Replace($name, '(' + [regex]::Escape($script:S.Filter) + ')',
                 "$($t.BrCyan)" + '$1' + $rowFg, 'IgnoreCase')
         }
-        $rows += "$rowBg $badge$rowBg $rowFg$name$rowBg$ageCol$rowBg $sched$rowBg "
+        $rows += "$rowBg$lead$badge$rowBg $rowFg$name$nameEnd$ageCol$rowBg $sched$rowBg "
     }
     $rows
 }
@@ -1306,8 +1313,12 @@ function Get-TuiHistoryRows {
         $line = $fmt -f
         $when, $age, $h.status, $h.script, (Format-PssDuration ([double]$h.durationSec)),
         $res.cpuMaxPercent, $spark, $res.memMaxMb, $h.trigger
-        $bg = if ($idx -eq $hi.Sel) { $t.SelBg } else { '' }
-        $rows += "$bg$color$(Format-TuiPad -Text $line -Width $Width)"
+        if ($idx -eq $hi.Sel) {
+            # accent bar replaces the leading space on the selected row
+            $rows += "$($t.SelBg)$($t.Blue)▎$color$(Format-TuiPad -Text $line.Substring(1) -Width ($Width - 1))"
+        } else {
+            $rows += "$color$(Format-TuiPad -Text $line -Width $Width)"
+        }
     }
     $rows
 }
