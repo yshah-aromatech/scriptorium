@@ -66,7 +66,7 @@ function Sync-PssRepo {
 function Get-PssLastSyncTime {
     $dir = (Get-PssPaths).ScriptsDir
     foreach ($p in (Join-Path $dir '.git/FETCH_HEAD'), (Join-Path $dir '.git')) {
-        if (Test-Path $p) { return (Get-Item $p).LastWriteTime }
+        if (Test-Path $p) { return (Get-Item -Force $p).LastWriteTime }
     }
     $null
 }

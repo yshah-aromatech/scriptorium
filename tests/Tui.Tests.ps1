@@ -188,6 +188,20 @@ Describe 'detail rows' {
         $plain | Should -Match 'no script selected'
     }
 
+    It 'counts env vars in a dotfile .env without throwing (hidden-file Get-Item regression)' {
+        # on Unix .env is Hidden: Test-Path passes but Get-Item needs -Force,
+        # and under ErrorActionPreference=Stop the mismatch crashed the TUI
+        $dir = Join-Path $script:appDir 'envcase'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        "A=1`nB=2" | Set-Content (Join-Path $dir '.env')
+        $n = & $script:tui {
+            param($EnvFile)
+            $ErrorActionPreference = 'Stop'
+            Get-TuiEnvVarCount -Script ([pscustomobject]@{ Name = 'envcase'; EnvFile = $EnvFile })
+        } (Join-Path $dir '.env')
+        $n | Should -Be 2
+    }
+
     It 'splits the body into list + separator + card, and hides the card when short' {
         $tall = & $script:tui { @((Get-TuiListHeight), (Get-TuiDetailHeight), (Get-TuiBodyHeight)) }
         $tall[1] | Should -Be 8

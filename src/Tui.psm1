@@ -1225,7 +1225,9 @@ function Get-TuiEnvVarCount {
     param($Script)
     if (-not $Script.EnvFile -or -not (Test-Path $Script.EnvFile)) { return 0 }
     if (-not $script:S.ContainsKey('EnvCountCache')) { $script:S.EnvCountCache = @{} }
-    $mt = (Get-Item $Script.EnvFile).LastWriteTime
+    # -Force: on Unix, dotfiles are Hidden and Get-Item skips them without it
+    # (Test-Path above still returns true — the mismatch crashed the TUI)
+    $mt = (Get-Item -Force $Script.EnvFile).LastWriteTime
     $c = $script:S.EnvCountCache[$Script.Name]
     if ($c -and $c.At -eq $mt) { return $c.N }
     $n = @((Read-PssEnvFile $Script.EnvFile).Keys).Count
