@@ -1010,6 +1010,10 @@ function Get-TuiListRows {
     }
     $script:S.ListTop = $top   # mouse clicks map row -> index through this
 
+    # live state trumps last status: spinner on the running script, » on queued
+    $runningName = if ($script:S.Run -and $script:S.Run.Kind -eq 'run') { $script:S.Run.Name } else { $null }
+    $queuedNames = @($script:S.Queue | ForEach-Object { "$($_.Script.Name)" })
+
     for ($i = 0; $i -lt $Count; $i++) {
         $idx = $top + $i
         if ($idx -ge $items.Count) { $rows += (' ' * $Width); continue }
@@ -1022,6 +1026,11 @@ function Get-TuiListRows {
             'timeout' { "$($t.BrYellow)◷" }
             'skipped' { "$($t.BrYellow)◇" }
             default { "$($t.Muted)·" }
+        }
+        if ($scr.Name -eq $runningName) {
+            $badge = "$($t.BrCyan)$($script:SpinnerFrames[$script:S.Tick % $script:SpinnerFrames.Count])"
+        } elseif ($scr.Name -in $queuedNames) {
+            $badge = "$($t.Cyan)»"
         }
         $sched = if ($script:S.Schedules.ContainsKey($scr.Name)) { "$($t.Cyan)@" } else { ' ' }
         $age = Get-TuiAge $(if ($last) { $last.At })

@@ -59,6 +59,21 @@ Describe 'list rows' {
         $plain | Should -Match '2h'
         $plain | Should -Match '@'
     }
+
+    It 'shows a spinner on the running script and » on queued scripts' {
+        $rows = & $script:tui {
+            $script:S.Run = @{ Kind = 'run'; Name = 'alpha' }
+            $script:S.Queue.Add(@{ Script = $script:S.Visible[1]; ExtraArgs = @() })
+            $r = Get-TuiListRows -Count 2 -Width 30
+            $script:S.Run = $null
+            $script:S.Queue.Clear()
+            $r
+        }
+        $alpha = [regex]::Replace($rows[0], "`e\[[0-9;]*m", '')
+        $beta = [regex]::Replace($rows[1], "`e\[[0-9;]*m", '')
+        $alpha | Should -Match '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]'
+        $beta | Should -Match '»'
+    }
 }
 
 Describe 'output wrapping' {
