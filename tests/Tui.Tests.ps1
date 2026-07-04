@@ -262,6 +262,31 @@ Describe 'status line' {
     }
 }
 
+Describe 'banners' {
+    It 'renders full-width rules colored by their icon' {
+        $r = & $script:tui {
+            $script:S.Lines.Clear(); $script:S.Wrapped.Clear()
+            Add-TuiBanner '✓ alpha · success'
+            Add-TuiBanner '✗ beta · failure'
+            Add-TuiBanner '▶ gamma · started'
+            $t = Get-PssTheme
+            $rows = Get-TuiOutputRows -Count 3 -Width 40
+            $res = @(
+                ((Get-PssDisplayWidth $script:S.Wrapped[0]) -eq (Get-TuiWrapWidth)),
+                $rows[0].StartsWith($t.Green),
+                $rows[1].StartsWith($t.Red),
+                $rows[2].StartsWith($t.Blue)
+            )
+            $script:S.Lines.Clear(); $script:S.Wrapped.Clear()
+            $res
+        }
+        $r[0] | Should -BeTrue
+        $r[1] | Should -BeTrue
+        $r[2] | Should -BeTrue
+        $r[3] | Should -BeTrue
+    }
+}
+
 Describe 'output row coloring' {
     It 'paints real errors red but not lookalikes' {
         $flags = & $script:tui {

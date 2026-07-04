@@ -262,6 +262,17 @@ function Add-TuiOutput {
     $script:S.Dirty = $true
 }
 
+# full-width rule with inset text: ─── ▶ backup-db · 12:00:03 ───────────
+# stored as plain text; Get-TuiOutputRows colors it from the leading icon
+function Add-TuiBanner {
+    param([string]$Text, [switch]$Lead)
+    $inset = "─── $Text "
+    $fill = [Math]::Max(0, (Get-TuiWrapWidth) - (Get-PssDisplayWidth $inset))
+    $lines = @($inset + ('─' * $fill))
+    if ($Lead) { $lines = @('') + $lines }
+    Add-TuiOutput $lines
+}
+
 function Get-TuiWrapWidth {
     $lw = Get-TuiListWidth
     [Math]::Max(10, $script:S.W - $lw - 3 - 1)   # borders + scrollbar column
@@ -342,7 +353,7 @@ function Start-TuiRunFlow {
 function Start-TuiRun {
     param($Script, [string[]]$ExtraArgs = @())
     $script:S.OutTitle = "run: $($Script.Name)"
-    Add-TuiOutput @('', ('─' * 8) + " $($Script.Name) — started $((Get-Date).ToString('HH:mm:ss')) " + ('─' * 8))
+    Add-TuiBanner -Lead "▶ $($Script.Name) · started $((Get-Date).ToString('HH:mm:ss'))"
     $script:S.Run = Start-PssRun -Script $Script -Trigger 'manual' -ExtraArgs $ExtraArgs
     $script:S.Follow = $true
 }
@@ -353,7 +364,7 @@ function Start-TuiTask {
         [scriptblock]$After = $null, [scriptblock]$AfterAlways = $null)
     if ($script:S.Run) { Set-TuiStatus 'something is already running — x to kill it first'; return }
     $script:S.OutTitle = $Name
-    Add-TuiOutput @('', "── $Name ──")
+    Add-TuiBanner -Lead "▶ $Name"
     $script:S.Run = Start-PssTask -Name $Name -FileName $FileName -Arguments $Arguments
     $script:S.AfterTask = $After
     $script:S.AfterTaskAlways = $AfterAlways
@@ -376,8 +387,11 @@ function Update-TuiRun {
         $script:S.Run = $null
         if ($h.Kind -eq 'run') {
             $r = $result.resources
+            $icon = switch ("$($result.status)") {
+                'success' { '✓' } 'failure' { '✗' } 'killed' { '⊘' } 'timeout' { '◷' } 'skipped' { '◇' } default { '·' }
+            }
+            Add-TuiBanner "$icon $($result.script) · $($result.status) · exit $($result.exitCode) · $(Format-PssDuration $result.durationSec)"
             Add-TuiOutput @(
-                "── $($result.script): $($result.status) (exit $($result.exitCode)) in $(Format-PssDuration $result.durationSec) ──",
                 "   cpu avg $($r.cpuAvgPercent)% / peak $($r.cpuMaxPercent)%   mem avg $($r.memAvgMb)MB / peak $($r.memMaxMb)MB",
                 "   log: $($result.logFile)"
             )
@@ -389,7 +403,8 @@ function Update-TuiRun {
             Set-TuiStatus "$($result.script): $($result.status)"
         } else {
             $ok = ($h.ExitCode -eq 0)
-            Add-TuiOutput @("── $($h.Name): $(if ($ok) {'done'} else {"failed (exit $($h.ExitCode))"}) ──")
+            if ($ok) { Add-TuiBanner "✓ $($h.Name) · done" }
+            else { Add-TuiBanner "✗ $($h.Name) · failed (exit $($h.ExitCode))" }
             $after = $script:S.AfterTask
             $always = $script:S.AfterTaskAlways
             $script:S.AfterTask = $null
@@ -431,7 +446,8 @@ function Invoke-TuiDepScan {
     $deps = @(Get-PssScriptDeps -Script $sel)
     $missing = @(Get-PssMissingDeps -Script $sel)
     $script:S.OutTitle = "deps: $($sel.Name)"
-    Add-TuiOutput @('', "── dependency scan: $($sel.Name) ──",
+    Add-TuiBanner -Lead "▶ dependency scan: $($sel.Name)"
+    Add-TuiOutput @(
         "declared/imported modules: $(if ($deps) { ($deps | ForEach-Object Display) -join ', ' } else { '(none)' })",
         "missing: $(if ($missing) { ($missing | ForEach-Object Display) -join ', ' } else { '(none)' })")
     if ($missing.Count -gt 0) {
@@ -508,7 +524,8 @@ function Invoke-TuiUpdate {
             -Arguments @('-c', 'sudo -n apt-get update && sudo -n apt-get install -y --only-upgrade powershell') `
             -After $moduleStage
     } else {
-        Add-TuiOutput @('', '── system update ──',
+        Add-TuiBanner -Lead '⚠ system update'
+        Add-TuiOutput @(
             'sudo requires a password here. Run manually:',
             '  sudo apt-get update && sudo apt-get install -y --only-upgrade powershell',
             'or allow it without a password:',
@@ -560,7 +577,8 @@ function Open-TuiHistoryLog {
     $script:S.History = $null
     $script:S.Mode = 'list'
     $script:S.OutTitle = "log: $($item.script)"
-    Add-TuiOutput (@('', "── log: $($item.script) @ $($item.startedAt) ($($item.status)) ──") + $content)
+    Add-TuiBanner -Lead "▶ log: $($item.script) @ $($item.startedAt) ($($item.status))"
+    Add-TuiOutput $content
     $script:S.Follow = $true
 }
 
@@ -1190,7 +1208,10 @@ function Get-TuiOutputRows {
         $idx = $offset + $i
         $text = if ($idx -lt $wrapped.Count) { $wrapped[$idx] } else { '' }
         $color = $t.Fg
-        if ($text -match '^──|^────') { $color = $t.Blue }
+        if ($text -match '^─── ✓') { $color = $t.Green }
+        elseif ($text -match '^─── ✗') { $color = $t.Red }
+        elseif ($text -match '^─── [⊘◷◇⚠]') { $color = $t.BrYellow }
+        elseif ($text -match '^──') { $color = $t.Blue }
         elseif ($text -match '^WARNING:') { $color = $t.Muted }   # advisory noise — keep it quiet
         # whole words only, no hyphenated names: "ErrorAction", "0 errors" and
         # a script called "error-report" must not paint the line red
