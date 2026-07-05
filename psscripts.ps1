@@ -8,12 +8,13 @@
 #   psscripts --run <name> --cron     same, marks the run as cron-triggered
 #   psscripts --sync          sync the scripts repo and exit
 #   psscripts --history [name]        print recent runs (optionally one script)
+#   psscripts --mcp [--port <n>]      serve the MCP server (for n8n AI agents)
 #   psscripts --help
 
 $ErrorActionPreference = 'Stop'
 $appDir = $PSScriptRoot
 
-foreach ($m in 'Core', 'Scripts', 'Deps', 'Runner', 'Cron', 'Tui') {
+foreach ($m in 'Core', 'Scripts', 'Deps', 'Runner', 'Cron', 'Mcp', 'Tui') {
     Import-Module (Join-Path $appDir "src/$m.psm1") -Force -Global -DisableNameChecking
 }
 
@@ -29,6 +30,8 @@ $listOnly = $false
 $syncOnly = $false
 $historyOnly = $false
 $historyName = $null
+$mcpOnly = $false
+$mcpPortOverride = 0
 $showHelp = $false
 for ($i = 0; $i -lt $args.Count; $i++) {
     switch ($args[$i]) {
@@ -37,6 +40,8 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         '--cron' { $isCron = $true }
         '--list' { $listOnly = $true }
         '--sync' { $syncOnly = $true }
+        '--mcp' { $mcpOnly = $true }
+        '--port' { $mcpPortOverride = [int]$args[$i + 1]; $i++ }
         '--history' {
             $historyOnly = $true
             if ($i + 1 -lt $args.Count -and "$($args[$i + 1])" -notlike '--*') { $historyName = "$($args[$i + 1])"; $i++ }
@@ -48,7 +53,19 @@ for ($i = 0; $i -lt $args.Count; $i++) {
 foreach ($w in (Get-PssConfigWarnings)) { Write-Warning $w }
 
 if ($showHelp) {
-    Get-Content $PSCommandPath | Select-Object -Skip 1 -First 11 | ForEach-Object { $_ -replace '^#\s?', '' }
+    Get-Content $PSCommandPath | Select-Object -Skip 1 -First 12 | ForEach-Object { $_ -replace '^#\s?', '' }
+    exit 0
+}
+
+if ($mcpOnly) {
+    $token = $env:MCP_AUTH_TOKEN
+    if (-not $token) {
+        Write-Error 'MCP_AUTH_TOKEN is not set — add it to .env next to this script (see .env.example). Refusing to start an unauthenticated server.'
+        exit 1
+    }
+    $cfg = Get-PssConfig
+    $port = if ($mcpPortOverride -gt 0) { $mcpPortOverride } else { [int]$cfg.mcpPort }
+    Start-PssMcpServer -Port $port -BindAddress ([string]$cfg.mcpBind) -Token $token
     exit 0
 }
 
@@ -102,18 +119,7 @@ if ($runName) {
     $trigger = if ($isCron) { 'cron' } else { 'manual' }
     $extraArgs = @(Split-PssArguments $extraArgsRaw)
     $handle = Start-PssRun -Script $target -Trigger $trigger -ExtraArgs $extraArgs
-    $cfg = Get-PssConfig
-    $lastSample = [datetime]::MinValue
-    while (-not (Test-PssRunFinished -Handle $handle)) {
-        foreach ($line in (Update-PssRun -Handle $handle)) { Write-Host $line }
-        if (((Get-Date) - $lastSample).TotalMilliseconds -ge [int]$cfg.monitorIntervalMs) {
-            Measure-PssResources -Handle $handle
-            $lastSample = Get-Date
-        }
-        Start-Sleep -Milliseconds 50
-    }
-    foreach ($line in (Update-PssRun -Handle $handle)) { Write-Host $line }
-    $result = Complete-PssRun -Handle $handle
+    $result = Invoke-PssRunToCompletion -Handle $handle -OnLine { param($line) Write-Host $line }
     $r = $result.resources
     Write-Host ("-- {0}: {1} (exit {2}) in {3}s | cpu avg {4}% peak {5}% | mem avg {6}MB peak {7}MB" -f
         $result.script, $result.status, $result.exitCode, $result.durationSec,

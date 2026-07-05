@@ -13,5 +13,7 @@
   "logRetentionDays": 30,
   "historyMaxLines": 5000,
   "webhookTimeoutSec": 15,
-  "colorMode": "auto"
+  "colorMode": "auto",
+  "mcpPort": 8765,
+  "mcpBind": "all"
 }

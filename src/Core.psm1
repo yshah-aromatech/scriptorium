@@ -117,11 +117,13 @@ $script:ConfigDefaults = [ordered]@{
     historyMaxLines   = 5000
     webhookTimeoutSec = 15
     colorMode         = 'auto'      # auto | truecolor | 256
+    mcpPort           = 8765
+    mcpBind           = 'all'       # all (LAN-reachable) | localhost
 }
 # keys whose values must parse as numbers — a typo'd string here would
 # otherwise silently disable the feature
 $script:ConfigNumericKeys = @('monitorIntervalMs', 'logTailKb', 'runTimeoutMinutes',
-    'maxOutputLines', 'logRetentionDays', 'historyMaxLines', 'webhookTimeoutSec')
+    'maxOutputLines', 'logRetentionDays', 'historyMaxLines', 'webhookTimeoutSec', 'mcpPort')
 
 function Initialize-Pss {
     param([Parameter(Mandatory)][string]$AppDir)
@@ -173,7 +175,7 @@ function Initialize-Pss {
         }
     }
     # secrets that may come from the process environment directly
-    foreach ($name in 'GITHUB_TOKEN', 'OPENROUTER_API_KEY', 'N8N_WEBHOOK_URL') {
+    foreach ($name in 'GITHUB_TOKEN', 'OPENROUTER_API_KEY', 'N8N_WEBHOOK_URL', 'MCP_AUTH_TOKEN') {
         $v = [Environment]::GetEnvironmentVariable($name)
         if ($v) { Register-PssSecret -Name $name -Value $v }
     }

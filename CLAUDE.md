@@ -14,6 +14,7 @@ Everything lives in `src/*.psm1`, imported globally by `psscripts.ps1` in this o
 | `Deps.psm1` | AST-based dependency detection (`#Requires` versions honored), per-script module dirs, install/upgrade command generation |
 | `Runner.psm1` | non-blocking process execution, per-script locks, `/proc` resource sampling + series, timeouts, log files, history, webhook with retry + dead-letter queue |
 | `Cron.psm1` | crontab managed block, cron validation, next-occurrence calculation, NL→cron via OpenRouter |
+| `Mcp.psm1` | built-in MCP server (`--mcp`): stateless streamable-HTTP JSON-RPC dispatch, tool registry (`list_scripts`/`run_script`/`get_history`), Bearer auth. `Invoke-PssMcpRequest`/`Invoke-PssMcpTool` are pure (socket-free) for testing; `Start-PssMcpServer` is the HttpListener loop. Tui never imports it |
 | `Tui.psm1` | the TUI: rendering, modes, key/mouse handling, run queue |
 
 Rules of thumb:
@@ -45,6 +46,12 @@ immediately "finished" and flow through `Complete-PssRun` normally.
 `Stop-PssRun` TERM-then-KILLs the whole process tree via `/proc` walking (falls
 back to `.Kill($true)` off-Linux) and pre-sets `Status` to `killed`/`timeout` so
 `Complete-PssRun` won't overwrite it.
+
+`Invoke-PssRunToCompletion -Handle -OnLine {}` is the shared blocking driver of
+that contract (poll → sample → complete) used by `--run` and the MCP
+`run_script` tool; the TUI keeps its own non-blocking tick. `Start-PssRun` also
+takes `-ExtraEnv` (per-run env overlay, values force-registered as secrets) and
+`-TimeoutOverride` (wins over script.json and the global timeout).
 
 ## Gotchas
 

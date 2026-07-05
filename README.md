@@ -164,8 +164,59 @@ Headless mode also works manually:
 | `psscripts --list` | list discovered scripts with last status and schedule |
 | `psscripts --sync` | sync the scripts repo and exit (useful from cron) |
 | `psscripts --history [script]` | print recent runs, optionally for one script |
+| `psscripts --mcp [--port <n>]` | serve the built-in MCP server so AI agents (e.g. n8n) can list/run scripts — see below |
 
 A cron or manual run of a script that is already running elsewhere is **skipped** (per-script lock under `~/.psscripts/locks/`), recorded in history, and reported to the webhook with `"status": "skipped"` — long runs never stack.
+
+## MCP server (AI agents / n8n)
+
+`psscripts --mcp` starts a built-in [MCP](https://modelcontextprotocol.io) server so an AI agent — e.g. an n8n **AI Agent** node with the built-in **MCP Client Tool** — can operate the app over the LAN. It speaks the streamable-HTTP transport (plain JSON responses, stateless, no SSE) on `POST /mcp`, with `GET /healthz` for liveness.
+
+**Tools exposed:**
+
+| Tool | What it does |
+| --- | --- |
+| `list_scripts` | every script with description, last run status and cron schedule |
+| `run_script` | run a script to completion — supports extra `args` (quote-aware string), per-run `env` vars (override the script's `.env`, values redacted like any secret), and a `timeout_minutes` override. Returns status, exit code, duration, redacted output tail and resource stats |
+| `get_history` | recent runs, newest first, optionally filtered to one script |
+
+MCP-triggered runs go through the exact same pipeline as manual/cron runs: per-script lock (an already-running script returns `"status": "skipped"`), dep auto-install, log file, history, secret redaction, and the n8n run-report webhook (payload carries `"trigger": "mcp"`).
+
+**Setup:**
+
+1. Generate a token and put it in `.env` next to the app: `MCP_AUTH_TOKEN=$(openssl rand -hex 32)`. The server refuses to start without one; every request must send it as a Bearer token.
+2. Optionally set `mcpPort` (default `8765`) and `mcpBind` (`all` = LAN-reachable, `localhost`) in `config.json`.
+3. Run `psscripts --mcp`, or install it as a systemd user service so it survives reboots (do **not** add it to the crontab managed block — that block is regenerated from schedules and foreign lines are dropped):
+
+```ini
+# ~/.config/systemd/user/psscripts-mcp.service
+[Unit]
+Description=psscripts MCP server
+
+[Service]
+ExecStart=/usr/bin/pwsh -NoProfile -File %h/powershell-scripts-tui/psscripts.ps1 --mcp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now psscripts-mcp
+loginctl enable-linger $USER    # keep it running with no session open
+```
+
+4. In n8n: add an **AI Agent** node, attach an **MCP Client Tool** sub-node with Endpoint `http://<server-ip>:8765/mcp`, Server Transport **HTTP Streamable**, and a **Bearer** credential holding the token. The agent will discover the three tools automatically.
+
+Smoke test with curl:
+
+```bash
+curl -s http://<server>:8765/mcp -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_script","arguments":{"script":"backup-db","args":"-DryRun"}}}'
+```
+
+Notes: tool calls execute one at a time (a long run blocks the next request — matching how an agent awaits a tool). If the client times out and disconnects mid-run, the run still completes and is recorded/webhooked. The server is LAN-only plain HTTP guarded by the token — keep it off untrusted networks, or set `mcpBind: "localhost"` if n8n runs on the same host.
 
 ## System updates without a sudo password
 
@@ -196,6 +247,8 @@ Otherwise the TUI prints the exact commands to run manually (and still upgrades 
 | `historyMaxLines` | cap `history.jsonl` at this many runs (0 = unlimited) | `5000` |
 | `webhookTimeoutSec` | per-attempt webhook timeout | `15` |
 | `colorMode` | `auto` (truecolor if `$COLORTERM` says so, else 256-color), `truecolor`, or `256` | `auto` |
+| `mcpPort` | MCP server port (`--mcp`; `--port` overrides per run) | `8765` |
+| `mcpBind` | `all` (LAN-reachable) or `localhost` | `all` |
 
 Unknown keys and non-numeric values for numeric keys are reported as warnings at startup instead of being silently ignored.
 

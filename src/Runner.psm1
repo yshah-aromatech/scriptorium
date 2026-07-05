@@ -65,7 +65,9 @@ function Start-PssRun {
     param(
         [Parameter(Mandatory)]$Script,
         [string]$Trigger = 'manual',
-        [string[]]$ExtraArgs = @()
+        [string[]]$ExtraArgs = @(),
+        [hashtable]$ExtraEnv = @{},
+        [double]$TimeoutOverride = 0
     )
     $cfg = Get-PssConfig
     $paths = Get-PssPaths
@@ -106,17 +108,55 @@ function Start-PssRun {
         $psi.Environment[$kv.Key] = $kv.Value
         Register-PssSecret -Name $kv.Key -Value $kv.Value -Force
     }
+    # caller-supplied per-run env (e.g. MCP run_script) overrides .env; the
+    # values may be credentials, so they get the same forced redaction
+    foreach ($kv in $ExtraEnv.GetEnumerator()) {
+        $psi.Environment["$($kv.Key)"] = "$($kv.Value)"
+        Register-PssSecret -Name "$($kv.Key)" -Value "$($kv.Value)" -Force
+    }
     # per-script module dir gets first crack at module resolution
     $sep = [IO.Path]::PathSeparator
     $psi.Environment['PSModulePath'] = "$($Script.ModuleDir)$sep$($env:PSModulePath)"
 
     $handle = New-PssHandle -Psi $psi -Kind 'run' -Name $Script.Name -Trigger $Trigger -LogFile $logFile
     $handle.LockFile = $lock.File
-    # per-script timeout wins over the global runTimeoutMinutes
-    $handle.TimeoutMinutes = if ($null -ne $Script.PSObject.Properties['TimeoutMinutes'] -and $null -ne $Script.TimeoutMinutes) {
+    # per-call override wins over the per-script timeout, which wins over the
+    # global runTimeoutMinutes
+    $handle.TimeoutMinutes = if ($TimeoutOverride -gt 0) {
+        $TimeoutOverride
+    } elseif ($null -ne $Script.PSObject.Properties['TimeoutMinutes'] -and $null -ne $Script.TimeoutMinutes) {
         [double]$Script.TimeoutMinutes
     } else { [double]$cfg.runTimeoutMinutes }
     $handle
+}
+
+# ---------------------------------------------------------------------------
+# Drive a run handle through the standard poll loop to completion: drain
+# output (via -OnLine), sample resources, then Complete-PssRun. This is the
+# single blocking-caller implementation shared by `--run` and the MCP server;
+# the TUI keeps its own non-blocking tick.
+# ---------------------------------------------------------------------------
+function Invoke-PssRunToCompletion {
+    param(
+        [Parameter(Mandatory)]$Handle,
+        [scriptblock]$OnLine
+    )
+    $cfg = Get-PssConfig
+    $lastSample = [datetime]::MinValue
+    while (-not (Test-PssRunFinished -Handle $Handle)) {
+        foreach ($line in (Update-PssRun -Handle $Handle)) {
+            if ($OnLine) { & $OnLine $line }
+        }
+        if (((Get-Date) - $lastSample).TotalMilliseconds -ge [int]$cfg.monitorIntervalMs) {
+            Measure-PssResources -Handle $Handle
+            $lastSample = Get-Date
+        }
+        Start-Sleep -Milliseconds 50
+    }
+    foreach ($line in (Update-PssRun -Handle $Handle)) {
+        if ($OnLine) { & $OnLine $line }
+    }
+    Complete-PssRun -Handle $Handle
 }
 
 # ---------------------------------------------------------------------------
@@ -538,6 +578,7 @@ function Get-PssLastStatuses {
 }
 
 Export-ModuleMember -Function Start-PssRun, Start-PssTask, Update-PssRun, Test-PssRunFinished,
-Measure-PssResources, Stop-PssRun, Complete-PssRun, Send-PssWebhook, Send-PssWebhookTest,
+Measure-PssResources, Stop-PssRun, Complete-PssRun, Invoke-PssRunToCompletion,
+Send-PssWebhook, Send-PssWebhookTest,
 Send-PssWebhookQueue, Get-PssHistory, Get-PssLastStatuses, Get-PssLogTail,
 Lock-PssScript, Unlock-PssScript, Get-PssDownsampledSeries
