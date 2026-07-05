@@ -165,10 +165,13 @@ msal[broker]>=1.20 ; python_version >= "3.8"
         $cmd | Should -Match 'python3-venv'   # failure hint present
     }
 
-    It 'venv upgrade command iterates venv dirs' {
+    It 'venv upgrade command upgrades only top-level packages and pip-checks after' {
         $cmd = Get-PssVenvUpgradeCommand
         $cmd | Should -Match 'bin/python'
-        $cmd | Should -Match '--outdated'
+        # dependencies (pydantic-core etc.) must never be force-upgraded past
+        # their parents' exact pins — that broke a real venv
+        $cmd | Should -Match '--outdated --not-required'
+        $cmd | Should -Match 'pip check'
     }
 
     It 'scans imports and reports third-party modules as missing without a venv' -Skip:(-not (Get-Command python3 -ErrorAction SilentlyContinue)) {

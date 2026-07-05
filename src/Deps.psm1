@@ -512,18 +512,32 @@ if (Get-Command '$pythonBin' -ErrorAction SilentlyContinue) {
 if (-not (Test-Path `$root)) { Write-Host 'no venvs yet'; exit 0 }
 `$venvs = @(Get-ChildItem `$root -Directory | Where-Object { Test-Path (Join-Path `$_.FullName 'bin/python') })
 if (`$venvs.Count -eq 0) { Write-Host 'no venvs to upgrade yet'; exit 0 }
+`$broken = `$false
 foreach (`$v in `$venvs) {
     `$py = Join-Path `$v.FullName 'bin/python'
     Write-Host "'`$(`$v.Name)': upgrading pip..."
     & `$py -m pip install --upgrade pip --quiet
-    `$outdated = & `$py -m pip list --outdated --format=json 2>`$null
+    # --not-required: only TOP-LEVEL packages. Explicitly upgrading a
+    # dependency (e.g. pydantic-core, which pydantic pins exactly) forces it
+    # past its parent's pin and breaks the venv; upgrading the parents lets
+    # the resolver pull matching dependency versions.
+    `$outdated = & `$py -m pip list --outdated --not-required --format=json 2>`$null
     `$pkgs = @()
     try { `$pkgs = @(("`$outdated" | ConvertFrom-Json) | ForEach-Object name) } catch { }
     if (`$pkgs.Count -eq 0) { Write-Host "'`$(`$v.Name)': all packages up to date."; continue }
     Write-Host "'`$(`$v.Name)': upgrading `$(`$pkgs.Count) package(s): `$(`$pkgs -join ', ')"
     & `$py -m pip install --upgrade @pkgs
+    # verify the venv is still consistent; report loudly if not
+    `$check = & `$py -m pip check 2>&1
+    if (`$LASTEXITCODE -ne 0) {
+        `$broken = `$true
+        Write-Host "'`$(`$v.Name)': WARNING — dependency conflict after upgrade:"
+        `$check | ForEach-Object { Write-Host "  `$_" }
+        Write-Host "  fix: delete `$(`$v.FullName) and re-run the script (venv is rebuilt automatically)"
+    }
 }
 Write-Host 'venv upgrade complete'
+if (`$broken) { exit 1 }
 "@
 }
 
