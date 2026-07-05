@@ -5,3 +5,6 @@ config.json
 # session handoff snapshot — shared via hosted onboarding link, not tracked
 ONBOARDING.md
 CLAUDE.md
+
+# local planning docs — not tracked
+plans/
