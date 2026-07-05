@@ -295,6 +295,57 @@ function Get-PssRepos {
 function Get-PssPaths { $script:Paths }
 function Get-PssAppDir { $script:AppDir }
 
+# Add a repo to config.json's `repos` array (used by `psscripts --add-repo`).
+# A legacy scriptsRepo config is converted to a repos entry first, so the
+# existing repo keeps syncing (its clone is migrated on the next sync).
+# Returns @{ Ok; Message; Name }.
+function Add-PssRepoConfig {
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [string]$Name = '',
+        [string]$Branch = 'main'
+    )
+    if (-not $Name) {
+        $Name = [IO.Path]::GetFileNameWithoutExtension(($Url -replace '/+$', '')) -replace '[^A-Za-z0-9_-]', '-'
+    }
+    if ($Name -notmatch '^[A-Za-z0-9_-]+$') {
+        return @{ Ok = $false; Message = "invalid repo name '$Name' — use letters/digits/dash/underscore"; Name = $Name }
+    }
+
+    $cfgFile = Join-Path $script:AppDir 'config.json'
+    $cfg = [ordered]@{}
+    if (Test-Path $cfgFile) {
+        $user = Get-Content $cfgFile -Raw | ConvertFrom-Json
+        foreach ($prop in $user.PSObject.Properties) { $cfg[$prop.Name] = $prop.Value }
+    }
+
+    $repos = [System.Collections.Generic.List[object]]::new()
+    foreach ($e in @($cfg.repos)) { if ("$($e.url)") { $repos.Add($e) } }
+
+    # first --add-repo on a legacy config: carry the old scriptsRepo over as
+    # its own entry so it keeps syncing alongside the new repo
+    if ($repos.Count -eq 0 -and "$($cfg.scriptsRepo)") {
+        $legacyName = [IO.Path]::GetFileNameWithoutExtension(("$($cfg.scriptsRepo)" -replace '/+$', '')) -replace '[^A-Za-z0-9_-]', '-'
+        if ($legacyName -eq $Name) { $legacyName = "$legacyName-legacy" }
+        $repos.Add([pscustomobject]@{
+                name   = $legacyName
+                url    = "$($cfg.scriptsRepo)"
+                branch = $(if ("$($cfg.branch)") { "$($cfg.branch)" } else { 'main' })
+            })
+    }
+
+    foreach ($e in $repos) {
+        if ("$($e.name)" -ieq $Name) { return @{ Ok = $false; Message = "a repo named '$Name' already exists — pass --name to pick another"; Name = $Name } }
+        $norm = { param($u) ("$u" -replace '//[^@/]+@', '//') -replace '\.git/?$', '' -replace '/+$', '' }
+        if ((& $norm $e.url) -eq (& $norm $Url)) { return @{ Ok = $false; Message = "repo already configured as '$($e.name)': $($e.url)"; Name = "$($e.name)" } }
+    }
+
+    $repos.Add([pscustomobject]@{ name = $Name; url = $Url; branch = $Branch })
+    $cfg.repos = @($repos)
+    $cfg | ConvertTo-Json -Depth 6 | Set-Content -Path $cfgFile -Encoding UTF8
+    @{ Ok = $true; Message = "added repo '$Name' ($Url, branch $Branch) — $($repos.Count) repo(s) configured"; Name = $Name }
+}
+
 # ---------------------------------------------------------------------------
 # .env files
 # ---------------------------------------------------------------------------
@@ -490,7 +541,7 @@ function Copy-PssClipboard {
     'copied via OSC 52'
 }
 
-Export-ModuleMember -Function Initialize-Pss, Get-PssConfig, Get-PssConfigWarnings, Get-PssScriptsRepo, Get-PssRepos,
+Export-ModuleMember -Function Initialize-Pss, Get-PssConfig, Get-PssConfigWarnings, Get-PssScriptsRepo, Get-PssRepos, Add-PssRepoConfig,
 Get-PssPaths, Get-PssAppDir, Get-PssAppVersion, Get-PssTheme, Read-PssEnvFile, Register-PssSecret,
 Hide-PssSecret, Format-PssDuration, Format-PssRelativeTime, Copy-PssClipboard,
 ConvertTo-AnsiFg, ConvertTo-AnsiBg, ConvertTo-Ansi256Index,

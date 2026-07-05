@@ -6,7 +6,9 @@
 #   psscripts --run <name>    run one script headless (full pipeline)
 #   psscripts --run <name> --args "<extra args>"   pass extra arguments
 #   psscripts --run <name> --cron     same, marks the run as cron-triggered
-#   psscripts --sync          sync the scripts repo and exit
+#   psscripts --sync          sync all scripts repos and exit
+#   psscripts --repos         list configured scripts repos
+#   psscripts --add-repo <url> [--name <n>] [--branch <b>]   add a scripts repo
 #   psscripts --history [name]        print recent runs (optionally one script)
 #   psscripts --mcp [--port <n>]      serve the MCP server (for n8n AI agents)
 #   psscripts --install-mcp-service   install + start the MCP server as a systemd service
@@ -34,6 +36,10 @@ $historyName = $null
 $mcpOnly = $false
 $mcpInstall = $false
 $mcpPortOverride = 0
+$addRepoUrl = $null
+$addRepoName = ''
+$addRepoBranch = 'main'
+$listRepos = $false
 $showHelp = $false
 for ($i = 0; $i -lt $args.Count; $i++) {
     switch ($args[$i]) {
@@ -44,6 +50,10 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         '--sync' { $syncOnly = $true }
         '--mcp' { $mcpOnly = $true }
         '--port' { $mcpPortOverride = [int]$args[$i + 1]; $i++ }
+        '--repos' { $listRepos = $true }
+        '--add-repo' { $addRepoUrl = "$($args[$i + 1])"; $i++ }
+        '--name' { $addRepoName = "$($args[$i + 1])"; $i++ }
+        '--branch' { $addRepoBranch = "$($args[$i + 1])"; $i++ }
         '--install-mcp-service' { $mcpInstall = $true }
         '--history' {
             $historyOnly = $true
@@ -56,7 +66,23 @@ for ($i = 0; $i -lt $args.Count; $i++) {
 foreach ($w in (Get-PssConfigWarnings)) { Write-Warning $w }
 
 if ($showHelp) {
-    Get-Content $PSCommandPath | Select-Object -Skip 1 -First 13 | ForEach-Object { $_ -replace '^#\s?', '' }
+    Get-Content $PSCommandPath | Select-Object -Skip 1 -First 15 | ForEach-Object { $_ -replace '^#\s?', '' }
+    exit 0
+}
+
+if ($addRepoUrl) {
+    $r = Add-PssRepoConfig -Url $addRepoUrl -Name $addRepoName -Branch $addRepoBranch
+    Write-Host $r.Message
+    if ($r.Ok) { Write-Host "run 'psscripts --sync' to clone it" }
+    exit $(if ($r.Ok) { 0 } else { 1 })
+}
+
+if ($listRepos) {
+    foreach ($r in @(Get-PssRepos)) {
+        $tag = if ($r.Legacy) { ' (legacy scriptsRepo)' } else { '' }
+        $url = if ($r.Url) { $r.Url } else { '<no url configured>' }
+        '{0,-15} {1,-8} {2}{3}' -f $r.Name, $r.Branch, $url, $tag
+    }
     exit 0
 }
 

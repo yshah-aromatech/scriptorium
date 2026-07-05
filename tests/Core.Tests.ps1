@@ -196,3 +196,48 @@ Describe 'Initialize-Pss config handling' {
         (Get-Content $paths.HistoryFile | Select-Object -Last 1) | Should -Match 's20'
     }
 }
+
+Describe 'Add-PssRepoConfig' {
+    BeforeEach {
+        $script:repoAppDir = Join-Path ([IO.Path]::GetTempPath()) "pss-addrepo-tests-$(New-Guid)"
+        New-Item -ItemType Directory -Path $script:repoAppDir -Force | Out-Null
+        @{
+            dataDir = (Join-Path $script:repoAppDir 'data')
+            scriptsRepo = 'https://github.com/org/powershell-scripts'
+        } | ConvertTo-Json | Set-Content (Join-Path $script:repoAppDir 'config.json')
+        Initialize-Pss -AppDir $script:repoAppDir
+    }
+    AfterEach {
+        Remove-Item $script:repoAppDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'converts a legacy scriptsRepo and appends the new repo' {
+        $r = Add-PssRepoConfig -Url 'https://github.com/org/python-scripts' -Name 'python'
+        $r.Ok | Should -BeTrue
+        $cfg = Get-Content (Join-Path $script:repoAppDir 'config.json') -Raw | ConvertFrom-Json
+        @($cfg.repos).Count | Should -Be 2
+        $cfg.repos[0].url | Should -Be 'https://github.com/org/powershell-scripts'
+        $cfg.repos[1].name | Should -Be 'python'
+        # reload and confirm Get-PssRepos sees both, non-legacy
+        Initialize-Pss -AppDir $script:repoAppDir
+        $repos = @(Get-PssRepos)
+        $repos.Count | Should -Be 2
+        $repos[0].Legacy | Should -BeFalse
+    }
+
+    It 'derives the name from the URL when not given' {
+        $r = Add-PssRepoConfig -Url 'https://github.com/org/python-scripts.git'
+        $r.Ok | Should -BeTrue
+        $r.Name | Should -Be 'python-scripts'
+    }
+
+    It 'rejects a duplicate name and a duplicate URL' {
+        (Add-PssRepoConfig -Url 'https://github.com/org/a' -Name 'x').Ok | Should -BeTrue
+        (Add-PssRepoConfig -Url 'https://github.com/org/b' -Name 'x').Ok | Should -BeFalse
+        (Add-PssRepoConfig -Url 'https://github.com/org/a.git' -Name 'y').Ok | Should -BeFalse
+    }
+
+    It 'rejects invalid names' {
+        (Add-PssRepoConfig -Url 'https://github.com/org/c' -Name 'bad name!').Ok | Should -BeFalse
+    }
+}

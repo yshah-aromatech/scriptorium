@@ -105,7 +105,14 @@ The entry point for each folder is resolved in this order: `script.json`'s `"ent
 
 ### Multiple repos
 
-To sync more than one scripts repo, replace `scriptsRepo`/`branch` with a `repos` array in `config.json`:
+The quickest way to add a second (third, …) scripts repo:
+
+```bash
+psscripts --add-repo https://github.com/YOUR_ORG/python-scripts --name python
+psscripts --sync
+```
+
+`--add-repo` updates `config.json` for you (a legacy `scriptsRepo` config is converted to a `repos` entry first, so the existing repo keeps syncing); `--name` and `--branch` are optional — the name defaults to the URL's basename, the branch to `main`. `psscripts --repos` lists what's configured. Or edit the `repos` array in `config.json` directly:
 
 ```json
 "repos": [
@@ -179,7 +186,9 @@ Headless mode also works manually:
 | `psscripts --run <script>` | run one script with the full dep-check/webhook pipeline, missing modules auto-installed without prompting (exit code: 0 success, 1 failure, 3 skipped/already running) |
 | `psscripts --run <script> --args "-Flag 'a b'"` | same, with extra arguments (quote-aware splitting) |
 | `psscripts --list` | list discovered scripts with last status and schedule |
-| `psscripts --sync` | sync the scripts repo and exit (useful from cron) |
+| `psscripts --sync` | sync all scripts repos and exit (useful from cron) |
+| `psscripts --repos` | list configured scripts repos |
+| `psscripts --add-repo <url> [--name <n>] [--branch <b>]` | add a scripts repo to config.json |
 | `psscripts --history [script]` | print recent runs, optionally for one script |
 | `psscripts --mcp [--port <n>]` | serve the built-in MCP server so AI agents (e.g. n8n) can list/run scripts — see below |
 
