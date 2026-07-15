@@ -86,16 +86,6 @@ Or from the shell — rerunning the install one-liner is also safe (it pulls ins
 cd ~/scriptorium && git pull
 ```
 
-### Upgrading from powershell-scripts-tui (the old name)
-
-This app used to be called **powershell-scripts-tui** (command: `psscripts`). Existing installs migrate automatically — after a `git pull`:
-
-- `psscripts.ps1` remains as a shim that forwards to `scriptorium.ps1`, so the old launcher, existing crontab entries, and an installed `psscripts-mcp` systemd service keep working untouched.
-- On first launch, `~/.psscripts` is moved to `~/.scriptorium` (only if `dataDir` is the default). Data, history, module dirs, and venvs all carry over.
-- Schedules written under the old crontab markers are still read, and are rewritten under the new markers the next time you save a schedule.
-- Re-run `./install.sh` to get the `scriptorium` launcher (the old `psscripts` command is kept as a symlink), and re-run `scriptorium --install-mcp-service` to replace the `psscripts-mcp` unit with `scriptorium-mcp`.
-- The old GitHub URL redirects to the renamed repo, so existing clones keep pulling without changes.
-
 ## Scripts repo layout
 
 One folder per script; PowerShell and Python folders can live in the same repo or in separate repos:
