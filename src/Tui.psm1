@@ -706,7 +706,9 @@ function Invoke-TuiWebhookTest {
 
 function Open-TuiHistory {
     # opens scoped to the highlighted script's own runs; f toggles all scripts
-    $items = @(Get-StoHistory -Last 200)
+    # shows the last historyDays days of runs (0 falls back to the last 200)
+    $days = [double](Get-StoConfig).historyDays
+    $items = if ($days -gt 0) { @(Get-StoHistory -SinceDays $days) } else { @(Get-StoHistory -Last 200) }
     [array]::Reverse($items)
     $sel = Get-TuiSelected
     $script:S.History = @{ Items = $items; Sel = 0; Top = 0; FilterName = "$(if ($sel) { $sel.Name })" }

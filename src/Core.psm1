@@ -129,6 +129,7 @@ $script:ConfigDefaults = [ordered]@{
     syncOnLaunch      = $false
     logRetentionDays  = 30
     historyMaxLines   = 5000
+    historyDays       = 7          # history tab time window (0 = last 200 runs)
     webhookTimeoutSec = 15
     colorMode         = 'auto'      # auto | truecolor | 256
     mcpPort           = 8765
@@ -137,7 +138,7 @@ $script:ConfigDefaults = [ordered]@{
 # keys whose values must parse as numbers — a typo'd string here would
 # otherwise silently disable the feature
 $script:ConfigNumericKeys = @('monitorIntervalMs', 'logTailKb', 'runTimeoutMinutes',
-    'maxOutputLines', 'logRetentionDays', 'historyMaxLines', 'webhookTimeoutSec', 'mcpPort')
+    'maxOutputLines', 'logRetentionDays', 'historyMaxLines', 'historyDays', 'webhookTimeoutSec', 'mcpPort')
 
 function Initialize-Sto {
     param([Parameter(Mandatory)][string]$AppDir)

@@ -603,12 +603,25 @@ function Send-StoWebhookTest {
 # Run history
 # ---------------------------------------------------------------------------
 function Get-StoHistory {
-    param([int]$Last = 100)
+    # -SinceDays > 0 returns every run in that time window instead of a count
+    param([int]$Last = 100, [double]$SinceDays = 0)
     $paths = Get-StoPaths
     if (-not (Test-Path $paths.HistoryFile)) { return @() }
-    $lines = Get-Content $paths.HistoryFile -Tail $Last -ErrorAction SilentlyContinue
+    $lines = if ($SinceDays -gt 0) {
+        Get-Content $paths.HistoryFile -ErrorAction SilentlyContinue
+    } else {
+        Get-Content $paths.HistoryFile -Tail $Last -ErrorAction SilentlyContinue
+    }
     $items = foreach ($l in $lines) {
         try { $l | ConvertFrom-Json } catch { }
+    }
+    if ($SinceDays -gt 0) {
+        # startedAt parses with its original Kind — normalize to UTC to compare
+        $cutoff = (Get-Date).ToUniversalTime().AddDays(-$SinceDays)
+        $items = @($items | Where-Object {
+                $d = $_.startedAt -as [datetime]
+                $d -and $d.ToUniversalTime() -ge $cutoff
+            })
     }
     @($items)
 }

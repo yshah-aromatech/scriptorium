@@ -268,6 +268,7 @@ Otherwise the TUI prints the exact commands to run manually (and still upgrades 
 | `syncOnLaunch` | sync the scripts repo automatically when the TUI starts | `false` |
 | `logRetentionDays` | delete run logs older than this at startup (0 = keep forever) | `30` |
 | `historyMaxLines` | cap `history.jsonl` at this many runs (0 = unlimited) | `5000` |
+| `historyDays` | history tab shows runs from the last N days (0 = last 200 runs) | `7` |
 | `webhookTimeoutSec` | per-attempt webhook timeout | `15` |
 | `colorMode` | `auto` (truecolor if `$COLORTERM` says so, else 256-color), `truecolor`, or `256` | `auto` |
 | `mcpPort` | MCP server port (`--mcp`; `--port` overrides per run) | `8765` |
