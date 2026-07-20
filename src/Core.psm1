@@ -54,6 +54,18 @@ function ConvertFrom-StoHex {
         [Convert]::ToInt32($h.Substring(4, 2), 16))
 }
 
+# Blend two hex colors (T = 0..1). Callers feed the result to ConvertTo-AnsiFg/Bg
+# so animated colors inherit the 256-color fallback automatically.
+function Get-StoBlendHex {
+    param([string]$From, [string]$To, [double]$T)
+    if ($T -le 0) { return $From }
+    if ($T -ge 1) { return $To }
+    $f = ConvertFrom-StoHex $From
+    $g = ConvertFrom-StoHex $To
+    '#{0:x2}{1:x2}{2:x2}' -f [int]($f[0] + ($g[0] - $f[0]) * $T),
+        [int]($f[1] + ($g[1] - $f[1]) * $T), [int]($f[2] + ($g[2] - $f[2]) * $T)
+}
+
 function ConvertTo-AnsiFg {
     param([string]$Hex)
     $r, $g, $b = ConvertFrom-StoHex $Hex
@@ -590,5 +602,5 @@ function Copy-StoClipboard {
 Export-ModuleMember -Function Initialize-Sto, Get-StoConfig, Get-StoConfigWarnings, Get-StoScriptsRepo, Get-StoRepos, Add-StoRepoConfig,
 Get-StoPaths, Get-StoAppDir, Get-StoAppVersion, Get-StoTheme, Read-StoEnvFile, Read-StoEnvDoc, Register-StoSecret,
 Hide-StoSecret, Format-StoDuration, Format-StoRelativeTime, Copy-StoClipboard,
-ConvertTo-AnsiFg, ConvertTo-AnsiBg, ConvertTo-Ansi256Index,
+ConvertTo-AnsiFg, ConvertTo-AnsiBg, ConvertTo-Ansi256Index, Get-StoBlendHex,
 Get-StoDisplayWidth, Get-StoCodepointWidth, Format-StoCell, Split-StoArguments, Clear-StoOldData

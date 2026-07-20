@@ -6,7 +6,9 @@
 
 $script:S = $null          # UI state
 $script:SpinnerFrames = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
+$script:SpinnerColors = $null   # per-frame ANSI fg ramp, built lazily from the theme
 $script:AnsiRegex = [regex]'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\a]*\a'
+$script:Clock = [System.Diagnostics.Stopwatch]::StartNew()   # wall clock for animations — Tick freezes when frames skip
 
 # ===========================================================================
 # Entry point
@@ -51,6 +53,10 @@ function Start-StoTui {
         StatusMsg    = ''
         StatusKind   = 'info'
         StatusMsgAt  = [datetime]::MinValue
+        Anims        = @{}       # key -> @{At; Ms; Data} one-shot animations
+        MarqueeActive = $false   # set by Get-TuiListRows when the selected name is truncated
+        MarqueeAt    = [long]0   # clock ms when the marquee (re)started
+        MarqueeSel   = -1        # last-rendered selection index (marquee restart detection)
         Tick         = 0
         LastSample   = [datetime]::MinValue
         AppVersion   = (Get-StoAppVersion)
@@ -139,6 +145,23 @@ function Start-StoTui {
                 Start-TuiRunFlow -Script $next.Script -ExtraArgs $next.ExtraArgs
                 $script:S.Dirty = $true
             }
+
+            # animations: prune expired one-shots (redraw while any is live —
+            # the extra Dirty=true after the last one expires paints the
+            # restored state), fade the status message near expiry, and tick
+            # the marquee at ~6fps so an idle TUI stays idle
+            if ($script:S.Anims.Count -gt 0) {
+                $now = $script:Clock.ElapsedMilliseconds
+                foreach ($k in @($script:S.Anims.Keys)) {
+                    if ($now - $script:S.Anims[$k].At -ge $script:S.Anims[$k].Ms) { $script:S.Anims.Remove($k) }
+                }
+                $script:S.Dirty = $true
+            }
+            if ($script:S.StatusMsg -and -not $script:S.Run) {
+                $age = ((Get-Date) - $script:S.StatusMsgAt).TotalSeconds
+                if ($age -ge 5.2 -and $age -le 6.3) { $script:S.Dirty = $true }   # fade-out window
+            }
+            if ($script:S.MarqueeActive -and $script:S.Tick % 5 -eq 0) { $script:S.Dirty = $true }
 
             # keep redrawing while anything is running (spinners + elapsed
             # times animate), including cron/external runs in the activity card
@@ -381,6 +404,42 @@ function Set-TuiStatus {
 }
 
 # ===========================================================================
+# Animations — keyed one-shot effects (flash / pulse / fade). The main loop
+# keeps redrawing while any is live and prunes expired keys, so the UI drops
+# back to zero redraws once they finish.
+# ===========================================================================
+function Start-TuiAnim {
+    param([string]$Key, [int]$Ms, [string]$Data = '')
+    $script:S.Anims[$Key] = @{ At = $script:Clock.ElapsedMilliseconds; Ms = $Ms; Data = $Data }
+    $script:S.Dirty = $true
+}
+
+# progress of a live animation as @{ T = eased 0..1; Data }, $null once done
+function Get-TuiAnim {
+    param([string]$Key)
+    $a = $script:S.Anims[$Key]
+    if (-not $a) { return $null }
+    $p = ($script:Clock.ElapsedMilliseconds - $a.At) / [double]$a.Ms
+    if ($p -ge 1) { return $null }
+    $u = 1 - $p
+    @{ T = 1 - $u * $u * $u; Data = $a.Data }   # cubic ease-out
+}
+
+# spinner frame for the current tick, tinted along a BrCyan→Blue ramp that
+# cycles with the frames (precomputed once — no per-frame color math)
+function Get-TuiSpinner {
+    if (-not $script:SpinnerColors) {
+        $p = (Get-StoTheme).Palette
+        $n = $script:SpinnerFrames.Count
+        $script:SpinnerColors = @(for ($i = 0; $i -lt $n; $i++) {
+            ConvertTo-AnsiFg (Get-StoBlendHex $p.BrCyan $p.Blue ([Math]::Abs($i * 2.0 / $n - 1)))
+        })
+    }
+    $i = $script:S.Tick % $script:SpinnerFrames.Count
+    "$($script:SpinnerColors[$i])$($script:SpinnerFrames[$i])"
+}
+
+# ===========================================================================
 # Run lifecycle inside the TUI
 # ===========================================================================
 function Start-TuiRunFlow {
@@ -451,6 +510,7 @@ function Update-TuiRun {
                 DurationSec = [double]$result.durationSec
                 Resources   = $result.resources
             }
+            Start-TuiAnim -Key "flash:$($result.script)" -Ms 700 -Data $(if ("$($result.status)" -eq 'success') { 'ok' } else { 'err' })
             # refresh the right-side cards now, not on their next poll/TTL
             $script:S.RecentAt = [datetime]::MinValue
             $script:S.LastLockPoll = [datetime]::MinValue
@@ -857,7 +917,9 @@ function Invoke-TuiKeyList {
 function Move-TuiSelection {
     param([int]$Delta)
     if ($script:S.Visible.Count -eq 0) { return }
+    $old = $script:S.Selected
     $script:S.Selected = [Math]::Min([Math]::Max(0, $script:S.Selected + $Delta), $script:S.Visible.Count - 1)
+    if ($script:S.Selected -ne $old) { Start-TuiAnim -Key 'pulse' -Ms 180 }
     $script:S.Dirty = $true
 }
 
@@ -1196,6 +1258,8 @@ function Show-TuiFrame {
     # focused pane's title is highlighted (tab switches)
     $listTitleColor = if ($script:S.FocusPane -eq 'output') { $t.Blue } else { $t.BrCyan }
     $outTitleColor = if ($script:S.FocusPane -eq 'output') { $t.BrCyan } else { $t.Blue }
+    # tint the spinner after truncation so the length math above stays ANSI-free
+    if ($spin) { $outTitle = $outTitle.Replace($spin, "$(Get-TuiSpinner)$outTitleColor ") }
     [void]$sb.Append("$reset$($t.Muted)╭")
     [void]$sb.Append("$listTitleColor$listTitle$($t.Muted)")
     [void]$sb.Append(('─' * [Math]::Max(0, $lw - $listTitle.Length)))
@@ -1289,9 +1353,18 @@ function Get-TuiAge {
 function Get-TuiListRows {
     param([int]$Count, [int]$Width)
     $t = Get-StoTheme
+    $pal = $t.Palette
     $rows = @()
     $items = $script:S.Visible
     $sel = $script:S.Selected
+
+    # marquee restarts (with its 1s pause) whenever the selection moves,
+    # however it moved — keys, mouse, or filtering reshuffling the list
+    $script:S.MarqueeActive = $false
+    if ($script:S.MarqueeSel -ne $sel) {
+        $script:S.MarqueeSel = $sel
+        $script:S.MarqueeAt = $script:Clock.ElapsedMilliseconds
+    }
 
     # keep selection in view
     $top = 0
@@ -1320,7 +1393,7 @@ function Get-TuiListRows {
             default { "$($t.Muted)·" }
         }
         if ($scr.Name -in $runningNames) {
-            $badge = "$($t.BrCyan)$($script:SpinnerFrames[$script:S.Tick % $script:SpinnerFrames.Count])"
+            $badge = Get-TuiSpinner
         } elseif ($scr.Name -in $queuedNames) {
             $badge = "$($t.Cyan)»"
         }
@@ -1337,11 +1410,36 @@ function Get-TuiListRows {
             $nameEnd = "$($t.Reset)$($t.SelBg)"   # drop bold before the age/sched cells
             $lead = "$($t.Blue)▎"                 # accent bar marks the selection
         }
+        # completion flash: green/red wash easing back to normal (beats SelBg)
+        $fl = Get-TuiAnim "flash:$($scr.Name)"
+        if ($fl) {
+            $c = if ($fl.Data -eq 'ok') { $pal.Green } else { $pal.Red }
+            $rowBg = ConvertTo-AnsiBg (Get-StoBlendHex $c $pal.Bg (0.72 + 0.28 * $fl.T))
+            if ($idx -eq $sel) { $nameEnd = "$($t.Reset)$rowBg" }
+        } elseif ($idx -eq $sel) {
+            # selection pulse: brief brighter highlight easing back to SelBg
+            $pu = Get-TuiAnim 'pulse'
+            if ($pu) {
+                $rowBg = ConvertTo-AnsiBg (Get-StoBlendHex $pal.Blue $pal.SelBg (0.55 + 0.45 * $pu.T))
+                $nameEnd = "$($t.Reset)$rowBg"
+                $lead = "$($t.BrCyan)▎"
+            }
+        }
         # 2-char runtime tag between name and age, tinted per language
         $isPy = ("$($scr.Runtime)" -eq 'python')
         $rt = if ($isPy) { 'py' } else { 'ps' }
         $rtColor = if ($idx -eq $sel) { $t.Muted } elseif ($isPy) { $t.Yellow } else { $t.Blue }
-        $name = Format-TuiPad -Text $scr.Name -Width ($Width - 12)
+        # long selected names scroll (1s pause, then ~6 chars/s, looped with a
+        # separator); filtered mode keeps plain truncation so highlights align
+        $nameText = $scr.Name
+        if ($idx -eq $sel -and -not $script:S.Filter -and $scr.Name.Length -gt ($Width - 12)) {
+            $script:S.MarqueeActive = $true
+            $ms = $script:Clock.ElapsedMilliseconds - $script:S.MarqueeAt - 1000
+            $loop = $scr.Name + '   ·   '
+            $off = if ($ms -gt 0) { [int][Math]::Floor($ms / 165) % $loop.Length } else { 0 }
+            $nameText = ($loop + $loop).Substring($off)
+        }
+        $name = Format-TuiPad -Text $nameText -Width ($Width - 12)
         # show why a filtered row matched: highlight the filter substring
         if ($script:S.Filter) {
             $name = [regex]::Replace($name, '(' + [regex]::Escape($script:S.Filter) + ')',
@@ -1456,7 +1554,8 @@ function Get-TuiActivityRows {
             $r = $running[$i]
             $src = if ($r.External) { 'cron/external' } else { 'this session' }
             $el = Format-StoRelativeTime ((Get-Date) - $r.StartedAt).TotalSeconds
-            $rows += "$($t.BrCyan)$(Format-TuiPad -Text " $spin $($r.Name) · running $el · pid $($r.OwnerPid) · $src" -Width $Width)"
+            $row = Format-TuiPad -Text " $spin $($r.Name) · running $el · pid $($r.OwnerPid) · $src" -Width $Width
+            $rows += "$($t.BrCyan)$($row.Replace(" $spin ", " $(Get-TuiSpinner)$($t.BrCyan) "))"
         }
         if ($running.Count -gt $show) {
             $rows += "$($t.BrCyan)$(Format-TuiPad -Text "   … +$($running.Count - $show) more running" -Width $Width)"
@@ -1787,6 +1886,7 @@ function Get-TuiStatusLine {
     $queueTxt = if ($script:S.Queue.Count -gt 0) { "  (+$($script:S.Queue.Count) queued)" } else { '' }
     $left = ''
     $msgColor = $null
+    $msgAge = ((Get-Date) - $script:S.StatusMsgAt).TotalSeconds
     if ($script:S.Run -and $script:S.Run.Kind -eq 'run') {
         $h = $script:S.Run
         $el = ((Get-Date).ToUniversalTime() - $h.StartedAt).TotalSeconds
@@ -1800,10 +1900,15 @@ function Get-TuiStatusLine {
             $el = "  $(Format-StoDuration ((Get-Date).ToUniversalTime() - $h.StartedAt).TotalSeconds)"
         }
         $left = " ▶ running: $($h.Name)$el$queueTxt"
-    } elseif (((Get-Date) - $script:S.StatusMsgAt).TotalSeconds -lt 6 -and $script:S.StatusMsg) {
+    } elseif ($msgAge -lt 6 -and $script:S.StatusMsg) {
         $icon = switch ("$($script:S.StatusKind)") { 'ok' { '✓ ' } 'err' { '✗ ' } 'warn' { '⚠ ' } default { '' } }
         $left = " $icon$($script:S.StatusMsg)"
         $msgColor = switch ("$($script:S.StatusKind)") { 'ok' { $t.Green } 'err' { $t.Red } 'warn' { $t.BrYellow } default { $null } }
+        if ($msgAge -gt 5.2) {
+            $f = [Math]::Min(1.0, ($msgAge - 5.2) / 0.8)
+            $baseHex = switch ("$($script:S.StatusKind)") { 'ok' { $t.Palette.Green } 'err' { $t.Palette.Red } 'warn' { $t.Palette.BrYellow } default { $t.Palette.BrBlack } }
+            $msgColor = ConvertTo-AnsiFg (Get-StoBlendHex $baseHex $t.Palette.Bg $f)
+        }
     } else {
         $sel = Get-TuiSelected
         if ($sel) {

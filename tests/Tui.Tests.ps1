@@ -26,6 +26,7 @@ BeforeAll {
             RecentRuns = @(); RecentAt = [datetime]::MinValue
             AfterTask = $null; AfterTaskAlways = $null
             StatusMsg = ''; StatusMsgAt = [datetime]::MinValue
+            Anims = @{}; MarqueeActive = $false; MarqueeAt = [long]0; MarqueeSel = -1
             Tick = 0; LastSample = [datetime]::MinValue
             AppVersion = 'abc1234'; Dirty = $true
         }
