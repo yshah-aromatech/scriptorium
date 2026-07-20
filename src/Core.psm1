@@ -12,7 +12,7 @@ $script:ColorMode = 'truecolor'   # truecolor | 256
 # ---------------------------------------------------------------------------
 $script:NightOwl = [ordered]@{
     Bg       = '#011627'
-    Fg       = '#cccccc'
+    Fg       = '#d6deeb'   # canonical Night Owl foreground (soft blue-white)
     SelBg    = '#093b5e'
     Black    = '#011627'
     Red      = '#ef5350'
@@ -22,9 +22,10 @@ $script:NightOwl = [ordered]@{
     Magenta  = '#c792ea'
     Cyan     = '#21c7a8'
     White    = '#ffffff'
-    BrBlack  = '#575656'
+    BrBlack  = '#637777'   # Night Owl comment teal-grey — harmonizes with the bg
     BrYellow = '#ffeb95'
     BrCyan   = '#7fdbca'
+    Border   = '#5f7e97'   # Night Owl panel border (steel blue)
 }
 
 # Nearest xterm-256 index for a 24-bit color (6x6x6 cube + grayscale ramp),
@@ -104,6 +105,8 @@ function Get-StoTheme {
             BrCyan   = ConvertTo-AnsiFg $p.BrCyan
             BlueBg   = ConvertTo-AnsiBg $p.Blue
             BlackFg  = ConvertTo-AnsiFg $p.Black
+            Border   = ConvertTo-AnsiFg $p.Border
+            CardBg   = ConvertTo-AnsiBg (Get-StoBlendHex $p.Bg '#ffffff' 0.045)   # cards sit just above the bg
             Palette  = $p
         }
     }

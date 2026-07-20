@@ -95,7 +95,7 @@ Describe 'list rows' {
         $plain = [regex]::Replace($rows[0], "`e\[[0-9;]*m", '')
         $plain | Should -Match 'alpha'
         $plain | Should -Match '2h'
-        $plain | Should -Match '@'
+        $plain | Should -Match '↻'
     }
 
     It 'marks the selected row with an accent bar, others with a space' {

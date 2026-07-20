@@ -7,6 +7,7 @@
 $script:S = $null          # UI state
 $script:SpinnerFrames = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
 $script:SpinnerColors = $null   # per-frame ANSI fg ramp, built lazily from the theme
+$script:SparkColors = $null    # block-glyph -> ANSI fg (green->yellow->red heat ramp), built lazily
 $script:AnsiRegex = [regex]'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\a]*\a'
 $script:Clock = [System.Diagnostics.Stopwatch]::StartNew()   # wall clock for animations — Tick freezes when frames skip
 
@@ -42,6 +43,7 @@ function Start-StoTui {
         Env          = $null
         History      = $null
         Run          = $null
+        RunEta       = 0.0       # median past duration of the running script (0 = no history)
         Running      = @()       # live-locked scripts (incl. cron/external) for the activity card
         RunningKey   = ''
         LastLockPoll = [datetime]::MinValue
@@ -464,6 +466,9 @@ function Start-TuiRun {
     $script:S.OutTitle = "run: $($Script.Name)"
     Add-TuiBanner -Lead "▶ $($Script.Name) · started $((Get-Date).ToString('HH:mm:ss'))"
     $script:S.Run = Start-StoRun -Script $Script -Trigger 'manual' -ExtraArgs $ExtraArgs
+    # ETA from past successful runs — computed once here, never during rendering
+    $durs = @(Get-StoHistory -Last 200 | Where-Object { "$($_.script)" -eq $Script.Name -and "$($_.status)" -eq 'success' } | ForEach-Object { [double]$_.durationSec } | Sort-Object)
+    $script:S.RunEta = if ($durs.Count) { $durs[[int][Math]::Floor($durs.Count / 2)] } else { 0.0 }
     $script:S.Follow = $true
 }
 
@@ -475,6 +480,7 @@ function Start-TuiTask {
     $script:S.OutTitle = $Name
     Add-TuiBanner -Lead "▶ $Name"
     $script:S.Run = Start-StoTask -Name $Name -FileName $FileName -Arguments $Arguments
+    $script:S.RunEta = 0.0   # tasks have no history
     $script:S.AfterTask = $After
     $script:S.AfterTaskAlways = $AfterAlways
     $script:S.Follow = $true
@@ -1241,13 +1247,26 @@ function Show-TuiFrame {
     if ($script:S.ContainsKey('LastSync') -and $script:S.LastSync) {
         $sync = " · synced $(Format-StoRelativeTime ((Get-Date) - $script:S.LastSync).TotalSeconds) ago"
     }
-    $right = " $repo$sync · $([Environment]::MachineName)$ver "
-    if ($title.Length + $right.Length -gt $W) {
-        $right = Format-TuiPad -Text $right -Width ([Math]::Max(0, $W - $title.Length))
-    }
-    $mid = [Math]::Max(0, $W - $title.Length - $right.Length)
+    # right side = up to three chips (repo+sync, host, version) each drawn as a
+    # muted label on the card fill; fall back to one muted string if too wide
+    $verText = if ($script:S.AppVersion) { $script:S.AppVersion } else { '' }
+    $chips = @("$repo$sync", [Environment]::MachineName)
+    if ($verText) { $chips += $verText }
+    $chipsPlain = (($chips | ForEach-Object { $_.Length + 2 } | Measure-Object -Sum).Sum) + ($chips.Count - 1)
+    $avail = [Math]::Max(0, $W - $title.Length)
     [void]$sb.Append("$($t.BlueBg)$($t.BlackFg)$($t.Bold)$title$($t.Reset)$bg$fg")
-    [void]$sb.Append("$(' ' * $mid)$($t.Muted)$right")
+    if ($chipsPlain -le $avail) {
+        $mid = $avail - $chipsPlain
+        [void]$sb.Append(' ' * $mid)
+        [void]$sb.Append((($chips | ForEach-Object { "$($t.CardBg)$($t.Muted) $_ $($t.Reset)$bg$fg" }) -join ' '))
+    } else {
+        $right = " $repo$sync · $([Environment]::MachineName)$ver "
+        if ($title.Length + $right.Length -gt $W) {
+            $right = Format-TuiPad -Text $right -Width $avail
+        }
+        $mid = [Math]::Max(0, $W - $title.Length - $right.Length)
+        [void]$sb.Append("$(' ' * $mid)$($t.Muted)$right")
+    }
     [void]$sb.Append("$reset`e[K`n")
 
     # ---- panel top border --------------------------------------------------
@@ -1262,13 +1281,16 @@ function Show-TuiFrame {
     $outTitleColor = if ($script:S.FocusPane -eq 'output') { $t.BrCyan } else { $t.Blue }
     # tint the spinner after truncation so the length math above stays ANSI-free
     if ($spin) { $outTitle = $outTitle.Replace($spin, "$(Get-TuiSpinner)$outTitleColor ") }
-    [void]$sb.Append("$reset$($t.Muted)╭")
-    [void]$sb.Append("$listTitleColor$listTitle$($t.Muted)")
+    # the focused pane's top-border fill glows blue; the other stays Border
+    $listFillColor = if ($script:S.FocusPane -eq 'output') { $t.Border } else { $t.Blue }
+    $outFillColor = if ($script:S.FocusPane -eq 'output') { $t.Blue } else { $t.Border }
+    [void]$sb.Append("$reset$($t.Border)╭")
+    [void]$sb.Append("$listTitleColor$listTitle$listFillColor")
     [void]$sb.Append(('─' * [Math]::Max(0, $lw - $listTitle.Length)))
-    [void]$sb.Append('┬')
-    [void]$sb.Append("$outTitleColor$outTitle$($t.Muted)")
+    [void]$sb.Append("$($t.Border)┬")
+    [void]$sb.Append("$outTitleColor$outTitle$outFillColor")
     [void]$sb.Append(('─' * [Math]::Max(0, $rw - $outTitle.Length)))
-    [void]$sb.Append("╮$reset`e[K`n")
+    [void]$sb.Append("$($t.Border)╮$reset`e[K`n")
 
     # ---- body rows ----------------------------------------------------------
     # left column = script list, then (height permitting) a separator and the
@@ -1296,23 +1318,23 @@ function Show-TuiFrame {
             # left-only horizontal rule with an inset title, top-border style
             $dTitle = ' details '
             $mid = if ($rule) { '┼' } else { '┤' }   # rules on both sides may share a row
-            [void]$sb.Append("$reset$($t.Muted)├$($t.Blue)$dTitle$($t.Muted)")
+            [void]$sb.Append("$reset$($t.Border)├$($t.Blue)$dTitle$($t.Border)")
             [void]$sb.Append(('─' * [Math]::Max(0, $lw - $dTitle.Length)))
             [void]$sb.Append("$mid$reset")
         } else {
             $mid = if ($rule) { '├' } else { '│' }
-            [void]$sb.Append("$reset$($t.Muted)│$reset")
+            [void]$sb.Append("$reset$($t.Border)│$reset")
             [void]$sb.Append($(if ($i -lt $listH) { $leftRows[$i] } else { $detailRows[$i - $listH - 1] }))
-            [void]$sb.Append("$reset$($t.Muted)$mid$reset")
+            [void]$sb.Append("$reset$($t.Border)$mid$reset")
         }
         if ($rule) {
             # right-only horizontal rule with an inset title
-            [void]$sb.Append("$($t.Blue)$rule$($t.Muted)")
+            [void]$sb.Append("$($t.Blue)$rule$($t.Border)")
             [void]$sb.Append(('─' * [Math]::Max(0, $rw - $rule.Length)))
             [void]$sb.Append("┤$reset`e[K`n")
         } else {
             [void]$sb.Append($rightRows[$i])
-            [void]$sb.Append("$reset$($t.Muted)│$reset`e[K`n")
+            [void]$sb.Append("$reset$($t.Border)│$reset`e[K`n")
         }
     }
 
@@ -1321,8 +1343,8 @@ function Show-TuiFrame {
     $more = Get-TuiMoreBelow -BodyHeight $outH
     $note = if ($more -gt 0) { " ▼ $more more — End follows " } else { '' }
     if ($note -and ($note.Length + 2) -gt $rw) { $note = '' }
-    [void]$sb.Append("$reset$($t.Muted)╰$('─' * $lw)┴$('─' * ($rw - $note.Length - $(if ($note) { 1 } else { 0 })))")
-    if ($note) { [void]$sb.Append("$($t.BrYellow)$note$($t.Muted)─") }
+    [void]$sb.Append("$reset$($t.Border)╰$('─' * $lw)┴$('─' * ($rw - $note.Length - $(if ($note) { 1 } else { 0 })))")
+    if ($note) { [void]$sb.Append("$($t.BrYellow)$note$($t.Border)─") }
     [void]$sb.Append("╯$reset`e[K`n")
 
     # ---- status line -------------------------------------------------------
@@ -1375,6 +1397,14 @@ function Get-TuiListRows {
     }
     $script:S.ListTop = $top   # mouse clicks map row -> index through this
 
+    # scrollbar geometry (mirrors the output pane's thumb/track)
+    $thumbPos = -1; $thumbLen = 0
+    if ($items.Count -gt $Count) {
+        $maxTop = $items.Count - $Count
+        $thumbLen = [Math]::Max(1, [int]($Count * $Count / $items.Count))
+        $thumbPos = [int](($Count - $thumbLen) * $top / [Math]::Max(1, $maxTop))
+    }
+
     # live state trumps last status: spinner on running scripts (own run or a
     # lock-detected cron/external one), » on queued
     $runningNames = @($script:S.Running | ForEach-Object Name)
@@ -1399,11 +1429,11 @@ function Get-TuiListRows {
         } elseif ($scr.Name -in $queuedNames) {
             $badge = "$($t.Cyan)»"
         }
-        $sched = if ($script:S.Schedules.ContainsKey($scr.Name)) { "$($t.Cyan)@" } else { ' ' }
+        $sched = if ($script:S.Schedules.ContainsKey($scr.Name)) { "$($t.Cyan)↻" } else { ' ' }
         $age = Get-TuiAge $(if ($last) { $last.At })
         $ageCol = "$($t.Muted)$($age.PadLeft(3))"
         $rowFg = $t.Fg
-        $rowBg = ''
+        $rowBg = if ($idx % 2) { $t.CardBg } else { '' }   # zebra striping
         $lead = ' '
         $nameEnd = ''
         if ($idx -eq $sel) {
@@ -1447,7 +1477,11 @@ function Get-TuiListRows {
             $name = [regex]::Replace($name, '(' + [regex]::Escape($script:S.Filter) + ')',
                 "$($t.BrCyan)" + '$1' + $rowFg, 'IgnoreCase')
         }
-        $rows += "$rowBg$lead$badge$rowBg $rowFg$name$nameEnd$rtColor$rt $ageCol$rowBg $sched$rowBg "
+        # scrollbar rides the trailing-space column when the list overflows
+        $bar = if ($thumbPos -ge 0) {
+            if ($i -ge $thumbPos -and $i -lt ($thumbPos + $thumbLen)) { "$($t.Blue)█" } else { "$($t.Muted)│" }
+        } else { ' ' }
+        $rows += "$rowBg$lead$badge$rowBg $rowFg$name$nameEnd$rtColor$rt $ageCol$rowBg $sched$rowBg$bar"
     }
     $rows
 }
@@ -1536,7 +1570,10 @@ function Get-TuiDetailRows {
         }
     }
     while ($rows.Count -lt $Count) { $rows += (' ' * $Width) }
-    $rows
+    # sits on the card background so the details box reads as a distinct card;
+    # if a row resets colors mid-string, the fill has to be re-applied right
+    # after or it drops out for the remainder of that row
+    $rows | ForEach-Object { "$($t.CardBg)$($_.Replace($t.Reset, "$($t.Reset)$($t.CardBg)"))" }
 }
 
 # top-right card: anything running right now — from the per-script lock
@@ -1567,7 +1604,8 @@ function Get-TuiActivityRows {
         $rows += "$($t.Cyan)$(Format-TuiPad -Text " » $($script:S.Queue.Count) queued in this session" -Width $Width)"
     }
     while ($rows.Count -lt $Count) { $rows += (' ' * $Width) }
-    $rows
+    # card background, same reset-reapply guard as the details card above
+    $rows | ForEach-Object { "$($t.CardBg)$($_.Replace($t.Reset, "$($t.Reset)$($t.CardBg)"))" }
 }
 
 # cached tail of history.jsonl for the recent-runs card — TTL'd so redraws
@@ -1591,7 +1629,8 @@ function Get-TuiRecentRows {
     if ($items.Count -eq 0) {
         $rows += "$($t.Muted)$(Format-TuiPad -Text ' (no runs yet)' -Width $Width)"
     }
-    $nameW = [Math]::Max(10, [Math]::Min(28, $Width - 26))
+    # reserve room for a 6-wide cpu trend spark alongside the name/status text
+    $nameW = [Math]::Max(8, [Math]::Min(28, $Width - 33))
     foreach ($h in $items) {
         $status = "$($h.status)"
         # killed/timeout both read as "stopped" here — the history page has detail
@@ -1606,12 +1645,20 @@ function Get-TuiRecentRows {
         $started = $h.startedAt -as [datetime]
         if ($started) { $started = $started.ToLocalTime() }
         $age = if ($started) { "$(Format-StoRelativeTime ((Get-Date) - $started).TotalSeconds) ago" } else { '' }
-        $line = ' {0} {1} {2}  {3,-7} {4}' -f $icon,
-        (Format-StoCell -Text "$($h.script)" -Width $nameW -Ellipsis), $rt, $word, $age
-        $rows += "$color$(Format-TuiPad -Text $line -Width $Width)"
+        $spark = if ($h.resources -and $h.resources.cpuSeries) {
+            Get-TuiSparkline -Series $h.resources.cpuSeries -Width 6
+        } else { ' ' * 6 }
+        $line = ' {0} {1} {2}  {3,-7} {4} {5}' -f $icon,
+        (Format-StoCell -Text "$($h.script)" -Width $nameW -Ellipsis), $rt, $word, $spark, $age
+        $padded = Format-TuiPad -Text $line -Width $Width
+        # heat-color the cpu spark bars, restoring this row's color (and the
+        # card fill, re-applied below) once the spark ends
+        $padded = $padded.Replace($spark, (Convert-TuiSparkColor -Spark $spark -After "$color$($t.CardBg)"))
+        $rows += "$color$padded"
     }
     while ($rows.Count -lt $Count) { $rows += (' ' * $Width) }
-    $rows
+    # card background, same reset-reapply guard as the other two right cards
+    $rows | ForEach-Object { "$($t.CardBg)$($_.Replace($t.Reset, "$($t.Reset)$($t.CardBg)"))" }
 }
 
 # wrapped output lines below the current viewport; 0 while following or when
@@ -1734,6 +1781,36 @@ function Get-TuiSparkline {
     $sb.ToString().PadRight($Width)
 }
 
+# heat-colors a plain Get-TuiSparkline string bar-by-bar (green -> yellow for
+# levels 0-3, yellow -> red for levels 4-7), restoring -After (the caller's
+# color, e.g. the row's fg[+card fill]) once the spark ends. Sparklines are
+# embedded in plain text that Format-TuiPad still needs to pad/measure, so
+# Get-TuiSparkline itself must stay ANSI-free — callers colorize afterward.
+function Convert-TuiSparkColor {
+    param([string]$Spark, [string]$After)
+    if (-not $script:SparkColors) {
+        $p = (Get-StoTheme).Palette
+        $blocks = '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'
+        $script:SparkColors = @{}
+        for ($i = 0; $i -lt $blocks.Count; $i++) {
+            $hex = if ($i -le 3) {
+                Get-StoBlendHex $p.Green $p.BrYellow ($i / 3.0)
+            } else {
+                Get-StoBlendHex $p.BrYellow $p.Red (($i - 4) / 3.0)
+            }
+            $script:SparkColors[$blocks[$i]] = ConvertTo-AnsiFg $hex
+        }
+    }
+    $sb = [Text.StringBuilder]::new()
+    foreach ($ch in $Spark.ToCharArray()) {
+        $c = $script:SparkColors["$ch"]   # spaces (no-data points) have no entry — left uncolored
+        if ($c) { [void]$sb.Append($c) }
+        [void]$sb.Append($ch)
+    }
+    [void]$sb.Append($After)
+    $sb.ToString()
+}
+
 function Get-TuiHistoryRows {
     param([int]$Count, [int]$Width)
     $t = Get-StoTheme
@@ -1789,9 +1866,13 @@ function Get-TuiHistoryRows {
         "$($res.cpuMaxPercent)%", $spark, "$($res.memMaxMb)MB", "[$($h.trigger)]"
         if ($idx -eq $hi.Sel) {
             # accent bar replaces the leading space on the selected row
-            $rows += "$($t.SelBg)$($t.Blue)▎$color$(Format-TuiPad -Text $line.Substring(1) -Width ($Width - 1))"
+            $padded = Format-TuiPad -Text $line.Substring(1) -Width ($Width - 1)
+            $padded = $padded.Replace($spark, (Convert-TuiSparkColor -Spark $spark -After $color))
+            $rows += "$($t.SelBg)$($t.Blue)▎$color$padded"
         } else {
-            $rows += "$color$(Format-TuiPad -Text $line -Width $Width)"
+            $padded = Format-TuiPad -Text $line -Width $Width
+            $padded = $padded.Replace($spark, (Convert-TuiSparkColor -Spark $spark -After $color))
+            $rows += "$color$padded"
         }
     }
     $rows
@@ -1889,12 +1970,26 @@ function Get-TuiStatusLine {
     $left = ''
     $msgColor = $null
     $msgAge = ((Get-Date) - $script:S.StatusMsgAt).TotalSeconds
+    $barFill = ''; $barEmpty = ''
     if ($script:S.Run -and $script:S.Run.Kind -eq 'run') {
         $h = $script:S.Run
         $el = ((Get-Date).ToUniversalTime() - $h.StartedAt).TotalSeconds
         $cpu = if ($h.ContainsKey('CpuNow')) { '{0:n1}' -f $h.CpuNow } else { '—' }
         $mem = if ($h.ContainsKey('MemNow')) { '{0:n0}' -f $h.MemNow } else { '—' }
-        $left = " ▶ running $($h.Name)  $(Format-StoDuration $el)  cpu $cpu%  mem ${mem}MB$queueTxt"
+        $etaTxt = ''
+        if ($script:S.RunEta -gt 0) {
+            # bar stays plain here — Format-TuiPad is ANSI-unaware; colorized after padding
+            $pct = $el / $script:S.RunEta
+            $fill = [Math]::Max(0, [Math]::Min(10, [int][Math]::Round($pct * 10)))
+            if ($pct -lt 1) {
+                $barFill = '▰' * $fill; $barEmpty = '▱' * (10 - $fill)
+                $etaTxt = "  $barFill$barEmpty $([int][Math]::Floor($pct * 100))% · ~$(Format-StoDuration ($script:S.RunEta - $el)) left"
+            } else {
+                $barFill = '▰' * 10
+                $etaTxt = "  $barFill +$(Format-StoDuration ($el - $script:S.RunEta)) over"
+            }
+        }
+        $left = " ▶ running $($h.Name)$etaTxt  $(Format-StoDuration $el)  cpu $cpu%  mem ${mem}MB$queueTxt"
     } elseif ($script:S.Run) {
         $h = $script:S.Run
         $el = ''
@@ -1924,7 +2019,9 @@ function Get-TuiStatusLine {
         }
     }
     $color = if ($script:S.Run) { $t.BrCyan } elseif ($msgColor) { $msgColor } else { $t.Muted }
-    "$color$(Format-TuiPad -Text $left -Width $Width)"
+    $line = Format-TuiPad -Text $left -Width $Width
+    if ($barFill) { $line = $line.Replace("$barFill$barEmpty", "$($t.BrCyan)$barFill$($t.Muted)$barEmpty$color") }
+    "$color$line"
 }
 
 # "· next in 2h14m" — cached so the cron math doesn't run every frame
