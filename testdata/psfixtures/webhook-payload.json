@@ -1,6 +1,6 @@
 {
   "event": "script_run",
-  "runId": "d37588dc-c57a-4dd9-b757-a2870d5576dd",
+  "runId": "c0b88ead-d397-475f-bdbb-865cd7a8e9f8",
   "script": "fixture-script",
   "runtime": "powershell",
   "repo": "fixrepo",
@@ -8,8 +8,8 @@
   "status": "success",
   "success": true,
   "exitCode": 0,
-  "startedAt": "2026-09-01T17:14:18.162Z",
-  "finishedAt": "2026-09-01T17:14:18.512Z",
+  "startedAt": "2026-09-01T17:46:43.676Z",
+  "finishedAt": "2026-09-01T17:46:44.023Z",
   "durationSec": 0.3,
   "host": "MacBook-Pro",
   "resources": {
@@ -19,6 +19,6 @@
     "memMaxMb": 0.0,
     "samples": 0
   },
-  "logFile": "/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-d5741842-0cda-4974-be4e-2403cb714827/data/logs/fixture-script-2026-09-01T17-14-18-155Z.log",
+  "logFile": "/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-cbe2d978-09d3-4fa0-9721-5b4fbf1eff38/data/logs/fixture-script-2026-09-01T17-46-43-665Z.log",
   "log": "fixture run\n"
 }

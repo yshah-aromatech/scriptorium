@@ -1,0 +1,4 @@
+{
+  "statusCode": 200,
+  "json": "{\"jsonrpc\":\"2.0\",\"id\":12,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"scriptorium\",\"version\":\"dc3117e\"}}}"
+}

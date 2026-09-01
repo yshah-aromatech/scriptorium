@@ -1,6 +1,7 @@
 config.json
 .env
 *.log
+!testdata/psfixtures/**
 
 # session handoff snapshot — shared via hosted onboarding link, not tracked
 ONBOARDING.md

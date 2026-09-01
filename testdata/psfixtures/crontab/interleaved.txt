@@ -1,5 +1,5 @@
 0 1 * * * /bin/true
 # >>> scriptorium managed block — do not edit by hand >>>
-5 5 * * * cd '/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-d5741842-0cda-4974-be4e-2403cb714827' && 'pwsh' -NoProfile -File scriptorium.ps1 --run 'solo' --cron >> '/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-d5741842-0cda-4974-be4e-2403cb714827/data/logs/cron-solo.log' 2>&1
+5 5 * * * cd '/home/sto/scriptorium' && 'pwsh' -NoProfile -File scriptorium.ps1 --run 'solo' --cron >> '/home/sto/.scriptorium/logs/cron-solo.log' 2>&1
 # <<< scriptorium managed block <<<
 30 6 * * 1 /usr/bin/backup-home

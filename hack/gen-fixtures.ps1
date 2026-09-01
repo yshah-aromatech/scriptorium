@@ -26,7 +26,8 @@ $exprs = @(
   '0 22 * * 1,3,5','5/15 * * * *','0 0 1 1 *','0 12 * * 0','0 12 * * 7',
   '0 0 29 2 *','0 8 15 * 3','*/7 3-6 * * *','1-5 * * * *','0 0 31 4 *',
   '@hourly','@daily','@midnight','@weekly','@monthly','@yearly','@annually','@reboot',
-  '0 6,18 * * *','20,40 */2 * * sat,sun','0 0 */3 * *','45 23 28-31 * *'
+  '0 6,18 * * *','20,40 */2 * * sat,sun','0 0 */3 * *','45 23 28-31 * *',
+  '0 8 1 jan *','0 0 1 jan,jul *','30 12 * feb-mar *','0 9 * * sat'
 )
 $times = @(
   '2026-01-01T00:00:00','2026-02-28T23:59:00','2026-03-01T00:00:30',
@@ -43,6 +44,16 @@ $rows = foreach ($e in $exprs) { foreach ($t in $times) {
       $(if ($p) { $p.ToString("yyyy-MM-dd'T'HH:mm:ss", $ic) } else { '' })
 } }
 @('expression,from,next,prev') + $rows | Set-Content (Join-Path $out 'cron-truth.csv') -Encoding UTF8
+
+# --- cron validate (Test-StoCronExpression truth table) ---------------------
+$invalidExprs = @(
+  '* * * *','60 * * * *','* 24 * * *','*/0 * * * *','a b c d e',
+  '1-60 * * * *','every day at five pm','0 0 32 1 *','@fortnightly',''
+)
+$validateRows = foreach ($e in ($exprs + $invalidExprs)) {
+    '"{0}",{1}' -f $e, $(if (Test-StoCronExpression $e) { 'true' } else { 'false' })
+}
+@('expression,valid') + $validateRows | Set-Content (Join-Path $out 'cron-validate.csv') -Encoding UTF8
 
 # --- rounding ([Math]::Round banker's) --------------------------------------
 $vals = @(0.05,0.15,0.25,0.35,0.45,1.05,1.15,2.5,3.5,-0.25,-1.15,0.449,0.451,99.95,100.05) +
@@ -118,6 +129,8 @@ $script = [pscustomobject]@{ Name='fixture-script'; Dir=$sdir; Entry=(Join-Path 
 $h = Start-StoRun -Script $script -Trigger 'manual'
 $null = Invoke-StoRunToCompletion -Handle $h
 $modern = Get-Content (Get-StoPaths).HistoryFile -Tail 1
+# run.log: the real run's captured log, verbatim (volatile — see README)
+Copy-Item $h.LogFile (Join-Path $out 'run.log') -Force
 $legacy = @(
   '{"event":"script_run","script":"old-a","trigger":"cron","status":"success","exitCode":0,"startedAt":"2026-05-01T12:00:00.000Z","finishedAt":"2026-05-01T12:01:00.000Z","durationSec":60.0,"host":"h","logFile":"/tmp/x.log"}'
   '{"event":"script_run","script":"old-b","runtime":"python","trigger":"manual","status":"failure","exitCode":1,"startedAt":"2026-06-01T12:00:00.000Z","finishedAt":"2026-06-01T12:00:05.000Z","durationSec":5.0,"host":"h","resources":{"cpuAvgPercent":1.0,"cpuMaxPercent":2.0,"memAvgMb":10.0,"memMaxMb":11.0,"samples":5},"logFile":"/tmp/y.log"}'
@@ -133,9 +146,29 @@ foreach ($p in $row.PSObject.Properties) { $payload[$p.Name] = $p.Value }
 $payload['log'] = Get-StoLogTail -LogFile $row.logFile -TailKb 64
 $payload | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'webhook-payload.json') -Encoding UTF8
 
+# --- webhook dead-letter queue (hand-built — deterministic, no live values) --
+# schema of a script_run payload (Runner.psm1 $result) WITHOUT the 'log' field,
+# the shape actually written to webhook-queue.jsonl on a failed send.
+@(
+  '{"event":"script_run","runId":"11111111-1111-1111-1111-111111111111","script":"queued-a","runtime":"powershell","repo":"fixrepo","trigger":"cron","status":"success","success":true,"exitCode":0,"startedAt":"2026-04-01T03:00:00.000Z","finishedAt":"2026-04-01T03:00:05.000Z","durationSec":5.0,"host":"queue-host","resources":{"cpuAvgPercent":1.2,"cpuMaxPercent":2.4,"memAvgMb":15.0,"memMaxMb":16.0,"samples":3},"logFile":"/tmp/queued-a.log"}'
+  '{"event":"script_run","runId":"22222222-2222-2222-2222-222222222222","script":"queued-b","runtime":"python","repo":"","trigger":"manual","status":"failure","success":false,"exitCode":1,"startedAt":"2026-04-02T09:15:00.000Z","finishedAt":"2026-04-02T09:15:30.000Z","durationSec":30.0,"host":"queue-host","resources":{"cpuAvgPercent":5.0,"cpuMaxPercent":9.0,"memAvgMb":40.0,"memMaxMb":45.0,"samples":6},"logFile":"/tmp/queued-b.log"}'
+) | Set-Content (Join-Path $out 'webhook-queue.jsonl') -Encoding UTF8
+
+# --- missed-run state (real machinery: stamp, backdate, flag+alert) ---------
+$missedSchedules = @{ 'fixture-script' = '*/5 * * * *' }
+$null = Invoke-StoMissedRunCheck -Schedules $missedSchedules -GraceMinutes 0
+$missedStateFile = Join-Path (Get-StoPaths).DataDir 'missed-state.json'
+$mst = Get-Content $missedStateFile -Raw | ConvertFrom-Json -AsHashtable
+$mst['fixture-script'].firstSeen = (Get-Date).AddHours(-2).ToString('o')
+$mst | ConvertTo-Json -Depth 4 | Set-Content $missedStateFile
+$null = Invoke-StoMissedRunCheck -Schedules $missedSchedules -GraceMinutes 0
+Copy-Item $missedStateFile (Join-Path $out 'missed-state.json') -Force
+
 # --- crontab fixtures (parse-only — never touches the real crontab) ---------
 $cronDir = Join-Path $out 'crontab'; New-Item -ItemType Directory -Path $cronDir -Force | Out-Null
-$app = (Get-StoAppDir); $logs = (Get-StoPaths).LogsDir
+# literal stable paths (not the live temp appDir) — keeps these fixtures
+# byte-identical across regenerations regardless of where the generator runs
+$app = '/home/sto/scriptorium'; $logs = '/home/sto/.scriptorium/logs'
 $mk = { param($markStart, $markEnd) @(
     'MAILTO=someone@example.com'
     '15 3 * * * /usr/local/bin/certbot renew'
@@ -155,30 +188,42 @@ $mk = { param($markStart, $markEnd) @(
   '# <<< scriptorium managed block <<<',
   '30 6 * * 1 /usr/bin/backup-home') -join "`n" |
     Set-Content (Join-Path $cronDir 'interleaved.txt') -Encoding UTF8
-# expected parse: run the REAL parser logic over each fixture (in-process —
-# never touches the real crontab)
+# expected parse: run the REAL parser (Cron module's Get-StoSchedules) over
+# each fixture's text, in-process — never touches the real crontab. A
+# script-scoped Get-StoCrontab override is injected inside the Cron module's
+# own scope for the call, so Get-StoSchedules reads the fixture lines instead
+# of shelling out to `crontab -l`.
+$cronModule = Get-Module Cron
 $parsed = [ordered]@{}
 foreach ($f in 'current.txt','legacy.txt','interleaved.txt') {
-    $lines = Get-Content (Join-Path $cronDir $f)
-    $map = @{}
-    $inBlock = $false
-    foreach ($line in $lines) {
-        if ($line -match '^# >>> (scriptorium|psscripts) managed block') { $inBlock = $true; continue }
-        if ($line -match '^# <<< (scriptorium|psscripts) managed block') { $inBlock = $false; continue }
-        if (-not $inBlock) { continue }
-        if ($line -match "--run '([^']+)'" ) {
-            $name = $Matches[1]
-            if ($line -match '^(@\S+|(?:\S+\s+){4}\S+)\s+cd ') { $map[$name] = $Matches[1].Trim() }
-        }
-    }
-    $parsed[$f] = $map
+    $lines = @(Get-Content (Join-Path $cronDir $f))
+    $map = & $cronModule {
+        param($lines)
+        function script:Get-StoCrontab { @{ Ok = $true; Lines = $lines } }
+        Get-StoSchedules
+    } $lines
+    $ordered = [ordered]@{}
+    foreach ($k in ($map.Keys | Sort-Object)) { $ordered[$k] = $map[$k] }
+    $parsed[$f] = $ordered
 }
 $parsed | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $cronDir 'expected-schedules.json') -Encoding UTF8
 
+# --- deterministic serverInfo.version (Get-StoAppVersion shells to git) -----
+# Make the fixture appDir a real, reproducible git repo so `initialize`
+# responses carry a stable non-empty short SHA across regenerations: fixed
+# author/committer dates, fixed identity, empty tree, no parent.
+$prevAuthorDate = $env:GIT_AUTHOR_DATE; $prevCommitterDate = $env:GIT_COMMITTER_DATE
+$env:GIT_AUTHOR_DATE = '2026-01-01T00:00:00Z'
+$env:GIT_COMMITTER_DATE = '2026-01-01T00:00:00Z'
+git -C $appDir init -q
+git -C $appDir -c user.name=fixture -c user.email=f@x commit -q --allow-empty -m fixture
+if ($null -eq $prevAuthorDate) { Remove-Item Env:\GIT_AUTHOR_DATE -ErrorAction SilentlyContinue } else { $env:GIT_AUTHOR_DATE = $prevAuthorDate }
+if ($null -eq $prevCommitterDate) { Remove-Item Env:\GIT_COMMITTER_DATE -ErrorAction SilentlyContinue } else { $env:GIT_COMMITTER_DATE = $prevCommitterDate }
+
 # --- MCP request/response pairs (pure dispatch, no sockets) -----------------
 $mcpDir = Join-Path $out 'mcp'; New-Item -ItemType Directory -Path $mcpDir -Force | Out-Null
-$record = { param([string]$name, [string]$body)
-    $r = Invoke-StoMcpRequest -Body $body -Authorized $true
+$record = { param([string]$name, [string]$body, [bool]$authorized = $true)
+    $r = Invoke-StoMcpRequest -Body $body -Authorized $authorized
     $body | Set-Content (Join-Path $mcpDir "$name.request.json") -Encoding UTF8
     [ordered]@{ statusCode = $r.StatusCode; json = $r.Json } | ConvertTo-Json -Depth 3 |
         Set-Content (Join-Path $mcpDir "$name.response.json") -Encoding UTF8
@@ -192,6 +237,14 @@ $record = { param([string]$name, [string]$body)
 & $record '07-unknown-tool' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"nope"}}'
 & $record '08-get-history'  '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"get_history","arguments":{}}}'
 & $record '09-bad-logid'    '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"get_run_log","arguments":{"log_id":"../etc/passwd"}}}'
+& $record '10-unauthorized' '{"jsonrpc":"2.0","id":10,"method":"ping"}' $false
+# NOTE: a single-element JSON array is NOT actually rejected as an invalid
+# batch — ConvertFrom-Json -AsHashtable unwraps a one-element array to the
+# bare object on assignment, so this dispatches as a normal ping (200). A
+# real (2+-element) batch DOES hit the -32700 "not a JSON object" branch.
+# Recorded as specified — see fixwave report for this quirk.
+& $record '11-batch-rejected' '[{"jsonrpc":"2.0","id":1,"method":"ping"}]'
+& $record '12-initialize-alt-version' '{"jsonrpc":"2.0","id":12,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
 
 Remove-Item $appDir -Recurse -Force
 Write-Host "fixtures written to $out"

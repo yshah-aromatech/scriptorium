@@ -1,0 +1,47 @@
+expression,valid
+"* * * * *",true
+"*/5 * * * *",true
+"*/10 * * * *",true
+"*/15 * * * *",true
+"0 * * * *",true
+"30 2 * * *",true
+"0 0 * * *",true
+"0 9 * * 1-5",true
+"0 9 * * mon-fri",true
+"15 14 1 * *",true
+"0 22 * * 1,3,5",true
+"5/15 * * * *",true
+"0 0 1 1 *",true
+"0 12 * * 0",true
+"0 12 * * 7",true
+"0 0 29 2 *",true
+"0 8 15 * 3",true
+"*/7 3-6 * * *",true
+"1-5 * * * *",true
+"0 0 31 4 *",true
+"@hourly",true
+"@daily",true
+"@midnight",true
+"@weekly",true
+"@monthly",true
+"@yearly",true
+"@annually",true
+"@reboot",true
+"0 6,18 * * *",true
+"20,40 */2 * * sat,sun",true
+"0 0 */3 * *",true
+"45 23 28-31 * *",true
+"0 8 1 jan *",true
+"0 0 1 jan,jul *",true
+"30 12 * feb-mar *",true
+"0 9 * * sat",true
+"* * * *",false
+"60 * * * *",false
+"* 24 * * *",false
+"*/0 * * * *",false
+"a b c d e",false
+"1-60 * * * *",false
+"every day at five pm",false
+"0 0 32 1 *",false
+"@fortnightly",false
+"",false

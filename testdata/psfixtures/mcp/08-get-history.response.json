@@ -1,4 +1,4 @@
 {
   "statusCode": 200,
-  "json": "{\"jsonrpc\":\"2.0\",\"id\":8,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"runs\\\":[{\\\"script\\\":\\\"fixture-script\\\",\\\"trigger\\\":\\\"manual\\\",\\\"status\\\":\\\"success\\\",\\\"exitCode\\\":0,\\\"startedAt\\\":\\\"2026-09-01T17:14:18Z\\\",\\\"durationSec\\\":0.3,\\\"logFile\\\":\\\"/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-d5741842-0cda-4974-be4e-2403cb714827/data/logs/fixture-script-2026-09-01T17-14-18-155Z.log\\\",\\\"logId\\\":\\\"fixture-script-2026-09-01T17-14-18-155Z.log\\\"}]}\"}],\"isError\":false}}"
+  "json": "{\"jsonrpc\":\"2.0\",\"id\":8,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"runs\\\":[{\\\"script\\\":\\\"fixture-script\\\",\\\"trigger\\\":\\\"manual\\\",\\\"status\\\":\\\"success\\\",\\\"exitCode\\\":0,\\\"startedAt\\\":\\\"2026-09-01T17:46:43Z\\\",\\\"durationSec\\\":0.3,\\\"logFile\\\":\\\"/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-cbe2d978-09d3-4fa0-9721-5b4fbf1eff38/data/logs/fixture-script-2026-09-01T17-46-43-665Z.log\\\",\\\"logId\\\":\\\"fixture-script-2026-09-01T17-46-43-665Z.log\\\"}]}\"}],\"isError\":false}}"
 }
