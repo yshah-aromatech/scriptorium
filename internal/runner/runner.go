@@ -613,10 +613,14 @@ func stamp(t time.Time) string {
 	return strings.Replace(t.UTC().Format("2006-01-02T15-04-05.000Z"), ".", "-", 1)
 }
 
-// formatMinutes renders the timeout the way PS interpolates a [double]:
-// shortest round-trip, so 6s reads "0.1" and 30min reads "30".
+// formatMinutes renders the timeout the way PS interpolates a [double].
+// PowerShell formats double/float with .NET's "G15" — 15 significant digits,
+// trailing zeros trimmed — NOT the shortest round-trip form .NET Core made
+// the default in 3.0 (PS restored G15 to keep its pre-Core output). So 6s
+// reads "0.1", 30min reads "30", and 2s reads "0.0333333333333333" rather
+// than the round-trip "0.03333333333333333". Verified against live pwsh.
 func formatMinutes(d time.Duration) string {
-	return strconv.FormatFloat(d.Minutes(), 'g', -1, 64)
+	return strconv.FormatFloat(d.Minutes(), 'g', 15, 64)
 }
 
 // exitCodeOf reports the child's exit status. A signalled process reports
