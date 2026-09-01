@@ -122,3 +122,16 @@ func TestSemanticsSpot(t *testing.T) {
 		}
 	}
 }
+
+// Pinned by a live PS check (controller, 2026-09-01): PS's .Split('-',2)
+// resolves to the char overload, so "1-2-3" parses as ["1","2-3"] and the
+// expression is invalid — Go matches. The huge-step acceptance is a
+// documented deliberate divergence (PS throws an uncaught OverflowException).
+func TestValidatePinnedEdges(t *testing.T) {
+	if cron.Validate("1-2-3 * * * *") {
+		t.Error("multi-dash range must be invalid (PS parity)")
+	}
+	if !cron.Validate("*/3000000000 * * * *") {
+		t.Error("huge step expands from base (documented divergence)")
+	}
+}

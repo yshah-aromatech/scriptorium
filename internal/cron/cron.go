@@ -5,6 +5,9 @@
 // >= from+1min truncated to the minute; Prev looks back at most 35 days).
 // Frozen against testdata/psfixtures/cron-truth.csv — change nothing here
 // without changing the table's provenance.
+// Callers must pass UTC (or fixed-offset) times: in a DST-observing Location,
+// Go's time normalization diverges from the PS app's naive datetime math and
+// can skip fires across a spring-forward transition.
 package cron
 
 import (
@@ -71,7 +74,7 @@ func parse(expr string) *schedule {
 
 // expandField ports ConvertFrom-StoCronField: sorted unique values, or nil
 // on any parse failure.
-func expandField(field string, min, max int, names map[string]int) []int {
+func expandField(field string, fieldMin, fieldMax int, names map[string]int) []int {
 	set := map[int]bool{}
 	for _, part := range strings.Split(field, ",") {
 		p := strings.ToLower(strings.TrimSpace(part))
@@ -121,7 +124,7 @@ func expandField(field string, min, max int, names map[string]int) []int {
 		var lo, hi int
 		switch {
 		case p == "*":
-			lo, hi = min, max
+			lo, hi = fieldMin, fieldMax
 		case strings.Contains(p, "-"):
 			lr := strings.SplitN(p, "-", 2)
 			l, okL := resolve(lr[0])
@@ -137,12 +140,12 @@ func expandField(field string, min, max int, names map[string]int) []int {
 			}
 			lo = l
 			if hasStep {
-				hi = max // "5/15": from 5, every 15, to max
+				hi = fieldMax // "5/15": from 5, every 15, to max
 			} else {
 				hi = l
 			}
 		}
-		if lo < min || hi > max || lo > hi {
+		if lo < fieldMin || hi > fieldMax || lo > hi {
 			return nil
 		}
 		for v := lo; v <= hi; v += step {
