@@ -26,18 +26,26 @@ func decide(found bool, ci string) (fatal, skip bool) {
 	return false, true
 }
 
-// RequirePwsh returns the resolved pwsh path, or fails the test per CI
-// policy: os.Getenv("CI") != "" turns a missing pwsh into t.Fatal; otherwise
-// it's t.Skip.
-func RequirePwsh(t *testing.T) string {
+// require resolves an interpreter, or fails the test per CI policy:
+// os.Getenv("CI") != "" turns a missing binary into t.Fatal; otherwise it's
+// t.Skip.
+func require(t *testing.T, bin string) string {
 	t.Helper()
-	p, err := exec.LookPath("pwsh")
+	p, err := exec.LookPath(bin)
 	fatal, skip := decide(err == nil, os.Getenv("CI"))
 	if fatal {
-		t.Fatal("pwsh required in CI — interop gate must not skip")
+		t.Fatalf("%s required in CI — interop gate must not skip", bin)
 	}
 	if skip {
-		t.Skip("pwsh not on PATH")
+		t.Skipf("%s not on PATH", bin)
 	}
 	return p
 }
+
+// RequirePwsh returns the resolved pwsh path under the CI-loud policy.
+func RequirePwsh(t *testing.T) string { t.Helper(); return require(t, "pwsh") }
+
+// RequirePython returns the resolved python3 path under the same policy —
+// the runner's python end-to-end tests are as much of an interop gate as
+// the pwsh ones.
+func RequirePython(t *testing.T) string { t.Helper(); return require(t, "python3") }

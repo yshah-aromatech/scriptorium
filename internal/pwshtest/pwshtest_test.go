@@ -25,3 +25,20 @@ func TestRequirePwshFindsRealPwsh(t *testing.T) {
 		t.Fatal("expected a resolved pwsh path")
 	}
 }
+
+func TestRequirePythonSkipsLocallyWhenMissing(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv("PATH", t.TempDir())
+	ok := t.Run("inner", func(t *testing.T) {
+		pwshtest.RequirePython(t)
+	})
+	if !ok {
+		t.Fatal("expected inner subtest to skip (counts as passed), not fail")
+	}
+}
+
+func TestRequirePythonFindsRealPython(t *testing.T) {
+	if p := pwshtest.RequirePython(t); p == "" {
+		t.Fatal("expected a resolved python3 path")
+	}
+}

@@ -45,6 +45,11 @@ func TestDomainPackagesAreFrontendFree(t *testing.T) {
 		if frontends[top] {
 			return nil
 		}
+		// Test files may reach for net/http (an httptest endpoint asserting
+		// a domain package delivered its payload is a test double, not
+		// shipped HTTP surface); the frontend-framework ban still applies
+		// to them.
+		isTest := strings.HasSuffix(path, "_test.go")
 		fset := token.NewFileSet()
 		f, perr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
 		if perr != nil {
@@ -60,7 +65,7 @@ func TestDomainPackagesAreFrontendFree(t *testing.T) {
 			}
 			// net/http is allowed only in leaf client packages (webhook,
 			// openrouter) — handlers live in internal/mcp.
-			if (p == "net/http" || strings.HasPrefix(p, "net/http/")) && !netHTTPExceptions[top] {
+			if (p == "net/http" || strings.HasPrefix(p, "net/http/")) && !netHTTPExceptions[top] && !isTest {
 				t.Errorf("%s imports %s — only internal/webhook and internal/openrouter (clients) may; handlers belong in internal/mcp", path, p)
 			}
 		}
