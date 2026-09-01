@@ -665,3 +665,12 @@ Word-aware, exact display-cell width. Finds largest codepoint-prefix fitting `wi
 - `/Users/y.shah/development/work/scriptorium/.gitignore`
 
 This report is exhaustive against the current codebase as read; nothing was summarized away — every keybinding, config key, file format, algorithm, and tool schema documented above traces to specific lines in the files listed. Use it directly as the Go-rebuild parity checklist.
+
+---
+
+## Deliberate divergences (Go rebuild)
+
+1. **Numeric config keys reject JSON `bool`/`null`.** PS's `-as [double]` cast coerces `true`→`1` and `null`→`0` (a latent PS bug — a typo'd boolean or a stray `null` silently becomes a real numeric value instead of warning). The Go decoder only accepts a JSON number or a numeric string and warns+defaults on anything else, `bool`/`null` included.
+2. **Numeric config keys reject non-finite or out-of-int32-range values with a warning.** PS defers to a runtime `[int]` cast that throws only when the value is actually used. Go's `int()` conversion of `NaN`/`±Inf`/an overflowing float is undefined/platform-dependent, so `jsonNumber` rejects those up front (warn+default) rather than risk garbage config values reaching the rest of the app.
+3. **Secret redaction replaces longest-first, deterministically.** PS loops a `HashSet<string>` in enumeration order (nondeterministic across runs); when one registered secret is a substring of another, which one "wins" the overlap is unspecified in PS. Go always redacts the longest match first, so an overlap deterministically redacts *more* text (the longer secret's full span), never less.
+4. **ZWJ/grapheme display widths follow uniseg's segmentation.** Already noted in `testdata/psfixtures/README.md` — PS's .NET-based width heuristic and Go's `uniseg` package can disagree on exotic ZWJ sequences; uniseg's Unicode-standard segmentation is treated as authoritative going forward.
