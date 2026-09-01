@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/yshah-aromatech/scriptorium/internal/envfile"
+	"github.com/yshah-aromatech/scriptorium/internal/psfixtures"
 )
 
 func write(t *testing.T, content string) string {
@@ -34,7 +35,7 @@ func TestReadBasics(t *testing.T) {
 		{"whitespace trimmed around key and value", "A = spaced \nB=trail  ", map[string]string{"A": "spaced", "B": "trail"}},
 		{"last key wins", "K=first\nK=second", map[string]string{"K": "second"}},
 		{"stacked quotes keep inner quotes", "A=\"\"x\"\"", map[string]string{"A": "\"x\""}}, // Read uses matched-pair: outer "" removed, inner remains
-		{"trailing quote unmatched", "B=abc\"", map[string]string{"B": "abc\""}},              // no matched pair, quote kept
+		{"trailing quote unmatched", "B=abc\"", map[string]string{"B": "abc\""}},             // no matched pair, quote kept
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -51,6 +52,23 @@ func TestReadBasics(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// M1: a leading UTF-8 BOM must not become part of the first key.
+func TestReadStripsLeadingBOM(t *testing.T) {
+	got, err := envfile.Read(write(t, "\ufeffA=1\nB=2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"A": "1", "B": "2"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("key %q: got %q, want %q", k, got[k], v)
+		}
 	}
 }
 
@@ -111,6 +129,19 @@ func TestReadDoc(t *testing.T) {
 	}
 }
 
+// D1: the pending-comment strip must match PS '^#\s?' — one whitespace
+// char of any kind (space, tab, ...), not just a literal space.
+func TestReadDocTabCommentPrefix(t *testing.T) {
+	p := write(t, "#\tTabbed\nKEY=1\n")
+	entries, err := envfile.ReadDoc(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Comment != "Tabbed" {
+		t.Fatalf("got %+v, want Comment %q", entries, "Tabbed")
+	}
+}
+
 // TestReadDocQuoteTrimDivergence verifies ReadDoc uses PS .Trim() semantics
 // (any count of quote chars trimmed from both ends independently), which
 // diverges from Read's matched-pair stripping.
@@ -121,8 +152,8 @@ func TestReadDocQuoteTrimDivergence(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []envfile.DocEntry{
-		{Key: "STACKED", Default: "x", Comment: ""},     // ReadDoc trims all quotes: ""x"" -> x
-		{Key: "STRAY", Default: "abc", Comment: ""},     // ReadDoc trims trailing quote: abc" -> abc
+		{Key: "STACKED", Default: "x", Comment: ""}, // ReadDoc trims all quotes: ""x"" -> x
+		{Key: "STRAY", Default: "abc", Comment: ""}, // ReadDoc trims trailing quote: abc" -> abc
 	}
 	if len(entries) != len(want) {
 		t.Fatalf("got %d entries, want %d", len(entries), len(want))
@@ -134,22 +165,11 @@ func TestReadDocQuoteTrimDivergence(t *testing.T) {
 	}
 }
 
-// fixtureDir walks up to testdata/psfixtures (same idiom as internal/psfixtures).
 func fixtureDir(t *testing.T) string {
 	t.Helper()
-	d, err := os.Getwd()
+	dir, err := psfixtures.Dir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for {
-		p := filepath.Join(d, "testdata", "psfixtures")
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			t.Fatal("testdata/psfixtures not found")
-		}
-		d = parent
-	}
+	return dir
 }

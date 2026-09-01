@@ -11,6 +11,8 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // DocEntry is one documented key from a .env.example: the KEY=VALUE line
@@ -63,7 +65,11 @@ func ReadDoc(path string) ([]DocEntry, error) {
 		}
 		if strings.HasPrefix(t, "#") {
 			c := strings.TrimPrefix(t, "#")
-			c = strings.TrimPrefix(c, " ") // strip at most one leading space, like the PS regex '^#\s?'
+			// strip at most one leading whitespace char (space, tab, etc.),
+			// like the PS regex '^#\s?' — \s is not just a space.
+			if r, size := utf8.DecodeRuneInString(c); size > 0 && unicode.IsSpace(r) {
+				c = c[size:]
+			}
 			pending = append(pending, c)
 			continue
 		}
@@ -105,6 +111,7 @@ func stripMatchedQuotes(val string) string {
 }
 
 func splitLines(s string) []string {
+	s = strings.TrimPrefix(s, "\ufeff") // strip a leading UTF-8 BOM
 	// handle \n and \r\n; a lone trailing newline must not yield a ghost line
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
