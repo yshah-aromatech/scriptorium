@@ -68,6 +68,7 @@ function Start-StoTui {
         MarqueeActive = $false   # set by Get-TuiListRows when the selected name is truncated
         MarqueeAt    = [long]0   # clock ms when the marquee (re)started
         MarqueeSel   = -1        # last-rendered selection index (marquee restart detection)
+        MarqueeOff   = -1        # last-rendered scroll step (frame-accurate stepping)
         Tick         = 0
         LastSample   = [datetime]::MinValue
         AppVersion   = (Get-StoAppVersion)
@@ -210,19 +211,28 @@ function Start-StoTui {
             # keeps the wire cost of either a few hundred bytes.
             $nowMs = $script:Clock.ElapsedMilliseconds
             $running = $script:S.Run -or @($script:S.Running).Count -gt 0
-            $budget = if ($script:S.Anims.Count -gt 0 -or $running) { 16 }
-            elseif ($script:S.MarqueeActive) { 80 }
-            else { 0 }
-            $due = $script:S.Dirty -or ($budget -gt 0 -and ($nowMs - $script:S.LastFrameAt) -ge $budget)
+            # marquee renders exactly when its scroll offset steps (~6/s), not
+            # on a free-running poll — every step lands on its 165ms beat
+            # (same divisor as the offset math in Get-TuiListRows)
+            $marqueeStep = -1
+            if ($script:S.MarqueeActive) {
+                $ms = $nowMs - $script:S.MarqueeAt - 1000
+                $marqueeStep = if ($ms -gt 0) { [int][Math]::Floor($ms / 165) } else { 0 }
+            }
+            $marqueeDue = ($marqueeStep -ge 0 -and $marqueeStep -ne $script:S.MarqueeOff)
+            $budget = if ($script:S.Anims.Count -gt 0 -or $running) { 16 } else { 0 }
+            $due = $script:S.Dirty -or $marqueeDue -or
+                ($budget -gt 0 -and ($nowMs - $script:S.LastFrameAt) -ge $budget)
             if ($due -and ($nowMs - $script:S.LastFrameAt) -ge 15) {
                 $sec = [int]($nowMs / 1000)
-                $full = $script:S.Dirty -or $script:S.Anims.Count -gt 0 -or
+                $full = $script:S.Dirty -or $marqueeDue -or $script:S.Anims.Count -gt 0 -or
                     $sec -ne $script:S.LastFullSec -or
-                    ($nowMs - $script:S.LastFullMs) -ge $(if ($running) { 100 } else { 80 })
+                    ($running -and ($nowMs - $script:S.LastFullMs) -ge 100)
                 if ($full) {
                     Show-TuiFrame
                     $script:S.LastFullMs = $nowMs
                     $script:S.LastFullSec = $sec
+                    $script:S.MarqueeOff = $marqueeStep
                 } else {
                     Show-TuiFrame -AnimOnly
                 }
