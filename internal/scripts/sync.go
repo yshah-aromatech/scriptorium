@@ -116,7 +116,7 @@ func MigrateLayout(repos []Repo, paths config.Paths, onLine func(string)) {
 	target := repos[0]
 	remote := gitRemoteURL(paths.ScriptsDir)
 	for _, r := range repos {
-		if normalizeRepoURL(remote) == normalizeRepoURL(r.URL) {
+		if strings.EqualFold(normalizeRepoURL(remote), normalizeRepoURL(r.URL)) {
 			target = r
 			break
 		}

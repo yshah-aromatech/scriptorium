@@ -231,6 +231,32 @@ func TestMigrateLayoutMatchesByRemoteURL(t *testing.T) {
 	}
 }
 
+// I2: remote-URL matching is case-insensitive, matching PS's default `-eq`
+// string comparison in Update-StoRepoLayout.
+func TestMigrateLayoutMatchesByRemoteURLCaseInsensitive(t *testing.T) {
+	remote := newFixtureRemote(t)
+	upper := strings.ToUpper(remote)
+	cfg, paths := loadWithDataDir(t, `,"repos":[{"name":"repoa","url":"`+upper+`"}]`)
+
+	if err := os.MkdirAll(paths.ScriptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, paths.ScriptsDir, "init", "-b", "main")
+	runGit(t, paths.ScriptsDir, "remote", "add", "origin", remote) // lower-case remote; configured repo URL is upper-cased
+	writeFile(t, filepath.Join(paths.ScriptsDir, "oldscript", "main.ps1"), "x")
+
+	repos := scripts.Repos(cfg, paths)
+	var lines []string
+	scripts.MigrateLayout(repos, paths, func(l string) { lines = append(lines, l) })
+
+	if _, err := os.Stat(filepath.Join(paths.ScriptsDir, "repoa", ".git")); err != nil {
+		t.Fatalf("expected migrated clone under repoa (case-insensitive remote-url match): %v", err)
+	}
+	if !containsLine(lines, "migrating scripts clone to multi-repo layout: scripts/ -> scripts/repoa/") {
+		t.Errorf("missing migration line: %v", lines)
+	}
+}
+
 func TestMigrateLayoutSkippedForLegacy(t *testing.T) {
 	cfg, paths := loadWithDataDir(t, "")
 	repos := scripts.Repos(cfg, paths)

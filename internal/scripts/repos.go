@@ -192,7 +192,7 @@ func AddRepoConfig(appDir, url, name, branch string) (ok bool, message, resolved
 		if strings.EqualFold(e.fields.Name, name) {
 			return false, fmt.Sprintf("a repo named '%s' already exists — pass --name to pick another", name), name
 		}
-		if normalizeRepoURL(e.fields.URL) == normalizeRepoURL(url) {
+		if strings.EqualFold(normalizeRepoURL(e.fields.URL), normalizeRepoURL(url)) {
 			return false, fmt.Sprintf("repo already configured as '%s': %s", e.fields.Name, e.fields.URL), e.fields.Name
 		}
 	}

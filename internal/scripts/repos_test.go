@@ -218,6 +218,18 @@ func TestAddRepoConfigRejectsDuplicateNameAndURL(t *testing.T) {
 	}
 }
 
+// I2: duplicate-URL detection is case-insensitive, matching PS's default
+// `-eq` string comparison in Add-StoRepoConfig.
+func TestAddRepoConfigRejectsDuplicateURLCaseInsensitive(t *testing.T) {
+	appDir := addRepoAppDir(t)
+	if ok, msg, _ := scripts.AddRepoConfig(appDir, "https://GitHub.com/org/a", "x", ""); !ok {
+		t.Fatalf("first add should succeed: %s", msg)
+	}
+	if ok, _, _ := scripts.AddRepoConfig(appDir, "https://github.COM/ORG/A", "y", ""); ok {
+		t.Fatal("case-variant duplicate URL should be rejected")
+	}
+}
+
 func TestAddRepoConfigRejectsInvalidName(t *testing.T) {
 	appDir := addRepoAppDir(t)
 	ok, msg, _ := scripts.AddRepoConfig(appDir, "https://github.com/org/c", "bad name!", "")
