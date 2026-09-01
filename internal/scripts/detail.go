@@ -9,8 +9,11 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/secret"
 )
 
-// readmeCap is 16KB — Get-StoScriptDetail's README truncation threshold.
-const readmeCap = 16 * 1024
+// readmeCap is Get-StoScriptDetail's README truncation threshold: 16384
+// characters. PS measures .Length in UTF-16 code units; Go measures runes
+// instead (a deliberate divergence for non-BMP content — see the
+// parity-inventory divergence note).
+const readmeCap = 16384
 
 // Detail is the MCP-facing script detail — everything an agent needs to
 // call a script, minus PowerShell param-block parsing (P8/P9's concern).
@@ -37,8 +40,8 @@ func GetDetail(s Script, reg *secret.Registry) Detail {
 		if f := findReadme(s.Dir); f != "" {
 			if data, err := os.ReadFile(f); err == nil {
 				readme = string(data)
-				if len(readme) > readmeCap {
-					readme = readme[:readmeCap] + "\n[truncated]"
+				if runes := []rune(readme); len(runes) > readmeCap {
+					readme = string(runes[:readmeCap]) + "\n[truncated]"
 				}
 				readme = reg.Redact(readme)
 			}

@@ -124,10 +124,16 @@ func Discover(repos []Repo, paths config.Paths) []Script {
 }
 
 // sortNamesCI matches PS's default Sort-Object Name for these fixtures: a
-// case-insensitive lexicographic order.
+// case-insensitive lexicographic order, with a lowercase-first tiebreak for
+// names that are case-only variants of each other (verified against live
+// PS: [string]::Compare("A","a") == 1, i.e. "a" sorts before "A").
 func sortNamesCI(names []string) {
 	sort.SliceStable(names, func(i, j int) bool {
-		return strings.ToLower(names[i]) < strings.ToLower(names[j])
+		li, lj := strings.ToLower(names[i]), strings.ToLower(names[j])
+		if li != lj {
+			return li < lj
+		}
+		return names[i] > names[j]
 	})
 }
 
@@ -231,33 +237,80 @@ func loadScriptMeta(path string) *scriptMeta {
 		return nil
 	}
 	m := &scriptMeta{}
-	if raw, ok := obj["entry"]; ok {
+	if raw, ok := rawByKeyCI(obj, "entry"); ok {
 		var s string
 		if json.Unmarshal(raw, &s) == nil {
 			m.Entry = s
 		}
 	}
-	if raw, ok := obj["description"]; ok {
+	if raw, ok := rawByKeyCI(obj, "description"); ok {
 		var s string
 		if json.Unmarshal(raw, &s) == nil {
 			m.Description = s
 		}
 	}
-	if raw, ok := obj["args"]; ok {
-		// ponytail: only a plain JSON string array is supported — PS
-		// stringifies any element type via "$_"; upgrade to per-element
-		// coercion if a repo ever ships non-string script.json args.
-		var arr []string
-		if json.Unmarshal(raw, &arr) == nil {
-			m.Args = arr
-		}
+	if raw, ok := rawByKeyCI(obj, "args"); ok {
+		m.Args = coerceArgs(raw)
 	}
-	if raw, ok := obj["timeoutMinutes"]; ok {
+	if raw, ok := rawByKeyCI(obj, "timeoutMinutes"); ok {
 		if v, ok2 := numericCast(raw); ok2 {
 			m.TimeoutMinutes = &v
 		}
 	}
 	return m
+}
+
+// rawByKeyCI looks up key case-insensitively among a decoded JSON object's
+// keys — PS's PSObject property access (`$Meta.entry`) is case-insensitive,
+// so script.json's keys must match the same way. Mirrors repos.go's
+// rawStringByKey, adapted to a map (script.json carries no document-order
+// concern the way config.json's warning-order does).
+func rawByKeyCI(obj map[string]json.RawMessage, key string) (json.RawMessage, bool) {
+	if raw, ok := obj[key]; ok {
+		return raw, true
+	}
+	for k, raw := range obj {
+		if strings.EqualFold(k, key) {
+			return raw, true
+		}
+	}
+	return nil, false
+}
+
+// coerceArgs mirrors PS's `@($Meta.args | ForEach-Object { "$_" })`: a JSON
+// array is stringified element-by-element; a bare non-array value pipes
+// through ForEach-Object as a single item, wrapping to one arg the same way
+// decodeRepos wraps a non-array "repos" value.
+func coerceArgs(raw json.RawMessage) []string {
+	var arr []json.RawMessage
+	if json.Unmarshal(raw, &arr) != nil {
+		arr = []json.RawMessage{raw}
+	}
+	out := make([]string, len(arr))
+	for i, e := range arr {
+		out[i] = stringifyJSON(e)
+	}
+	return out
+}
+
+// stringifyJSON renders one JSON value the way PS's "$_" string
+// interpolation would for a script.json args element: a string passes
+// through verbatim, a number keeps its original decimal text (via
+// json.Number, avoiding float64 round-tripping artifacts like 1e+08), and
+// any other shape (bool, array, object, null) — not exercised by real
+// script.json args — yields "".
+func stringifyJSON(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var num json.Number
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if dec.Decode(&num) == nil {
+		return num.String()
+	}
+	return ""
 }
 
 // numericCast mirrors PS's `-as [double]`: a JSON number or a numeric

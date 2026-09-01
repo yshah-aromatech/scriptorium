@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 	"github.com/yshah-aromatech/scriptorium/internal/secret"
@@ -39,6 +40,31 @@ func TestGetDetailReadmeCapTruncationAndRedaction(t *testing.T) {
 	}
 	if !strings.Contains(d.Readme, "***") {
 		t.Fatal("expected the secret's redaction marker in readme")
+	}
+}
+
+// M3: the 16384 cap is rune-based, not byte-based — a byte-based cap would
+// slice a multibyte README mid-character, since 16384 isn't a multiple of
+// this rune's 3-byte UTF-8 encoding.
+func TestGetDetailReadmeCapIsRuneBasedNotByteBased(t *testing.T) {
+	dir := t.TempDir()
+	content := strings.Repeat("日", 20000) // 20000 runes, 60000 bytes
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := secret.NewRegistry()
+	s := scripts.Script{Name: "x", Dir: dir, EnvFile: filepath.Join(dir, ".env"), EnvExample: filepath.Join(dir, ".env.example")}
+	d := scripts.GetDetail(s, reg)
+
+	if !utf8.ValidString(d.Readme) {
+		t.Fatalf("truncated readme is not valid UTF-8: %q", tail(d.Readme, 30))
+	}
+	if !strings.HasSuffix(d.Readme, "\n[truncated]") {
+		t.Fatalf("missing truncation marker, tail: %q", tail(d.Readme, 30))
+	}
+	body := strings.TrimSuffix(d.Readme, "\n[truncated]")
+	if got := utf8.RuneCountInString(body); got != 16384 {
+		t.Fatalf("truncated body has %d runes, want 16384", got)
 	}
 }
 

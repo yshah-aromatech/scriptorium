@@ -65,6 +65,53 @@ func TestDiscoverFallsBackToSolePS1(t *testing.T) {
 	}
 }
 
+// M4: script.json "args" coercion mirrors PS's
+// `@($Meta.args | ForEach-Object { "$_" })` — a bare non-array value wraps
+// to one arg, and an array element-wise stringifies (numbers included).
+func TestDiscoverArgsCoercion(t *testing.T) {
+	cases := []struct {
+		name, argsJSON string
+		want           []string
+	}{
+		{"bare string wraps to one arg", `"one two"`, []string{"one two"}},
+		{"numbers stringify", `[1,2]`, []string{"1", "2"}},
+		{"strings pass through", `["a","b"]`, []string{"a", "b"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, discover := discoverRoot(t)
+			d := filepath.Join(root, "argscase")
+			writeFile(t, filepath.Join(d, "main.ps1"), "x")
+			writeFile(t, filepath.Join(d, "script.json"), `{"args":`+c.argsJSON+`}`)
+			s := discover()
+			if len(s) != 1 {
+				t.Fatalf("got %+v", s)
+			}
+			if len(s[0].Args) != len(c.want) {
+				t.Fatalf("Args = %v, want %v", s[0].Args, c.want)
+			}
+			for i := range c.want {
+				if s[0].Args[i] != c.want[i] {
+					t.Errorf("Args[%d] = %q, want %q", i, s[0].Args[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
+// M5: script.json keys are matched case-insensitively, mirroring PS's
+// PSObject property access.
+func TestDiscoverScriptJSONKeysCaseInsensitive(t *testing.T) {
+	root, discover := discoverRoot(t)
+	d := filepath.Join(root, "casekey")
+	writeFile(t, filepath.Join(d, "x.ps1"), "x")
+	writeFile(t, filepath.Join(d, "script.json"), `{"Entry": "x.ps1"}`)
+	s := discover()
+	if len(s) != 1 || !strings.HasSuffix(s[0].Entry, "x.ps1") {
+		t.Fatalf("got %+v, want the capitalized 'Entry' key honored", s)
+	}
+}
+
 func TestDiscoverIgnoresNonNumericTimeout(t *testing.T) {
 	root, discover := discoverRoot(t)
 	d := filepath.Join(root, "d")
