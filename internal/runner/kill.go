@@ -13,10 +13,28 @@ import (
 // SIGKILL.
 const killGrace = 3 * time.Second
 
+// reaped reports whether the run's root process has already been waited for
+// (done closes on the reap, in supervise). Once it has, the kernel is free to
+// hand its pid — and with it this process group id — to something else, so no
+// group signal may be sent any more. It is PS's `if (-not $proc -or
+// $proc.HasExited) { return }` at the top of Stop-StoRun.
+func reaped(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 // killTree takes down a whole run: SIGTERM the process group, wait up to the
-// grace period for it to go (done closes when the run's pipes have closed,
-// i.e. nothing in the tree holds them any more), then SIGKILL the group AND
-// every pid of the last tree snapshot that is still alive.
+// grace period for it to go, then SIGKILL the group AND every pid of the last
+// tree snapshot that is still alive.
+//
+// Every group signal is gated on the root still being unreaped, checked afresh
+// before each one — the pid is only ours to signal until it has been waited
+// for. A killTree that arrives after the reap therefore sends nothing to the
+// group at all, and does the snapshot pass alone.
 //
 // The snapshot escalation is the part that matters. Children that ignored
 // TERM are reparented to init the moment the root exits, so a re-walk from
@@ -28,18 +46,15 @@ func killTree(pgid int, snapshot []int, done <-chan struct{}) {
 	if pgid <= 0 {
 		return // a signal to group 0 would hit our own process group
 	}
-	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	reaped := false
-	select {
-	case <-done:
-		reaped = true
-	case <-time.After(killGrace):
-	}
-	if !reaped {
-		// only while the root is still unreaped: once it has been waited for
-		// the kernel is free to hand its pid — and with it this process group
-		// id — to something else, and the SIGKILL would hit a stranger
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	if !reaped(done) {
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		select {
+		case <-done:
+		case <-time.After(killGrace):
+		}
+		if !reaped(done) {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		}
 	}
 
 	if !procstat.HasProc() {
