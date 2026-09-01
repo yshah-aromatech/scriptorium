@@ -72,6 +72,8 @@ function Start-StoTui {
         LastSample   = [datetime]::MinValue
         AppVersion   = (Get-StoAppVersion)
         Dirty        = $true
+        PrevFrame    = $null     # last rendered frame's lines — Write-TuiFrameDiff repaints only changed rows
+        LastFrameAt  = [long]0   # clock ms of the last render (frame budgets/60fps cap)
     }
 
     Update-TuiScripts
@@ -108,6 +110,7 @@ function Start-StoTui {
             if ($w -ne $script:S.W -or $h -ne $script:S.H) {
                 $script:S.W = $w; $script:S.H = $h
                 Reset-TuiWrap
+                $script:S.PrevFrame = $null   # full repaint after a resize
                 $script:S.Dirty = $true
             }
 
@@ -180,33 +183,41 @@ function Start-StoTui {
                 $script:S.Dirty = $true
             }
 
-            # animations: prune expired one-shots (redraw while any is live —
-            # the extra Dirty=true after the last one expires paints the
-            # restored state), fade the status message near expiry, and tick
-            # the marquee at ~6fps so an idle TUI stays idle
+            # animations: prune expired one-shots (Dirty on expiry paints the
+            # settled state); live ones drive rendering via the frame budget
             if ($script:S.Anims.Count -gt 0) {
                 $now = $script:Clock.ElapsedMilliseconds
                 foreach ($k in @($script:S.Anims.Keys)) {
-                    if ($now - $script:S.Anims[$k].At -ge $script:S.Anims[$k].Ms) { $script:S.Anims.Remove($k) }
+                    if ($now - $script:S.Anims[$k].At -ge $script:S.Anims[$k].Ms) {
+                        $script:S.Anims.Remove($k)
+                        $script:S.Dirty = $true
+                    }
                 }
-                $script:S.Dirty = $true
             }
             if ($script:S.StatusMsg -and -not $script:S.Run) {
                 $age = ((Get-Date) - $script:S.StatusMsgAt).TotalSeconds
                 if ($age -ge 5.2 -and $age -le 6.3) { $script:S.Dirty = $true }   # fade-out window
             }
-            if ($script:S.MarqueeActive -and $script:S.Tick % 5 -eq 0) { $script:S.Dirty = $true }
 
-            # keep redrawing while anything is running (spinners + elapsed
-            # times animate), including cron/external runs in the activity
-            # card — but at ~10fps: nothing animates faster, and a full-frame
-            # rebuild 30x/s just burns CPU next to a busy run
-            $animating = $script:S.Run -or @($script:S.Running).Count -gt 0
-            if ($script:S.Dirty -or ($animating -and $script:S.Tick % 3 -eq 0)) {
+            # render: Dirty (input/output events) paints as soon as the 60fps
+            # cap allows; animations render on a budget — 16ms for one-shot
+            # eases (they last <1s and deserve 60fps), 100ms while runs are
+            # live (spinner/elapsed cadence — the content changes no faster),
+            # 80ms for the marquee. Idle renders nothing. The row diff in
+            # Write-TuiFrameDiff keeps each of these frames a few hundred
+            # bytes, so 60fps doesn't flood SSH.
+            $nowMs = $script:Clock.ElapsedMilliseconds
+            $budget = if ($script:S.Anims.Count -gt 0) { 16 }
+            elseif ($script:S.Run -or @($script:S.Running).Count -gt 0) { 100 }
+            elseif ($script:S.MarqueeActive) { 80 }
+            else { 0 }
+            $due = $script:S.Dirty -or ($budget -gt 0 -and ($nowMs - $script:S.LastFrameAt) -ge $budget)
+            if ($due -and ($nowMs - $script:S.LastFrameAt) -ge 15) {
                 Show-TuiFrame
                 $script:S.Dirty = $false
+                $script:S.LastFrameAt = $script:Clock.ElapsedMilliseconds
             }
-            Start-Sleep -Milliseconds 33
+            Start-Sleep -Milliseconds 8
         }
     } finally {
         try {
@@ -1404,18 +1415,40 @@ function Format-TuiPad {
     Format-StoCell -Text $Text -Width $Width -Ellipsis
 }
 
+# damage-based writer: repaints only the rows that differ from the previous
+# frame (full clear+repaint on the first frame and after a resize). Rows carry
+# their own colors; the writer adds positioning + clear-to-EOL. During a run a
+# typical frame touches 3-4 rows, so writes shrink from ~4KB to a few hundred
+# bytes — which is what lets animations run at 60fps without flooding SSH.
+function Write-TuiFrameDiff {
+    param([System.Collections.Generic.List[string]]$Lines)
+    $prev = $script:S.PrevFrame
+    $full = (-not $prev) -or ($prev.Count -ne $Lines.Count)
+    $sb = [Text.StringBuilder]::new(8KB)
+    if ($full) { [void]$sb.Append("`e[2J") }
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($full -or $Lines[$i] -cne $prev[$i]) {
+            [void]$sb.Append("`e[").Append($i + 1).Append(';1H').Append($Lines[$i]).Append("`e[K")
+        }
+    }
+    $script:S.PrevFrame = $Lines
+    if ($sb.Length -eq 0) { return }
+    [Console]::Write("`e[?2026h$($sb.ToString())`e[?2026l")
+}
+
 function Show-TuiFrame {
     $t = Get-StoTheme
     $W = $script:S.W; $H = $script:S.H
     if ($W -lt 40 -or $H -lt 10) {
         [Console]::Write("`e[2J`e[Hterminal too small")
+        $script:S.PrevFrame = $null
         return
     }
     $lw = Get-TuiListWidth
     $rw = $W - $lw - 3
     $body = Get-TuiBodyHeight
-    $sb = [Text.StringBuilder]::new(64KB)
-    [void]$sb.Append("`e[?2026h`e[H")   # synchronized update, home
+    $lines = [System.Collections.Generic.List[string]]::new($H)
+    $sb = [Text.StringBuilder]::new(1KB)   # per-line scratch
 
     $bg = $t.Bg; $fg = $t.Fg; $reset = "$($t.Reset)$bg$fg"
 
@@ -1459,7 +1492,8 @@ function Show-TuiFrame {
         $mid = [Math]::Max(0, $W - $title.Length - $right.Length)
         [void]$sb.Append("$(' ' * $mid)$($t.Muted)$right")
     }
-    [void]$sb.Append("$reset`e[K`n")
+    [void]$sb.Append($reset)
+    $lines.Add($sb.ToString()); [void]$sb.Clear()
 
     # ---- panel top border --------------------------------------------------
     $listTitle = if ($script:S.Filter) { " ≡ scripts /$($script:S.Filter) " } else { ' ≡ scripts ' }
@@ -1482,7 +1516,8 @@ function Show-TuiFrame {
     [void]$sb.Append("$($t.Border)┬")
     [void]$sb.Append("$outTitleColor$outTitle$outFillColor")
     [void]$sb.Append(('─' * [Math]::Max(0, $rw - $outTitle.Length)))
-    [void]$sb.Append("$($t.Border)╮$reset`e[K`n")
+    [void]$sb.Append("$($t.Border)╮$reset")
+    $lines.Add($sb.ToString()); [void]$sb.Clear()
 
     # ---- body rows ----------------------------------------------------------
     # left column = script list, then (height permitting) a separator and the
@@ -1523,11 +1558,12 @@ function Show-TuiFrame {
             # right-only horizontal rule with an inset title
             [void]$sb.Append("$($t.Blue)$rule$($t.Border)")
             [void]$sb.Append(('─' * [Math]::Max(0, $rw - $rule.Length)))
-            [void]$sb.Append("┤$reset`e[K`n")
+            [void]$sb.Append("┤$reset")
         } else {
             [void]$sb.Append($rightRows[$i])
-            [void]$sb.Append("$reset$($t.Border)│$reset`e[K`n")
+            [void]$sb.Append("$reset$($t.Border)│$reset")
         }
+        $lines.Add($sb.ToString()); [void]$sb.Clear()
     }
 
     # ---- bottom border -----------------------------------------------------
@@ -1537,20 +1573,16 @@ function Show-TuiFrame {
     if ($note -and ($note.Length + 2) -gt $rw) { $note = '' }
     [void]$sb.Append("$reset$($t.Border)╰$('─' * $lw)┴$('─' * ($rw - $note.Length - $(if ($note) { 1 } else { 0 })))")
     if ($note) { [void]$sb.Append("$($t.BrYellow)$note$($t.Border)─") }
-    [void]$sb.Append("╯$reset`e[K`n")
+    [void]$sb.Append("╯$reset")
+    $lines.Add($sb.ToString()); [void]$sb.Clear()
 
     # ---- status line -------------------------------------------------------
-    [void]$sb.Append($reset)
-    [void]$sb.Append((Get-TuiStatusLine -Width $W))
-    [void]$sb.Append("$reset`e[K`n")
+    $lines.Add("$reset$(Get-TuiStatusLine -Width $W)$reset")
 
     # ---- key hints ---------------------------------------------------------
-    [void]$sb.Append($reset)
-    [void]$sb.Append((Get-TuiKeyHints -Width $W))
-    [void]$sb.Append("$reset`e[K")
+    $lines.Add("$reset$(Get-TuiKeyHints -Width $W)$reset")
 
-    [void]$sb.Append("`e[?2026l")
-    [Console]::Write($sb.ToString())
+    Write-TuiFrameDiff -Lines $lines
 }
 
 # coarse age for the list column, always <= 3 chars ('12m', '3h', '99d')
