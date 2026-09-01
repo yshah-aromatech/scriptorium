@@ -166,8 +166,8 @@ func TestReadDocQuoteTrimDivergence(t *testing.T) {
 }
 
 // Phase 4 carry: envfile.Keys — ordered, first-appearance, deduped key
-// list, matching PS's ordered-dict .Keys (first position kept; value can be
-// overwritten by a later duplicate, but position doesn't move).
+// list (case-sensitive dedup; see the divergence from PS's case-insensitive
+// ordered dict noted on envfile.Keys itself).
 func TestKeysOrderedFirstAppearanceDeduped(t *testing.T) {
 	got, err := envfile.Keys(write(t, "K=1\nA=2\nK=3"))
 	if err != nil {

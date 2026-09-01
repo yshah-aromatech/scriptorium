@@ -87,9 +87,18 @@ func ReadDoc(path string) ([]DocEntry, error) {
 }
 
 // Keys returns path's key names in first-appearance order, deduped
-// (case-sensitively, matching PS's ordered-dict .Keys: the first occurrence
-// keeps its position even though a later duplicate's value would win in
-// Read). A missing file returns an empty, non-nil slice and nil error.
+// case-sensitively: the first occurrence keeps both its position AND its
+// spelling, even though a later same-spelling duplicate's value would win
+// in Read.
+//
+// This is NOT full PS parity: PS's [ordered] hashtable is case-INsensitive,
+// so two keys differing only by case (e.g. "FOO" then "foo") collapse to
+// ONE entry there too, but the LAST spelling wins (verified against live
+// pwsh) — both the value AND the displayed key text update in place, while
+// the position stays first-appearance. Go's map-based Read/Keys treat
+// differently-cased spellings as distinct keys instead. See the
+// parity-inventory divergence note. A missing file returns an empty,
+// non-nil slice and nil error.
 func Keys(path string) ([]string, error) {
 	var keys []string
 	seen := map[string]bool{}
