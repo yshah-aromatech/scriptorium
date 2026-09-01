@@ -16,6 +16,7 @@
   "historyMaxLines": 50000,
   "historyDays": 30,
   "webhookTimeoutSec": 15,
+  "missedGraceMinutes": 5,
   "colorMode": "auto",
   "mcpPort": 8765,
   "mcpBind": "all"

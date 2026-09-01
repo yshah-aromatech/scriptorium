@@ -144,6 +144,10 @@ if ($historyOnly) {
 # headless run: full pipeline, missing modules auto-installed, no prompts
 # ---------------------------------------------------------------------------
 if ($runName) {
+    # missed-run sweep piggybacks on every headless boot (each cron run is
+    # one), so 'missed' webhooks flow even with no TUI open
+    try { Invoke-StoMissedRunCheck | Out-Null } catch { }
+
     $target = Get-StoScripts | Where-Object Name -eq $runName | Select-Object -First 1
     if (-not $target) {
         Write-Error "script '$runName' not found — run 'scriptorium --list' (or sync first)"

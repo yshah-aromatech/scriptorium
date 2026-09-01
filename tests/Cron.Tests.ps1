@@ -101,3 +101,22 @@ Describe 'Get-StoCronNext' {
         Get-StoCronNext '0 9 * * 7' $from | Should -Be ([datetime]::new(2026, 7, 5, 9, 0, 0))
     }
 }
+
+Describe 'Get-StoCronPrev' {
+    BeforeAll { $script:from = [datetime]::new(2026, 7, 3, 14, 30, 45) }   # Friday
+
+    It 'finds the previous fire of a frequent schedule' {
+        Get-StoCronPrev '*/5 * * * *' $script:from | Should -Be ([datetime]::new(2026, 7, 3, 14, 30, 0))
+    }
+    It 'finds the previous daily fire' {
+        Get-StoCronPrev '@daily' $script:from | Should -Be ([datetime]::new(2026, 7, 3, 0, 0, 0))
+    }
+    It 'finds a fire days back (weekly)' {
+        # sunday 09:00 — last one was 2026-06-28
+        Get-StoCronPrev '0 9 * * 0' $script:from | Should -Be ([datetime]::new(2026, 6, 28, 9, 0, 0))
+    }
+    It 'returns null for @reboot and garbage' {
+        Get-StoCronPrev '@reboot' $script:from | Should -Be $null
+        Get-StoCronPrev 'not a cron' $script:from | Should -Be $null
+    }
+}

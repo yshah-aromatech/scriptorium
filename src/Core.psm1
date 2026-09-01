@@ -134,6 +134,7 @@ $script:ConfigDefaults = [ordered]@{
     historyMaxLines   = 50000      # safety backstop only — retention is time-based
     historyDays       = 30         # history window: retention + history tab (0 = last 200 runs in the tab)
     webhookTimeoutSec = 15
+    missedGraceMinutes = 5         # how late a cron fire may be before it counts as missed
     colorMode         = 'auto'      # auto | truecolor | 256
     mcpPort           = 8765
     mcpBind           = 'all'       # all (LAN-reachable) | localhost
@@ -141,7 +142,7 @@ $script:ConfigDefaults = [ordered]@{
 # keys whose values must parse as numbers — a typo'd string here would
 # otherwise silently disable the feature
 $script:ConfigNumericKeys = @('monitorIntervalMs', 'logTailKb', 'runTimeoutMinutes',
-    'maxOutputLines', 'logRetentionDays', 'historyMaxLines', 'historyDays', 'webhookTimeoutSec', 'mcpPort')
+    'maxOutputLines', 'logRetentionDays', 'historyMaxLines', 'historyDays', 'webhookTimeoutSec', 'missedGraceMinutes', 'mcpPort')
 
 function Initialize-Sto {
     param([Parameter(Mandatory)][string]$AppDir)

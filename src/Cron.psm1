@@ -205,6 +205,26 @@ function Get-StoCronNext {
     $null
 }
 
+# Latest fire time <= From — the missed-run detector's "when should this last
+# have fired". Walks forward from a widening lookback (an hour resolves any
+# frequent schedule in a handful of Get-StoCronNext calls; 35 days covers
+# @monthly); $null when the expression never fires or parses.
+function Get-StoCronPrev {
+    param([Parameter(Mandatory)][string]$Expression, [datetime]$From = (Get-Date))
+    foreach ($lookbackDays in (1 / 24), 1, 8, 35) {
+        $t = $From.AddDays(-$lookbackDays)
+        $prev = $null
+        for ($i = 0; $i -lt 2000; $i++) {
+            $n = Get-StoCronNext -Expression $Expression -From $t
+            if (-not $n -or $n -gt $From) { break }
+            $prev = $n
+            $t = $n
+        }
+        if ($prev) { return $prev }
+    }
+    $null
+}
+
 # ---------------------------------------------------------------------------
 # Validation + natural language conversion
 # ---------------------------------------------------------------------------
@@ -262,4 +282,4 @@ function Convert-StoToCron {
 }
 
 Export-ModuleMember -Function Get-StoSchedules, Set-StoSchedule, Remove-StoSchedule,
-Test-StoCronExpression, Convert-StoToCron, Get-StoCronNext, ConvertFrom-StoCronField
+Test-StoCronExpression, Convert-StoToCron, Get-StoCronNext, Get-StoCronPrev, ConvertFrom-StoCronField

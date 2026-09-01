@@ -1,5 +1,5 @@
 BeforeAll {
-    foreach ($m in 'Core', 'Scripts', 'Deps', 'Runner') {
+    foreach ($m in 'Core', 'Scripts', 'Deps', 'Runner', 'Cron') {
         Import-Module (Join-Path $PSScriptRoot "../src/$m.psm1") -Force -DisableNameChecking
     }
     # isolated app + data dir so tests never touch ~/.scriptorium
@@ -161,5 +161,73 @@ Describe 'python run pipeline' {
         $log | Should -Match 'py out \*\*\*'
         $log | Should -Not -Match 'hello-from-env'
         Test-Path (Join-Path (Get-StoPaths).LocksDir 'pyok.lock') | Should -BeFalse
+    }
+}
+
+Describe 'missed-run detection' {
+    BeforeAll {
+        function Add-CronRow([string]$Script, [double]$AgeMinutes) {
+            $at = (Get-Date).ToUniversalTime().AddMinutes(-$AgeMinutes).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            (@{ script = $Script; status = 'success'; trigger = 'cron'; startedAt = $at } | ConvertTo-Json -Compress) |
+                Add-Content -Path (Get-StoPaths).HistoryFile
+        }
+        $script:oldSeen = @{ job = (Get-Date).AddDays(-2) }
+    }
+    BeforeEach {
+        Remove-Item (Get-StoPaths).HistoryFile -Force -ErrorAction SilentlyContinue
+        Remove-Item (Join-Path (Get-StoPaths).DataDir 'missed-state.json') -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'flags a schedule with no cron run since the expected fire' {
+        # grace 0: a */5 fire is otherwise always inside the default 5-min grace
+        $m = @(Get-StoMissedRuns -Schedules @{ job = '*/5 * * * *' } -GraceMinutes 0 -FirstSeen $script:oldSeen)
+        $m.Count | Should -Be 1
+        $m[0].Name | Should -Be 'job'
+        ((Get-Date) - $m[0].ExpectedAt).TotalMinutes | Should -BeLessThan 6
+    }
+
+    It 'does not flag when the cron run happened' {
+        Add-CronRow 'job' 1
+        @(Get-StoMissedRuns -Schedules @{ job = '*/5 * * * *' } -GraceMinutes 0 -FirstSeen $script:oldSeen).Count | Should -Be 0
+    }
+
+    It 'does not flag inside the grace window' {
+        @(Get-StoMissedRuns -Schedules @{ job = '* * * * *' } -GraceMinutes 10 -FirstSeen $script:oldSeen).Count | Should -Be 0
+    }
+
+    It 'does not flag a schedule newer than its expected fire' {
+        @(Get-StoMissedRuns -Schedules @{ job = '*/5 * * * *' } -FirstSeen @{ job = (Get-Date) }).Count | Should -Be 0
+        # and one absent from FirstSeen entirely is skipped
+        @(Get-StoMissedRuns -Schedules @{ job = '*/5 * * * *' }).Count | Should -Be 0
+    }
+
+    It 'does not flag a script that fired and is still running (live lock)' {
+        $l = Lock-StoScript -Name 'job'
+        try {
+            @(Get-StoMissedRuns -Schedules @{ job = '*/5 * * * *' } -GraceMinutes 0 -FirstSeen $script:oldSeen).Count | Should -Be 0
+        } finally { Unlock-StoScript -Handle @{ LockFile = $l.File } }
+    }
+
+    It 'Invoke-StoMissedRunCheck stamps first-seen, then flags and dedupes the webhook' {
+        Mock -ModuleName Runner Send-StoWebhook { $true }
+        # sweep 1: schedule just appeared -> stamped, nothing flagged
+        @(Invoke-StoMissedRunCheck -Schedules @{ job = '*/5 * * * *' }).Count | Should -Be 0
+        # backdate firstSeen so the last */5 fire postdates it
+        $sf = Join-Path (Get-StoPaths).DataDir 'missed-state.json'
+        $st = Get-Content $sf -Raw | ConvertFrom-Json -AsHashtable
+        $st['job'].firstSeen = (Get-Date).AddHours(-2).ToString('o')
+        $st | ConvertTo-Json -Depth 4 | Set-Content $sf
+        # sweep 2: flagged + webhooked once
+        @(Invoke-StoMissedRunCheck -Schedules @{ job = '*/5 * * * *' } -GraceMinutes 0).Count | Should -Be 1
+        # sweep 3: still missed (returned for the UI) but NOT webhooked again
+        @(Invoke-StoMissedRunCheck -Schedules @{ job = '*/5 * * * *' } -GraceMinutes 0).Count | Should -BeGreaterOrEqual 1
+        Should -ModuleName Runner -Invoke Send-StoWebhook -Times 1 -Exactly
+    }
+
+    It 'drops state for removed schedules' {
+        @(Invoke-StoMissedRunCheck -Schedules @{ job = '*/5 * * * *' }) | Out-Null
+        @(Invoke-StoMissedRunCheck -Schedules @{ }) | Out-Null
+        $sf = Join-Path (Get-StoPaths).DataDir 'missed-state.json'
+        (Get-Content $sf -Raw | ConvertFrom-Json -AsHashtable).Count | Should -Be 0
     }
 }

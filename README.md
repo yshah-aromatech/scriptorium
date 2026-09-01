@@ -16,6 +16,7 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 - **n8n webhook reporting** — success/failure, exit code, duration, avg/max CPU & memory, host, and a log tail POSTed after every run. Delivery is retried, and reports that still can't be delivered are queued on disk and re-sent after the next successful delivery — cron-run reports survive n8n downtime
 - **Cron scheduling** — press `e` on any script to set a cron expression (`*/15 * * * *`, `@daily`, …) or plain English. Schedules are written into your user crontab (in a managed block that leaves your other entries alone) and scheduled runs go through the exact same pipeline: own module dir, auto-installed deps, logging, resource stats, and n8n webhook (payload carries `"trigger": "cron"`). The status bar shows when the selected script fires next
 - **Overlap protection** — a per-script lock prevents a cron run and a manual run (or two stacked cron runs) from executing concurrently; the losing run is reported as `skipped`
+- **Missed-run detection** — the failure plain cron can't see: a schedule that silently stops firing (crontab lost, cron dead, VM was off). When a scheduled fire comes and goes with no matching cron run and no live lock (grace: `missedGraceMinutes`), the script gets a red `⚠` badge in the list, a `missed 12m ago` note in the details card, and a one-time `{"event":"missed"}` webhook per missed fire. The sweep runs every minute in the TUI and at every headless boot (each cron run is one), so alerts flow with no TUI open. New/changed schedules aren't judged until their first post-change fire
 - **Run queue** — starting a script while another is running queues it; runs drain in order (`X` clears the queue)
 - **Linting** — `l` runs PSScriptAnalyzer against the selected script (installed automatically on first use)
 - **System maintenance** — update PowerShell via apt, upgrade all modules in every script's module dir, and update this app itself (`U` = git pull), from inside the TUI
@@ -167,7 +168,14 @@ POSTed as JSON after every run (and `{"event":"test"}` for webhook tests):
 }
 ```
 
-`status` is one of `success`, `failure`, `killed`, `timeout`, `skipped` (a run that didn't start because the same script was already running). `cpuSeries`/`memSeries` are the per-second samples downsampled to at most 60 points.
+`status` is one of `success`, `failure`, `killed`, `timeout`, `skipped` (a run that didn't start because the same script was already running). `cpuSeries`/`memSeries` are the per-second samples downsampled to at most 60 points. Every payload carries a `runId` (GUID) you can dedupe on.
+
+A missed scheduled fire additionally POSTs (once per missed fire):
+
+```json
+{ "event": "missed", "script": "backup-db", "schedule": "*/15 * * * *",
+  "expectedAt": "2026-06-10T12:00:00Z", "detectedAt": "2026-06-10T12:06:02Z", "host": "ubuntu-vm-01" }
+```
 
 Delivery is attempted twice; if both attempts fail the payload is appended to `~/.scriptorium/webhook-queue.jsonl` and re-sent (in order) right after the next successful delivery.
 
@@ -271,6 +279,7 @@ Otherwise the TUI prints the exact commands to run manually (and still upgrades 
 | `historyMaxLines` | safety cap on `history.jsonl` rows — retention is time-based, this only guards pathological growth (0 = uncapped) | `50000` |
 | `historyDays` | rolling history retention window in days; also the history tab's view window (0 = tab shows last 200 runs, retention stays 30 days) | `30` |
 | `webhookTimeoutSec` | per-attempt webhook timeout | `15` |
+| `missedGraceMinutes` | how late a scheduled fire may be before it's reported missed | `5` |
 | `colorMode` | `auto` (truecolor if `$COLORTERM` says so, else 256-color), `truecolor`, or `256` | `auto` |
 | `mcpPort` | MCP server port (`--mcp`; `--port` overrides per run) | `8765` |
 | `mcpBind` | `all` (LAN-reachable) or `localhost` | `all` |

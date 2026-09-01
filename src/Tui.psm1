@@ -54,6 +54,8 @@ function Start-StoTui {
         Running      = @()       # live-locked scripts (incl. cron/external) for the activity card
         RunningKey   = ''
         LastLockPoll = [datetime]::MinValue
+        Missed       = @{}       # name -> missed-run row (⚠ badge + details + status)
+        LastMissedPoll = [datetime]::MinValue
         RecentRuns   = @()       # cached history tail for the recent-runs card
         RecentAt     = [datetime]::MinValue
         Queue        = [System.Collections.Generic.List[object]]::new()
@@ -145,6 +147,25 @@ function Start-StoTui {
                     $script:S.RecentAt = [datetime]::MinValue
                     $script:S.Dirty = $true
                 }
+            }
+
+            # missed-run sweep every ~60s: flags scheduled scripts whose cron
+            # fire never arrived (badge/details/status) and webhooks new ones
+            if (((Get-Date) - $script:S.LastMissedPoll).TotalSeconds -ge 60) {
+                $script:S.LastMissedPoll = Get-Date
+                try {
+                    $missedNow = @(Invoke-StoMissedRunCheck)
+                    $map = @{}
+                    foreach ($m in $missedNow) { $map[$m.Name] = $m }
+                    $newNames = @($map.Keys | Where-Object { -not $script:S.Missed.ContainsKey($_) } | Sort-Object)
+                    if ((@($map.Keys) | Sort-Object) -join '|' -ne (@($script:S.Missed.Keys) | Sort-Object) -join '|') {
+                        $script:S.Dirty = $true
+                    }
+                    $script:S.Missed = $map
+                    if ($newNames.Count -gt 0) {
+                        Set-TuiStatus "⚠ missed run: $($newNames -join ', ') — the scheduled cron fire never arrived" -Kind warn
+                    }
+                } catch { }
             }
 
             # drain the run queue — read-only overlays (history/help) don't
@@ -1600,7 +1621,8 @@ function Get-TuiListRows {
         } elseif ($scr.Name -in $queuedNames) {
             $badge = "$($t.Cyan)»"
         }
-        $sched = if ($script:S.Schedules.ContainsKey($scr.Name)) { "$($t.Cyan)↻" } else { ' ' }
+        $sched = if ($script:S.Missed.ContainsKey($scr.Name)) { "$($t.Red)⚠" }
+        elseif ($script:S.Schedules.ContainsKey($scr.Name)) { "$($t.Cyan)↻" } else { ' ' }
         $age = Get-TuiAge $(if ($last) { $last.At })
         $ageCol = "$($t.Muted)$($age.PadLeft(3))"
         $rowFg = $t.Fg
@@ -1705,9 +1727,16 @@ function Get-TuiDetailRows {
         $envN = $dc.EnvN
         $mods = $dc.Mods
         $cron = '—'
+        $cronColor = $t.Cyan
         if ($script:S.Schedules.ContainsKey($sel.Name)) {
             $expr = $script:S.Schedules[$sel.Name]
-            $cron = "$expr$(Get-TuiNextRunHint -Name $sel.Name -Expression $expr)"
+            $m = $script:S.Missed[$sel.Name]
+            if ($m) {
+                $cron = "$expr · ⚠ missed $(Format-StoRelativeTime ((Get-Date) - $m.ExpectedAt).TotalSeconds) ago"
+                $cronColor = $t.Red
+            } else {
+                $cron = "$expr$(Get-TuiNextRunHint -Name $sel.Name -Expression $expr)"
+            }
         }
         $isPy = Test-StoPythonScript $sel
         $rtName = if ($isPy) { 'python' } else { 'pwsh' }
@@ -1718,7 +1747,7 @@ function Get-TuiDetailRows {
         $pairs += , @('', "● $($sel.Name) · $rtName$repoTag", "$($t.Bold)$($t.White)", $rtColor)
         $pairs += , @('▸ entry:', $entry, $t.Fg)
         $pairs += , @('⚙ env:', "$(if ($envN -gt 0) { "$envN var(s)" } else { '—' }) · $mods", $t.Fg)
-        $pairs += , @('↻ cron:', $cron, $t.Cyan)
+        $pairs += , @('↻ cron:', $cron, $cronColor)
         $last = if ($script:S.Statuses.ContainsKey($sel.Name)) { $script:S.Statuses[$sel.Name] } else { $null }
         if ($last) {
             $statusColor = switch ("$($last.Status)") { 'success' { $t.Green } 'failure' { $t.Red } default { $t.BrYellow } }
@@ -2212,6 +2241,7 @@ function Get-TuiStatusLine {
             if ($script:S.Schedules.ContainsKey($sel.Name)) {
                 $expr = $script:S.Schedules[$sel.Name]
                 $schedTxt = "  ⏲ $expr$(Get-TuiNextRunHint -Name $sel.Name -Expression $expr)"
+                if ($script:S.Missed.ContainsKey($sel.Name)) { $schedTxt += '  ⚠ missed' }
             }
             $left = " $($sel.Name): $desc$schedTxt$queueTxt"
         }

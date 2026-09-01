@@ -694,9 +694,113 @@ function Get-StoLastStatuses {
     $map
 }
 
+# ---------------------------------------------------------------------------
+# Missed-run detection — the failure plain cron is structurally blind to: a
+# schedule that silently stops firing (crontab lost, cron dead, VM was off).
+# Detection = "the last expected fire came and went, and neither a cron
+# history row nor a live lock accounts for it."
+# ---------------------------------------------------------------------------
+
+# Pure detector: Schedules (name -> cron expr) against history + live locks.
+# FirstSeen (name -> [datetime] when the schedule was first observed) guards
+# the new-schedule false positive — an "expected" fire that predates the
+# schedule itself is not a miss; scripts absent from FirstSeen are skipped.
+# Returns @{ Name; Expression; ExpectedAt } per missed script.
+function Get-StoMissedRuns {
+    param(
+        [Parameter(Mandatory)][hashtable]$Schedules,
+        [datetime]$Now = (Get-Date),
+        [double]$GraceMinutes = 5,
+        [hashtable]$FirstSeen = @{}
+    )
+    if ($Schedules.Count -eq 0) { return @() }
+    $running = @{}
+    foreach ($r in @(Get-StoRunningScripts)) { $running[$r.Name] = $true }
+    # newest cron-triggered run per script (rows are chronological)
+    $lastCron = @{}
+    foreach ($h in (Get-StoHistory -Last 2000)) {
+        if ("$($h.trigger)" -ne 'cron') { continue }
+        $at = $h.startedAt -as [datetime]
+        if ($at) { $lastCron["$($h.script)"] = $at.ToLocalTime() }
+    }
+    $missed = foreach ($kv in $Schedules.GetEnumerator()) {
+        $name = $kv.Key
+        $seen = $FirstSeen[$name] -as [datetime]
+        if (-not $seen) { continue }                                   # schedule just appeared — judge it next sweep
+        $expected = Get-StoCronPrev -Expression $kv.Value -From $Now
+        if (-not $expected) { continue }
+        if ($expected -lt $seen) { continue }                          # fire predates the schedule
+        if (($Now - $expected).TotalMinutes -lt $GraceMinutes) { continue }
+        if ($running.ContainsKey($name)) { continue }                  # fired and is still running (no row yet)
+        $last = $lastCron[$name]
+        if ($last -and $last -ge $expected.AddMinutes(-1)) { continue } # it ran (cron starts seconds after the minute)
+        [pscustomobject]@{ Name = $name; Expression = $kv.Value; ExpectedAt = $expected }
+    }
+    @($missed)
+}
+
+# Stateful wrapper: stamps first-seen per schedule (reset when the expression
+# changes), webhooks each missed fire ONCE (event 'missed', deduped via
+# lastAlerted in <dataDir>/missed-state.json), and returns everything
+# currently missed for the UI. Safe to call from any process — cron boots
+# piggyback on it so alerts flow with no TUI open.
+function Invoke-StoMissedRunCheck {
+    param([hashtable]$Schedules = $null, [double]$GraceMinutes = -1)
+    if ($null -eq $Schedules) {
+        if (-not (Get-Command Get-StoSchedules -ErrorAction SilentlyContinue)) { return @() }
+        $Schedules = Get-StoSchedules
+    }
+    if ($GraceMinutes -lt 0) { $GraceMinutes = [double](Get-StoConfig).missedGraceMinutes }
+    $stateFile = Join-Path (Get-StoPaths).DataDir 'missed-state.json'
+    $state = @{}
+    if (Test-Path $stateFile) {
+        try { $state = Get-Content $stateFile -Raw | ConvertFrom-Json -AsHashtable } catch { }
+        if ($state -isnot [System.Collections.IDictionary]) { $state = @{} }
+    }
+    $now = Get-Date
+    $dirty = $false
+
+    $firstSeen = @{}
+    foreach ($kv in $Schedules.GetEnumerator()) {
+        $s = $state[$kv.Key]
+        if (-not $s -or "$($s.expr)" -ne $kv.Value) {
+            $s = @{ expr = $kv.Value; firstSeen = $now.ToString('o'); lastAlerted = $null }
+            $state[$kv.Key] = $s
+            $dirty = $true
+        }
+        $firstSeen[$kv.Key] = $s.firstSeen -as [datetime]
+    }
+    foreach ($k in @($state.Keys)) {
+        if (-not $Schedules.ContainsKey($k)) { $state.Remove($k); $dirty = $true }
+    }
+
+    $missed = @(Get-StoMissedRuns -Schedules $Schedules -Now $now -GraceMinutes $GraceMinutes -FirstSeen $firstSeen)
+    foreach ($m in $missed) {
+        $lastAlerted = $state[$m.Name].lastAlerted -as [datetime]
+        if ($lastAlerted -and $m.ExpectedAt -le $lastAlerted) { continue }   # this fire is already alerted
+        $state[$m.Name].lastAlerted = $m.ExpectedAt.ToString('o')
+        $dirty = $true
+        # ponytail: two cron boots sweeping at once can double-send one alert
+        # (no lock around the state file) — n8n can dedupe on script+expectedAt
+        [void](Send-StoWebhook -Payload ([ordered]@{
+                event      = 'missed'
+                script     = $m.Name
+                schedule   = $m.Expression
+                expectedAt = $m.ExpectedAt.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                detectedAt = $now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                host       = [Environment]::MachineName
+            }))
+    }
+    if ($dirty) {
+        try { $state | ConvertTo-Json -Depth 4 | Set-Content -Path $stateFile -Encoding UTF8 } catch { }
+    }
+    $missed
+}
+
 Export-ModuleMember -Function Start-StoRun, Start-StoTask, Update-StoRun, Test-StoRunFinished,
 Measure-StoResources, Stop-StoRun, Complete-StoRun, Invoke-StoRunToCompletion,
 Send-StoWebhook, Send-StoWebhookTest,
 Send-StoWebhookQueue, Get-StoHistory, Get-StoLastStatuses, Get-StoLogTail,
+Get-StoMissedRuns, Invoke-StoMissedRunCheck,
 Lock-StoScript, Unlock-StoScript, Test-StoScriptLocked, Get-StoRunningScripts,
 Get-StoDownsampledSeries

@@ -25,6 +25,7 @@ BeforeAll {
             Input = $null; Confirm = $null; Deps = $null; Env = $null; History = $null
             Run = $null; Queue = [System.Collections.Generic.List[object]]::new()
             Running = @(); RunningKey = ''; LastLockPoll = [datetime]::MinValue
+            Missed = @{}; LastMissedPoll = [datetime]::MinValue
             RecentRuns = @(); RecentAt = [datetime]::MinValue
             AfterTask = $null; AfterTaskAlways = $null
             StatusMsg = ''; StatusMsgAt = [datetime]::MinValue
