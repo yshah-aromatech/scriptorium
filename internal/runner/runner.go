@@ -203,6 +203,12 @@ func (r *Runner) Start(ctx context.Context, spec Spec) (*Handle, error) {
 // RunToCompletion drives a run to its end, handing every event to onEvent
 // (which may be nil), and returns the finished row. Ranging to the channel's
 // close is what makes it a safe consumer: it can never abandon the run.
+//
+// The row is non-nil on every ordinary path. It is missing only when the
+// EvDone event itself was dropped, which needs a cancelled context AND a full
+// event buffer at the same instant (see emit) — the run still finalized,
+// history and webhook included, but this caller cannot report which row it
+// produced, so that case is an error rather than a nil row.
 func (r *Runner) RunToCompletion(ctx context.Context, spec Spec, onEvent func(Event)) (*history.Row, error) {
 	h, err := r.Start(ctx, spec)
 	if err != nil {
@@ -216,6 +222,9 @@ func (r *Runner) RunToCompletion(ctx context.Context, spec Spec, onEvent func(Ev
 		if ev.Kind == EvDone {
 			row = ev.Result
 		}
+	}
+	if row == nil {
+		return nil, fmt.Errorf("run abandoned before completion (context cancelled with full event buffer)")
 	}
 	return row, nil
 }
