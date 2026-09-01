@@ -83,8 +83,10 @@ edges. Nothing under `internal/` except `runner` starts a goroutine.
 channel: stdout reader, stderr reader (each `bufio.Reader.ReadString('\n')` into a
 shared chan, cap 256), sampler (ticker at monitorIntervalMs), and a supervisor that
 selects over lines/samples/timeout/`cmd.Wait()`, owns the log writer and the event
-channel, and on exit does classify -> history append -> webhook -> unlock -> EvDone ->
-close(Events).
+channel, and on exit does classify -> history append -> unlock -> webhook -> EvDone ->
+close(Events). The unlock sits between the append and the webhook deliberately: the
+row must land before a queued re-run can append its own (last-status-wins), but the
+webhook may retry and queue for seconds and must not hold the lock that long.
 
 One event channel, one tagged union:
 
