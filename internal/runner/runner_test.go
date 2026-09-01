@@ -451,6 +451,121 @@ func TestTimeoutKillsTheTree(t *testing.T) {
 	}
 }
 
+// deafPY closes fds 1 and 2 and then keeps running: the run's pipes hit EOF
+// while the process is very much alive. It is the shape that proves the
+// completion test is PS's CONJUNCTION (Test-StoRunFinished: HasExited AND
+// both readers done) and not pipes-EOF alone — a supervisor that finalizes on
+// EOF would block in cmd.Wait() for the full 30 seconds with the timeout and
+// the context no longer enforceable.
+const deafPY = `import os, sys, time
+sys.stdout.write("alive\n")
+sys.stdout.flush()
+os.close(1)
+os.close(2)
+time.sleep(30)
+`
+
+func TestTimeoutStillFiresAfterThePipesClose(t *testing.T) {
+	pwshtest.RequirePython(t)
+	e := newEnv(t, nil)
+	sc := e.script("deaf-timeout", "python", "main.py", deafPY)
+
+	start := time.Now()
+	c := e.run(context.Background(), runner.Spec{
+		Script: sc, Trigger: "manual", Timeout: 2 * time.Second})
+	elapsed := time.Since(start)
+
+	if c.row == nil || c.row.Status != "timeout" {
+		t.Fatalf("status = %+v, lines = %q — the deadline stopped being enforceable once the pipes closed", c.row, c.lines)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("run took %v — the supervisor waited out the 30s sleep instead of enforcing the 2s timeout", elapsed)
+	}
+	if len(c.lines) == 0 || c.lines[0] != "alive" {
+		t.Errorf("lines = %q, want the pre-close line first", c.lines)
+	}
+	if !strings.Contains(strings.Join(c.lines, "\n"), "timeout — killing") {
+		t.Errorf("lines = %q, want the PS timeout notice", c.lines)
+	}
+	// finalized: history row, webhook report, released lock, EvDone
+	rows, err := e.hist.Last(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "timeout" {
+		t.Errorf("history = %+v", rows)
+	}
+	if len(e.posted()) != 1 {
+		t.Errorf("webhook got %d payloads, want 1", len(e.posted()))
+	}
+	if e.lockHeld("deaf-timeout") {
+		t.Error("lock still held after a timeout")
+	}
+	var done int
+	for _, ev := range c.events {
+		if ev.Kind == runner.EvDone {
+			done++
+		}
+	}
+	if done != 1 {
+		t.Errorf("%d EvDone events, want exactly 1", done)
+	}
+}
+
+func TestContextCancelStillKillsAfterThePipesClose(t *testing.T) {
+	pwshtest.RequirePython(t)
+	e := newEnv(t, nil)
+	sc := e.script("deaf-cancel", "python", "main.py", deafPY)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := time.Now()
+	h, err := e.r.Start(ctx, runner.Spec{Script: sc, Trigger: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(time.Second)
+		cancel()
+	}()
+	var row *history.Row
+	for ev := range h.Events {
+		if ev.Kind == runner.EvDone {
+			row = ev.Result
+		}
+	}
+	elapsed := time.Since(start)
+
+	if row == nil || row.Status != "killed" {
+		t.Fatalf("row = %+v — cancellation stopped being enforceable once the pipes closed", row)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("run took %v — the supervisor waited out the 30s sleep instead of honouring the cancel", elapsed)
+	}
+	if e.lockHeld("deaf-cancel") {
+		t.Error("lock still held after cancellation")
+	}
+}
+
+// A process that exits on its own just under the deadline is a finished run,
+// never a timed-out one — PS guards its whole timeout branch with
+// `-not $proc.HasExited`, so completion wins at the boundary. Repeated
+// because the two events land within milliseconds of each other and the
+// classification must not be a coin flip.
+func TestExitAtTheDeadlineIsNotATimeout(t *testing.T) {
+	pwshtest.RequirePython(t)
+	e := newEnv(t, nil)
+	sc := e.script("boundary", "python", "main.py", "import time\ntime.sleep(0.4)\nprint('done')\n")
+
+	for i := 0; i < 20; i++ {
+		c := e.run(context.Background(), runner.Spec{
+			Script: sc, Trigger: "manual", Timeout: 600 * time.Millisecond})
+		if c.row == nil || c.row.Status != "success" {
+			t.Fatalf("iteration %d: status = %+v, lines = %q", i, c.row, c.lines)
+		}
+	}
+}
+
 func TestStartErrorIsAFullyFinalizedFailure(t *testing.T) {
 	e := newEnv(t, nil)
 	e.cfg.PwshBin = "/nonexistent-bin"

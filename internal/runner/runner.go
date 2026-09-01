@@ -309,14 +309,20 @@ func (s *supervisor) emit(ev Event) {
 // finishEarly is the whole lifecycle of a run that never had a process: a
 // skipped run, or one whose exec failed. One line, then full finalization.
 func (s *supervisor) finishEarly(line string) {
-	s.emit(Event{Kind: EvLine, Line: line})
+	s.emitLine(line, false)
 	s.finalize(-1)
 }
 
-// supervise is the run's event loop. It ends when both pipes have hit EOF,
-// which is also the guarantee that no tail line was lost: the last reader to
-// finish closes the shared lines channel, so the loop cannot exit before
-// every line has been handed over.
+// supervise is the run's event loop, in two phases — because PS's completion
+// test is a CONJUNCTION (Test-StoRunFinished: `HasExited -and $null -eq
+// $OutTask -and $null -eq $ErrTask`) and either half can come first.
+//
+// Phase one ends when both pipes have hit EOF, which is also the guarantee
+// that no tail line was lost: the last reader to finish closes the shared
+// lines channel, so the loop cannot exit before every line has been handed
+// over. Phase two then waits for the process itself to be reaped — a child
+// that closes fds 1 and 2 and keeps running holds no pipe open at all, so the
+// timeout and the context have to stay enforceable right up to the reap.
 func (s *supervisor) supervise(stdout, stderr io.ReadCloser) {
 	// non-fatal: a full disk or an unwritable logs dir must not orphan the
 	// already-started process (and its lock) — run without a log instead
@@ -361,6 +367,7 @@ func (s *supervisor) supervise(stdout, stderr io.ReadCloser) {
 	}
 	ctxC := s.ctx.Done()
 
+	// phase one: the pipes
 	for lines != nil {
 		select {
 		case line, ok := <-lines:
@@ -368,28 +375,75 @@ func (s *supervisor) supervise(stdout, stderr io.ReadCloser) {
 				lines = nil
 				continue
 			}
-			s.onLine(line)
+			s.emitLine(line, true)
 		case sm := <-s.samples:
 			s.onSample(sm)
 		case <-timeoutC:
 			timeoutC = nil
-			if s.setPreset("timeout") {
-				s.emit(Event{Kind: EvLine, Line: fmt.Sprintf(
-					"run exceeded %smin timeout — killing", formatMinutes(s.spec.Timeout))})
-				go s.killTree()
+			s.onTimeout()
+		case <-ctxC:
+			ctxC = nil
+			s.onCancel()
+		}
+	}
+
+	// phase two: the process. Wait closes the pipes, so it may only start now
+	// that both readers are done with them.
+	waitDone := make(chan struct{})
+	go func() {
+		_ = s.cmd.Wait()
+		close(waitDone)
+	}()
+	reaped := func() bool {
+		select {
+		case <-waitDone:
+			return true
+		default:
+			return false
+		}
+	}
+	// completion has priority at the boundary, both as the loop condition and
+	// again inside the deadline branches: PS guards its whole timeout branch
+	// with `-not $proc.HasExited`, so a process that exited while the timer
+	// was going off is a finished run, not a timed-out one.
+	for !reaped() {
+		select {
+		case <-waitDone:
+		case sm := <-s.samples:
+			s.onSample(sm)
+		case <-timeoutC:
+			timeoutC = nil
+			if !reaped() {
+				s.onTimeout()
 			}
 		case <-ctxC:
 			ctxC = nil
-			if s.setPreset("killed") {
-				go s.killTree()
+			if !reaped() {
+				s.onCancel()
 			}
 		}
 	}
 
 	close(stopSampling)
 	close(s.procDone) // releases any killer still inside its grace period
-	_ = s.cmd.Wait()  // safe now: both pipes are drained and closed
 	s.finalize(exitCodeOf(s.cmd))
+}
+
+// onTimeout and onCancel are the two deadline branches, shared by both
+// phases. The preset is what makes them idempotent: the first one wins, and a
+// finished run accepts neither.
+func (s *supervisor) onTimeout() {
+	if s.setPreset("timeout") {
+		s.emitLine(fmt.Sprintf("run exceeded %smin timeout — killing",
+			formatMinutes(s.spec.Timeout)), false)
+		go s.killTree()
+	}
+}
+
+func (s *supervisor) onCancel() {
+	if s.setPreset("killed") {
+		go s.killTree()
+	}
 }
 
 // sample ticks the process tree. It publishes every snapshot it walks — even
@@ -424,12 +478,18 @@ func (s *supervisor) sample(stop <-chan struct{}) {
 	}
 }
 
-// onLine is the redaction chokepoint: exactly one place sees raw output, and
+// emitLine is the redaction chokepoint: exactly one place sees raw text, and
 // everything downstream (the log file, the event stream, and the webhook tail
-// read back out of that log) is already scrubbed.
-func (s *supervisor) onLine(raw string) {
+// read back out of that log) is already scrubbed. That includes the runner's
+// OWN notices — a skip message carries a script name, a start failure carries
+// the command line — which is why they route through here too.
+//
+// toLog is false for exactly those notices: PS adds them to Update-StoRun's
+// returned lines but never hands them to the LogWriter, so the log file (and
+// the webhook tail read back out of it) holds child output alone.
+func (s *supervisor) emitLine(raw string, toLog bool) {
 	line := s.r.Sec.Redact(raw)
-	if s.log != nil {
+	if toLog && s.log != nil {
 		_, _ = s.log.WriteString(line + "\n")
 	}
 	s.emit(Event{Kind: EvLine, Line: line})
