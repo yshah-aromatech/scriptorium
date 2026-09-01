@@ -12,13 +12,55 @@ and commit the diff with an explanation of which PS behavior changed.
 
 | File | Frozen behavior |
 |---|---|
-| cron-truth.csv | Get-StoCronNext/Prev over 32 expressions × 12 timestamps |
+| cron-truth.csv | Get-StoCronNext/Prev over 36 expressions × 12 timestamps |
+| cron-validate.csv | Test-StoCronExpression over the truth-table expressions + a hand-picked invalid set |
 | rounding.csv | [Math]::Round(x,1) — banker's rounding |
 | duration-format.csv / relative-time.csv | Format-StoDuration / Format-StoRelativeTime |
-| display-width.csv | Get-StoDisplayWidth (text base64-encoded) |
+| display-width.csv | Get-StoDisplayWidth (text base64-encoded) — INFORMATIONAL, see below |
 | env-corpus/ | .env parsing incl. quotes/dupes/malformed lines |
 | config-corpus/ | config warnings, byte-exact strings |
 | history-mixed.jsonl | mixed-era history rows incl. one real run + one corrupt line |
 | webhook-payload.json | script_run payload shape incl. log tail |
+| webhook-queue.jsonl | dead-letter queue line shape (script_run payload, no log field) |
+| missed-state.json | Invoke-StoMissedRunCheck state after a stamp + backdate + flag sweep |
+| run.log | the real fixture run's captured stdout/stderr |
 | crontab/ | managed-block fixtures (both marker generations) + parses |
 | mcp/ | pure Invoke-StoMcpRequest request/response pairs |
+
+## Volatile files
+
+Regenerating fixtures re-runs the real script once and the real missed-run
+machinery twice, both of which stamp live timestamps/host/pid. These files
+are therefore expected to differ, byte-for-byte, on every regeneration —
+don't be alarmed by a diff limited to just these:
+
+- `history-mixed.jsonl` (the real-run row only; the hand-written legacy rows
+  are stable)
+- `webhook-payload.json` (built from that same real-run row)
+- `mcp/08-get-history.response.json` (echoes the real-run row back)
+- `missed-state.json` (firstSeen/lastAlerted timestamps)
+- `run.log` (the real run's captured output, including timing)
+
+Everything else in this directory is expected to be byte-identical across
+regenerations; a diff outside the list above means a PS behavior actually
+changed and should be reviewed as such.
+
+## display-width.csv is informational
+
+`display-width.csv` documents the PS app's `Get-StoDisplayWidth` function.
+It is **not** a parity contract: the Go rebuild deliberately uses
+grapheme-aware widths (spec §2, `rivo/uniseg`) and is expected to differ
+from the PS implementation on ZWJ sequences (e.g. the family emoji built
+from `char+ZWJ+char+...`). It is kept for reference, not required by
+`TestRequiredFixturesExist`.
+
+## Frozen quirks
+
+A few PS behaviors worth calling out explicitly, since a naive Go port
+would "fix" them and silently break parity:
+
+- `Get-StoCronPrev` returns `$null` (Go: no result) beyond a 35-day
+  lookback — it does not walk further back than that.
+- `Get-StoCronNext` returns a time `>=` the `From` timestamp truncated to
+  the minute, plus one minute — not strictly `> From`.
+- Display width diverges on ZWJ sequences — see display-width.csv above.

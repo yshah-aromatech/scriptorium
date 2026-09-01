@@ -139,7 +139,7 @@ gate + `go test -race ./...` + golangci-lint + an opus code-review agent before 
 | P6 | CLI (legacy flags, exit codes) + missed detection | exit-code matrix; `--list`/`--history` diffed vs PS on same data dir. **First shippable binary — cron migrates.** | sonnet | opus |
 | P7 | crontab write + migrate (block rewrite, backups, systemd swap) | block-rewrite goldens; failed-read-aborts test | **opus** (blast radius: user crontab) | opus |
 | P8 | deps (embedded pwsh scanner, python scanner, venv, installers) | scanner output vs live PS AST on fixture corpus | sonnet | opus |
-| P9 | MCP server (13 tools, transport matrix) | recorded-request replay suite; status/error matrix | sonnet | opus |
+| P9 | MCP server (12 tools, transport matrix) | recorded-request replay suite; status/error matrix | sonnet | opus |
 | P10 | TUI foundation (root model, theme, Fleet + Run views, run wiring) | goldens ×3 sizes; headless key-sequence full-run test | **opus** | Fable design review vs mockups |
 | P11 | TUI depth (History/Schedules views, overlays, drag-copy, palette, animations) | golden per view/overlay; clipboard sequence tests; drag rejoin test | opus + sonnet (split per component) | opus |
 | P12 | goreleaser, install.sh, self-update, docs, cutover | fresh-VM install; upgrade-VM test with populated data dir + live PS lock | sonnet | Fable final pass |
