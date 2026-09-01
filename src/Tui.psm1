@@ -6,7 +6,7 @@
 
 $script:S = $null          # UI state
 $script:SpinnerFrames = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
-$script:SpinnerColors = $null   # per-frame ANSI fg ramp, built lazily from the theme
+$script:SpinnerRamp = $null    # 32-step BrCyan->Blue ANSI fg ramp, built lazily from the theme
 $script:SparkColors = $null    # block-glyph -> ANSI fg (green->yellow->red heat ramp), built lazily
 # CSI, OSC (BEL- or ST-terminated), then any other lone ESC+byte — an
 # unmatched ESC reaching the buffer corrupts the frame and the width math
@@ -74,6 +74,8 @@ function Start-StoTui {
         Dirty        = $true
         PrevFrame    = $null     # last rendered frame's lines — Write-TuiFrameDiff repaints only changed rows
         LastFrameAt  = [long]0   # clock ms of the last render (frame budgets/60fps cap)
+        LastFullMs   = [long]0   # clock ms of the last FULL build (anim frames patch 2 rows over it)
+        LastFullSec  = -1        # second of the last full build (1Hz age refresh while animating)
     }
 
     Update-TuiScripts
@@ -199,21 +201,31 @@ function Start-StoTui {
                 if ($age -ge 5.2 -and $age -le 6.3) { $script:S.Dirty = $true }   # fade-out window
             }
 
-            # render: Dirty (input/output events) paints as soon as the 60fps
-            # cap allows; animations render on a budget — 16ms for one-shot
-            # eases (they last <1s and deserve 60fps), 100ms while runs are
-            # live (spinner/elapsed cadence — the content changes no faster),
-            # 80ms for the marquee. Idle renders nothing. The row diff in
-            # Write-TuiFrameDiff keeps each of these frames a few hundred
-            # bytes, so 60fps doesn't flood SSH.
+            # render at up to 60fps while anything animates; idle renders only
+            # on Dirty. Frames come in two prices: a FULL build (~5ms — all
+            # panes) on events, one-shot eases, a 100ms tick during runs
+            # (badge spinners, output tail) and a 1Hz tick (relative ages);
+            # and an anim-only patch (<1ms — spinner + status row over the
+            # previous frame) for every 16ms frame in between. The row diff
+            # keeps the wire cost of either a few hundred bytes.
             $nowMs = $script:Clock.ElapsedMilliseconds
-            $budget = if ($script:S.Anims.Count -gt 0) { 16 }
-            elseif ($script:S.Run -or @($script:S.Running).Count -gt 0) { 100 }
+            $running = $script:S.Run -or @($script:S.Running).Count -gt 0
+            $budget = if ($script:S.Anims.Count -gt 0 -or $running) { 16 }
             elseif ($script:S.MarqueeActive) { 80 }
             else { 0 }
             $due = $script:S.Dirty -or ($budget -gt 0 -and ($nowMs - $script:S.LastFrameAt) -ge $budget)
             if ($due -and ($nowMs - $script:S.LastFrameAt) -ge 15) {
-                Show-TuiFrame
+                $sec = [int]($nowMs / 1000)
+                $full = $script:S.Dirty -or $script:S.Anims.Count -gt 0 -or
+                    $sec -ne $script:S.LastFullSec -or
+                    ($nowMs - $script:S.LastFullMs) -ge $(if ($running) { 100 } else { 80 })
+                if ($full) {
+                    Show-TuiFrame
+                    $script:S.LastFullMs = $nowMs
+                    $script:S.LastFullSec = $sec
+                } else {
+                    Show-TuiFrame -AnimOnly
+                }
                 $script:S.Dirty = $false
                 $script:S.LastFrameAt = $script:Clock.ElapsedMilliseconds
             }
@@ -616,18 +628,20 @@ function Get-TuiSpinnerIndex {
     [int]([Math]::Floor($script:Clock.ElapsedMilliseconds / 100) % $script:SpinnerFrames.Count)
 }
 
-# spinner frame, tinted along a BrCyan→Blue ramp that cycles with the frames
-# (precomputed once — no per-frame color math)
+# spinner frame, tinted along a BrCyan→Blue ramp. The glyph steps at 100ms
+# (its designed speed) but the color phase is continuous off the wall clock
+# (1.6s triangle wave), so at 60fps the hue glides while the glyph ticks —
+# the ramp is precomputed, so a frame costs one array index
 function Get-TuiSpinner {
-    if (-not $script:SpinnerColors) {
+    if (-not $script:SpinnerRamp) {
         $p = (Get-StoTheme).Palette
-        $n = $script:SpinnerFrames.Count
-        $script:SpinnerColors = @(for ($i = 0; $i -lt $n; $i++) {
-            ConvertTo-AnsiFg (Get-StoBlendHex $p.BrCyan $p.Blue ([Math]::Abs($i * 2.0 / $n - 1)))
+        $script:SpinnerRamp = @(for ($i = 0; $i -lt 32; $i++) {
+            ConvertTo-AnsiFg (Get-StoBlendHex $p.BrCyan $p.Blue ($i / 31.0))
         })
     }
-    $i = Get-TuiSpinnerIndex
-    "$($script:SpinnerColors[$i])$($script:SpinnerFrames[$i])"
+    $phase = ($script:Clock.ElapsedMilliseconds % 1600) / 800.0
+    if ($phase -gt 1) { $phase = 2 - $phase }   # triangle: out and back
+    "$($script:SpinnerRamp[[int]($phase * 31)])$($script:SpinnerFrames[(Get-TuiSpinnerIndex)])"
 }
 
 # ===========================================================================
@@ -1436,7 +1450,32 @@ function Write-TuiFrameDiff {
     [Console]::Write("`e[?2026h$($sb.ToString())`e[?2026l")
 }
 
+# the pane-title border row — the run spinner lives here, so the anim-only
+# path rebuilds it every frame
+function Get-TuiTopBorderLine {
+    param([int]$Lw, [int]$Rw)
+    $t = Get-StoTheme
+    $reset = "$($t.Reset)$($t.Bg)$($t.Fg)"
+    $listTitle = if ($script:S.Filter) { " ≡ scripts /$($script:S.Filter) " } else { ' ≡ scripts ' }
+    $spin = ''
+    if ($script:S.Run) { $spin = $script:SpinnerFrames[(Get-TuiSpinnerIndex)] + ' ' }
+    $outTitle = " ❯ $spin$($script:S.OutTitle) "
+    if ($listTitle.Length -gt $Lw) { $listTitle = $listTitle.Substring(0, $Lw) }
+    if ($outTitle.Length -gt $Rw) { $outTitle = $outTitle.Substring(0, $Rw) }
+    # focused pane's title is highlighted (tab switches)
+    $listTitleColor = if ($script:S.FocusPane -eq 'output') { $t.Blue } else { $t.BrCyan }
+    $outTitleColor = if ($script:S.FocusPane -eq 'output') { $t.BrCyan } else { $t.Blue }
+    # tint the spinner after truncation so the length math above stays ANSI-free
+    if ($spin) { $outTitle = $outTitle.Replace($spin, "$(Get-TuiSpinner)$outTitleColor ") }
+    # the focused pane's top-border fill glows blue; the other stays Border
+    $listFillColor = if ($script:S.FocusPane -eq 'output') { $t.Border } else { $t.Blue }
+    $outFillColor = if ($script:S.FocusPane -eq 'output') { $t.Blue } else { $t.Border }
+    "$reset$($t.Border)╭$listTitleColor$listTitle$listFillColor$('─' * [Math]::Max(0, $Lw - $listTitle.Length))" +
+    "$($t.Border)┬$outTitleColor$outTitle$outFillColor$('─' * [Math]::Max(0, $Rw - $outTitle.Length))$($t.Border)╮$reset"
+}
+
 function Show-TuiFrame {
+    param([switch]$AnimOnly)
     $t = Get-StoTheme
     $W = $script:S.W; $H = $script:S.H
     if ($W -lt 40 -or $H -lt 10) {
@@ -1446,6 +1485,21 @@ function Show-TuiFrame {
     }
     $lw = Get-TuiListWidth
     $rw = $W - $lw - 3
+
+    # animation-only frame: everything except the run spinner (top border)
+    # and the status line (elapsed/cpu/ETA bar) is bit-identical to the last
+    # full build — patch those two rows over the previous frame instead of
+    # rebuilding all ~30. This is what makes 60fps cost ~nothing: the panes
+    # refresh on the full-build cadence (events, 10Hz during runs, 1Hz ages)
+    if ($AnimOnly -and $script:S.PrevFrame -and $script:S.PrevFrame.Count -eq $H) {
+        $lines = [System.Collections.Generic.List[string]]::new($script:S.PrevFrame)
+        $reset2 = "$($t.Reset)$($t.Bg)$($t.Fg)"
+        $lines[1] = Get-TuiTopBorderLine -Lw $lw -Rw $rw
+        $lines[$H - 2] = "$reset2$(Get-TuiStatusLine -Width $W)$reset2"
+        Write-TuiFrameDiff -Lines $lines
+        return
+    }
+
     $body = Get-TuiBodyHeight
     $lines = [System.Collections.Generic.List[string]]::new($H)
     $sb = [Text.StringBuilder]::new(1KB)   # per-line scratch
@@ -1495,29 +1549,8 @@ function Show-TuiFrame {
     [void]$sb.Append($reset)
     $lines.Add($sb.ToString()); [void]$sb.Clear()
 
-    # ---- panel top border --------------------------------------------------
-    $listTitle = if ($script:S.Filter) { " ≡ scripts /$($script:S.Filter) " } else { ' ≡ scripts ' }
-    $spin = ''
-    if ($script:S.Run) { $spin = $script:SpinnerFrames[(Get-TuiSpinnerIndex)] + ' ' }
-    $outTitle = " ❯ $spin$($script:S.OutTitle) "
-    if ($listTitle.Length -gt $lw) { $listTitle = $listTitle.Substring(0, $lw) }
-    if ($outTitle.Length -gt $rw) { $outTitle = $outTitle.Substring(0, $rw) }
-    # focused pane's title is highlighted (tab switches)
-    $listTitleColor = if ($script:S.FocusPane -eq 'output') { $t.Blue } else { $t.BrCyan }
-    $outTitleColor = if ($script:S.FocusPane -eq 'output') { $t.BrCyan } else { $t.Blue }
-    # tint the spinner after truncation so the length math above stays ANSI-free
-    if ($spin) { $outTitle = $outTitle.Replace($spin, "$(Get-TuiSpinner)$outTitleColor ") }
-    # the focused pane's top-border fill glows blue; the other stays Border
-    $listFillColor = if ($script:S.FocusPane -eq 'output') { $t.Border } else { $t.Blue }
-    $outFillColor = if ($script:S.FocusPane -eq 'output') { $t.Blue } else { $t.Border }
-    [void]$sb.Append("$reset$($t.Border)╭")
-    [void]$sb.Append("$listTitleColor$listTitle$listFillColor")
-    [void]$sb.Append(('─' * [Math]::Max(0, $lw - $listTitle.Length)))
-    [void]$sb.Append("$($t.Border)┬")
-    [void]$sb.Append("$outTitleColor$outTitle$outFillColor")
-    [void]$sb.Append(('─' * [Math]::Max(0, $rw - $outTitle.Length)))
-    [void]$sb.Append("$($t.Border)╮$reset")
-    $lines.Add($sb.ToString()); [void]$sb.Clear()
+    # ---- panel top border ---------------------------------------------------
+    $lines.Add((Get-TuiTopBorderLine -Lw $lw -Rw $rw))
 
     # ---- body rows ----------------------------------------------------------
     # left column = script list, then (height permitting) a separator and the
@@ -2237,14 +2270,20 @@ function Get-TuiStatusLine {
         $mem = if ($h.ContainsKey('MemNow')) { '{0:n0}' -f $h.MemNow } else { '—' }
         $etaTxt = ''
         if ($script:S.RunEta -gt 0) {
-            # bar stays plain here — Format-TuiPad is ANSI-unaware; colorized after padding
-            $pct = $el / $script:S.RunEta
-            $fill = [Math]::Max(0, [Math]::Min(10, [int][Math]::Round($pct * 10)))
+            # bar stays plain here — Format-TuiPad is ANSI-unaware; colorized
+            # after padding. Eighth-block partial cell = 80 quanta over 10
+            # cells, so the bar creeps instead of jumping a whole cell
+            $pct = [Math]::Max(0.0, $el / $script:S.RunEta)
             if ($pct -lt 1) {
-                $barFill = '▰' * $fill; $barEmpty = '▱' * (10 - $fill)
+                $cells = $pct * 10
+                $fullC = [int][Math]::Floor($cells)
+                $eighth = [int][Math]::Floor(($cells - $fullC) * 8)
+                $partial = if ($eighth -gt 0) { "$('▏▎▍▌▋▊▉'[$eighth - 1])" } else { '' }
+                $barFill = ('█' * $fullC) + $partial
+                $barEmpty = '▁' * (10 - $fullC - $partial.Length)
                 $etaTxt = "  $barFill$barEmpty $([int][Math]::Floor($pct * 100))% · ~$(Format-StoDuration ($script:S.RunEta - $el)) left"
             } else {
-                $barFill = '▰' * 10
+                $barFill = '█' * 10
                 $etaTxt = "  $barFill +$(Format-StoDuration ($el - $script:S.RunEta)) over"
             }
         }
