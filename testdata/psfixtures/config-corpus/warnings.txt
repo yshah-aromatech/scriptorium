@@ -1,0 +1,2 @@
+unknown-key.json	config.json: unknown key 'notAKey' — ignored (typo?)
+bad-numeric.json	config.json: 'runTimeoutMinutes' must be a number, got 'lots' — using default 0

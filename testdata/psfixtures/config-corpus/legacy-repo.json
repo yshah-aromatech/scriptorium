@@ -1,0 +1,5 @@
+{
+  "dataDir": "~/x",
+  "scriptsRepo": "https://github.com/org/ps-scripts",
+  "branch": "dev"
+}

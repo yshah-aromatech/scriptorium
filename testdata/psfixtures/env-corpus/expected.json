@@ -1,0 +1,25 @@
+{
+  "basic.env": {
+    "A": "1",
+    "B": "two words"
+  },
+  "comments.env": {
+    "A": "1",
+    "X": "ok"
+  },
+  "quotes.env": {
+    "A": "quoted",
+    "B": "dquoted",
+    "C": "'unbalanced",
+    "D": "\"mixed'",
+    "E": ""
+  },
+  "equals.env": {
+    "A": "x=y",
+    "B": "spaced",
+    "C": "trail"
+  },
+  "dupes.env": {
+    "K": "second"
+  }
+}

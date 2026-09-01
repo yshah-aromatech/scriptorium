@@ -1,0 +1,4 @@
+{
+  "statusCode": 200,
+  "json": "{\"jsonrpc\":\"2.0\",\"id\":7,\"error\":{\"code\":-32602,\"message\":\"unknown tool 'nope' — valid tools: list_scripts, get_script_details, run_script, get_history, get_run_log, sync_repos, get_schedules, set_schedule, remove_schedule, install_deps, update_app, update_packages\"}}"
+}

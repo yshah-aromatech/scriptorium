@@ -1,0 +1,4 @@
+{
+  "statusCode": 200,
+  "json": "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"parse error: body is not a JSON object\"}}"
+}

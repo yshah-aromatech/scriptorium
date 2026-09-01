@@ -1,0 +1,7 @@
+MAILTO=someone@example.com
+15 3 * * * /usr/local/bin/certbot renew
+# >>> psscripts managed block — do not edit by hand >>>
+*/10 * * * * cd '/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-d5741842-0cda-4974-be4e-2403cb714827' && 'pwsh' -NoProfile -File scriptorium.ps1 --run 'fast-job' --cron >> '/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-d5741842-0cda-4974-be4e-2403cb714827/data/logs/cron-fast-job.log' 2>&1
+0 2 * * * cd '/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-d5741842-0cda-4974-be4e-2403cb714827' && 'pwsh' -NoProfile -File scriptorium.ps1 --run 'nightly' --cron >> '/var/folders/_w/ngpq09gn4j11hks8kynh6wt40000gq/T/sto-fixtures-d5741842-0cda-4974-be4e-2403cb714827/data/logs/cron-nightly.log' 2>&1
+# <<< psscripts managed block <<<
+# trailing user comment

@@ -1,0 +1,4 @@
+{
+  "statusCode": 200,
+  "json": "{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"invalid log_id '../etc/passwd' — use the logId field from get_history\"}],\"isError\":true}}"
+}
