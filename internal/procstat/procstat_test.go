@@ -220,21 +220,53 @@ func TestSamplerBaselineThenSample(t *testing.T) {
 	}
 }
 
-// A tree whose total jiffies drop (a child exited) must clamp to 0, never
-// wrap around an unsigned subtraction into 100%.
+// A tree whose total jiffies DROP — a member that had burned CPU exits and is
+// reaped out of /proc — must clamp to 0, never wrap an unsigned subtraction
+// around into a bogus 100%. The drop is produced for real here: a shell that
+// backgrounds a spinning child and waits for it, so killing the child both
+// removes its jiffies from the tree total and gets it reaped out of /proc.
 func TestSamplerNeverReportsNegativeCPU(t *testing.T) {
 	requireProc(t)
-	root := spawnTree(t)
+	cmd := exec.Command("sh", "-c", "while :; do :; done & wait")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	root := cmd.Process.Pid
+	t.Cleanup(func() {
+		_ = syscall.Kill(-root, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+	// let the child fork and burn measurable jiffies
+	time.Sleep(500 * time.Millisecond)
+
 	s := procstat.NewSampler(root)
-	s.Tick(time.Now())
-	time.Sleep(300 * time.Millisecond)
-	// far-future clock: dt is huge, so the delta divided by it is ~0
-	sample, _, ok := s.Tick(time.Now().Add(time.Hour))
+	if _, pids, _ := s.Tick(time.Now()); len(pids) < 2 {
+		t.Fatalf("baseline tree = %v, want the shell and its spinning child", pids)
+	}
+	before, _ := procstat.Snapshot(procstat.TreePIDs(root))
+
+	for _, p := range procstat.TreePIDs(root) {
+		if p != root {
+			_ = syscall.Kill(p, syscall.SIGKILL)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	after, _ := procstat.Snapshot(procstat.TreePIDs(root))
+	for after >= before && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		after, _ = procstat.Snapshot(procstat.TreePIDs(root))
+	}
+	if after >= before {
+		t.Fatalf("tree jiffies went %d -> %d: the setup never produced a negative delta", before, after)
+	}
+
+	sample, _, ok := s.Tick(time.Now().Add(time.Second))
 	if !ok {
 		t.Fatal("tick did not sample")
 	}
-	if sample.CPU < 0 {
-		t.Fatalf("CPU = %v", sample.CPU)
+	if sample.CPU != 0 {
+		t.Fatalf("CPU = %v across a %d -> %d jiffy drop, want it clamped to 0", sample.CPU, before, after)
 	}
 }
 
