@@ -257,6 +257,66 @@ func TestMigrateLayoutMatchesByRemoteURLCaseInsensitive(t *testing.T) {
 	}
 }
 
+// M8: a stale ".migrating" sibling (left over from a prior failed
+// migration) makes the rename-aside fail; MigrateLayout must report FAILED
+// via onLine and leave the original clone untouched (sync will re-clone).
+func TestMigrateLayoutFailedWithStaleMigratingSibling(t *testing.T) {
+	remote := newFixtureRemote(t)
+	cfg, paths := loadWithDataDir(t, `,"repos":[{"name":"repoa","url":"`+remote+`"}]`)
+
+	if err := os.MkdirAll(paths.ScriptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, paths.ScriptsDir, "init", "-b", "main")
+	runGit(t, paths.ScriptsDir, "remote", "add", "origin", remote)
+	writeFile(t, filepath.Join(paths.ScriptsDir, "oldscript", "main.ps1"), "x")
+
+	// a non-empty stale sibling forces os.Rename(ScriptsDir, tmp) to fail
+	writeFile(t, filepath.Join(paths.ScriptsDir+".migrating", "leftover.txt"), "stale")
+
+	repos := scripts.Repos(cfg, paths)
+	var lines []string
+	scripts.MigrateLayout(repos, paths, func(l string) { lines = append(lines, l) })
+
+	if !containsLine(lines, "layout migration FAILED") {
+		t.Fatalf("expected a FAILED line: %v", lines)
+	}
+	if _, err := os.Stat(filepath.Join(paths.ScriptsDir, ".git")); err != nil {
+		t.Fatalf("original clone should be left in place after a failed migration: %v", err)
+	}
+}
+
+// M8: the sync clean-exclude list survives a ROOT-level .env and a
+// __pycache__ dir, while a stray untracked file elsewhere is still cleaned.
+func TestSyncCleanSurvivesRootEnvAndPycacheStrayFileCleaned(t *testing.T) {
+	remote := newFixtureRemote(t)
+	cfg, paths := loadWithDataDir(t, `,"repos":[{"name":"myrepo","url":"`+remote+`"}]`)
+	reg := secret.NewRegistry()
+
+	if ok := scripts.Sync(cfg, paths, reg, func(string) {}); !ok {
+		t.Fatal("clone sync failed")
+	}
+	root := scripts.Repos(cfg, paths)[0].Root
+
+	writeFile(t, filepath.Join(root, ".env"), "ROOT_SECRET=abc")
+	writeFile(t, filepath.Join(root, "__pycache__", "x.pyc"), "bytecode")
+	writeFile(t, filepath.Join(root, "junk.txt"), "should be cleaned")
+
+	if ok := scripts.Sync(cfg, paths, reg, func(string) {}); !ok {
+		t.Fatal("re-sync failed")
+	}
+
+	if _, err := os.Stat(filepath.Join(root, ".env")); err != nil {
+		t.Errorf("root .env should survive via -e .env: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "__pycache__", "x.pyc")); err != nil {
+		t.Errorf("__pycache__ should survive via -e __pycache__: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "junk.txt")); !os.IsNotExist(err) {
+		t.Errorf("junk.txt should have been cleaned, err=%v", err)
+	}
+}
+
 func TestMigrateLayoutSkippedForLegacy(t *testing.T) {
 	cfg, paths := loadWithDataDir(t, "")
 	repos := scripts.Repos(cfg, paths)

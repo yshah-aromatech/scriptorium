@@ -135,6 +135,77 @@ func TestDiscoverLooseFiles(t *testing.T) {
 	}
 }
 
+// M8: a malformed script.json (invalid JSON) doesn't sink the folder —
+// loadScriptMeta returns nil, and resolveEntry falls through to the
+// conventional entry names.
+func TestDiscoverMalformedScriptJSONFallsBackToConventionalEntry(t *testing.T) {
+	root, discover := discoverRoot(t)
+	d := filepath.Join(root, "brokenmeta")
+	writeFile(t, filepath.Join(d, "main.ps1"), "x")
+	writeFile(t, filepath.Join(d, "script.json"), `{not valid json`)
+	s := discover()
+	if len(s) != 1 || !strings.HasSuffix(s[0].Entry, "main.ps1") {
+		t.Fatalf("got %+v, want the folder still discovered via main.ps1", s)
+	}
+}
+
+// M8: script.json's timeoutMinutes accepts a quoted numeric string too,
+// via numericCast's `-as [double]`-equivalent string branch.
+func TestDiscoverTimeoutMinutesAcceptsQuotedNumericString(t *testing.T) {
+	root, discover := discoverRoot(t)
+	d := filepath.Join(root, "qtimeout")
+	writeFile(t, filepath.Join(d, "main.ps1"), "x")
+	writeFile(t, filepath.Join(d, "script.json"), `{"timeoutMinutes": "15"}`)
+	s := discover()
+	if len(s) != 1 || s[0].TimeoutMinutes == nil || *s[0].TimeoutMinutes != 15 {
+		t.Fatalf("got %+v, want TimeoutMinutes=15", s)
+	}
+}
+
+// M8: a residual same-base collision AFTER duplicate qualification (a
+// folder and a loose file sharing one base name, in the same repo) gets a
+// "-2" suffix on the second occurrence — folders are candidates before
+// loose files, so the folder claims the qualified name first.
+func TestDiscoverResidualCollisionGetsDashTwoSuffix(t *testing.T) {
+	root, discover := discoverRoot(t)
+	writeFile(t, filepath.Join(root, "x", "main.ps1"), "folder")
+	writeFile(t, filepath.Join(root, "x.ps1"), "loose")
+	s := discover()
+	if len(s) != 2 {
+		t.Fatalf("got %+v, want 2 scripts", s)
+	}
+	byName := map[string]scripts.Script{}
+	for _, sc := range s {
+		byName[sc.Name] = sc
+	}
+	folder, ok := byName["scripts-x"]
+	if !ok || folder.Loose {
+		t.Fatalf("got %+v, want a non-loose 'scripts-x' (the folder)", s)
+	}
+	loose, ok := byName["scripts-x-2"]
+	if !ok || !loose.Loose {
+		t.Fatalf("got %+v, want a loose 'scripts-x-2' (the file)", s)
+	}
+}
+
+// M8: a repo root that doesn't exist, or that exists as a plain file rather
+// than a directory, is skipped rather than panicking or erroring.
+func TestDiscoverRepoRootMissingOrIsFile(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		cfg, paths := loadWithDataDir(t, "") // paths.ScriptsDir intentionally never created
+		if s := scripts.Discover(scripts.Repos(cfg, paths), paths); len(s) != 0 {
+			t.Fatalf("got %+v, want none", s)
+		}
+	})
+	t.Run("is a file", func(t *testing.T) {
+		cfg, paths := loadWithDataDir(t, "")
+		writeFile(t, paths.ScriptsDir, "not a directory") // DataDir (its parent) already exists
+		if s := scripts.Discover(scripts.Repos(cfg, paths), paths); len(s) != 0 {
+			t.Fatalf("got %+v, want none", s)
+		}
+	})
+}
+
 func TestDiscoverSkipsEmptyFolder(t *testing.T) {
 	root, discover := discoverRoot(t)
 	if err := os.MkdirAll(filepath.Join(root, "empty"), 0o755); err != nil {
