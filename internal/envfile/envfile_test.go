@@ -33,6 +33,8 @@ func TestReadBasics(t *testing.T) {
 		{"empty quoted value", "E=''", map[string]string{"E": ""}},
 		{"whitespace trimmed around key and value", "A = spaced \nB=trail  ", map[string]string{"A": "spaced", "B": "trail"}},
 		{"last key wins", "K=first\nK=second", map[string]string{"K": "second"}},
+		{"stacked quotes keep inner quotes", "A=\"\"x\"\"", map[string]string{"A": "\"x\""}}, // Read uses matched-pair: outer "" removed, inner remains
+		{"trailing quote unmatched", "B=abc\"", map[string]string{"B": "abc\""}},              // no matched pair, quote kept
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -101,6 +103,29 @@ func TestReadDoc(t *testing.T) {
 	}
 	if len(entries) != len(want) {
 		t.Fatalf("got %d entries (%v), want %d", len(entries), entries, len(want))
+	}
+	for i := range want {
+		if entries[i] != want[i] {
+			t.Errorf("entry %d: got %+v, want %+v", i, entries[i], want[i])
+		}
+	}
+}
+
+// TestReadDocQuoteTrimDivergence verifies ReadDoc uses PS .Trim() semantics
+// (any count of quote chars trimmed from both ends independently), which
+// diverges from Read's matched-pair stripping.
+func TestReadDocQuoteTrimDivergence(t *testing.T) {
+	p := write(t, "STACKED=\"\"x\"\"\nSTRAY=abc\"\n")
+	entries, err := envfile.ReadDoc(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []envfile.DocEntry{
+		{Key: "STACKED", Default: "x", Comment: ""},     // ReadDoc trims all quotes: ""x"" -> x
+		{Key: "STRAY", Default: "abc", Comment: ""},     // ReadDoc trims trailing quote: abc" -> abc
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(entries), len(want))
 	}
 	for i := range want {
 		if entries[i] != want[i] {

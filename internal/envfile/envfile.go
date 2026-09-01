@@ -35,7 +35,7 @@ func Read(path string) (map[string]string, error) {
 	for _, line := range splitLines(string(data)) {
 		k, v, ok := parseLine(line)
 		if ok {
-			out[k] = v
+			out[k] = stripMatchedQuotes(v)
 		}
 	}
 	return out, nil
@@ -43,7 +43,8 @@ func Read(path string) (map[string]string, error) {
 
 // ReadDoc parses a .env.example, attaching each key's preceding comment
 // block. Blank lines and malformed lines clear the pending comment block,
-// matching Read-StoEnvDoc.
+// matching Read-StoEnvDoc. Values are quote-trimmed using PS semantics
+// (.Trim() any count, both quote chars independently from each end).
 func ReadDoc(path string) ([]DocEntry, error) {
 	var entries []DocEntry
 	data, err := os.ReadFile(path)
@@ -71,13 +72,13 @@ func ReadDoc(path string) ([]DocEntry, error) {
 			pending = nil
 			continue
 		}
-		entries = append(entries, DocEntry{Key: k, Default: v, Comment: strings.Join(pending, " ")})
+		entries = append(entries, DocEntry{Key: k, Default: strings.Trim(v, "\"'"), Comment: strings.Join(pending, " ")})
 		pending = nil
 	}
 	return entries, nil
 }
 
-// parseLine implements the shared KEY=VALUE rule.
+// parseLine implements the shared KEY=VALUE rule, returning the raw trimmed value.
 func parseLine(raw string) (key, val string, ok bool) {
 	t := strings.TrimSpace(raw)
 	if t == "" || strings.HasPrefix(t, "#") {
@@ -89,13 +90,18 @@ func parseLine(raw string) (key, val string, ok bool) {
 	}
 	key = strings.TrimSpace(t[:idx])
 	val = strings.TrimSpace(t[idx+1:])
+	return key, val, true
+}
+
+// stripMatchedQuotes removes outer quotes only if both ends are the same quote character.
+func stripMatchedQuotes(val string) string {
 	if len(val) >= 2 {
 		first, last := val[0], val[len(val)-1]
 		if first == last && (first == '\'' || first == '"') {
-			val = val[1 : len(val)-1]
+			return val[1 : len(val)-1]
 		}
 	}
-	return key, val, true
+	return val
 }
 
 func splitLines(s string) []string {
