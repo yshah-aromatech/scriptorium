@@ -185,7 +185,7 @@ Describe 'Get-StoMcpServiceUnit' {
         $u | Should -Match '(?m)^ExecStart=/usr/bin/pwsh -NoProfile -File /opt/pss/scriptorium\.ps1 --mcp$'
         $u | Should -Match '(?m)^WorkingDirectory=/opt/pss$'
         $u | Should -Match '(?m)^Environment=HOME=%h$'
-        $u | Should -Match '(?m)^Restart=on-failure$'
+        $u | Should -Match '(?m)^Restart=always$'
         $u | Should -Match '(?m)^WantedBy=default\.target$'
     }
 }

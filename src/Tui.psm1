@@ -8,7 +8,9 @@ $script:S = $null          # UI state
 $script:SpinnerFrames = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
 $script:SpinnerColors = $null   # per-frame ANSI fg ramp, built lazily from the theme
 $script:SparkColors = $null    # block-glyph -> ANSI fg (green->yellow->red heat ramp), built lazily
-$script:AnsiRegex = [regex]'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\a]*\a'
+# CSI, OSC (BEL- or ST-terminated), then any other lone ESC+byte — an
+# unmatched ESC reaching the buffer corrupts the frame and the width math
+$script:AnsiRegex = [regex]'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\a\x1b]*(?:\a|\x1b\\)|\x1b.'
 $script:Clock = [System.Diagnostics.Stopwatch]::StartNew()   # wall clock for animations — Tick freezes when frames skip
 
 # ===========================================================================
@@ -31,9 +33,14 @@ function Start-StoTui {
         LastSync     = $null
         Lines        = [System.Collections.Generic.List[string]]::new()
         Wrapped      = [System.Collections.Generic.List[string]]::new()
+        WrapSrc      = [System.Collections.Generic.List[int]]::new()   # wrapped row -> Lines index (copy rejoins folds)
         WrapWidth    = 0
         Scroll       = 0
         Follow       = $true
+        Sel          = $null     # output-pane text selection @{ A/B = @{ Line; Col } }
+        SelDrag      = $null     # anchor while the mouse button is down
+        HeaderRepo   = $null     # repo chip text, built once (config is fixed for the session)
+        DetailCache  = $null     # details-card fs facts, 2s TTL
         SearchTerm   = ''
         OutTitle     = 'output'
         Mode         = 'list'   # list|deps|input|confirm|env|history|help
@@ -88,7 +95,7 @@ function Start-StoTui {
 
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
     [Console]::TreatControlCAsInput = $true
-    [Console]::Write("`e[?1049h`e[?25l`e[?1000;1006h")   # alt screen, hide cursor, SGR mouse
+    [Console]::Write("`e[?1049h`e[?25l`e[?1000;1002;1006h")   # alt screen, hide cursor, SGR mouse + drag
     try {
         if ([bool]$cfg.syncOnLaunch) { Invoke-TuiSync }
         while (-not $script:S.Quit) {
@@ -140,11 +147,15 @@ function Start-StoTui {
                 }
             }
 
-            # drain the run queue
-            if (-not $script:S.Run -and $script:S.Queue.Count -gt 0 -and $script:S.Mode -eq 'list') {
+            # drain the run queue — read-only overlays (history/help) don't
+            # stall it; modal ones (deps/confirm/input/env) do
+            if (-not $script:S.Run -and $script:S.Queue.Count -gt 0 -and $script:S.Mode -in 'list', 'history', 'help') {
                 $next = $script:S.Queue[0]
                 $script:S.Queue.RemoveAt(0)
-                Start-TuiRunFlow -Script $next.Script -ExtraArgs $next.ExtraArgs
+                # re-resolve by name: a sync while queued replaces the script objects
+                $scr = $script:S.Scripts | Where-Object Name -eq $next.Script.Name | Select-Object -First 1
+                if ($scr) { Start-TuiRunFlow -Script $scr -ExtraArgs $next.ExtraArgs }
+                else { Set-TuiStatus "queued script '$($next.Script.Name)' no longer exists — skipped" -Kind warn }
                 $script:S.Dirty = $true
             }
 
@@ -166,8 +177,11 @@ function Start-StoTui {
             if ($script:S.MarqueeActive -and $script:S.Tick % 5 -eq 0) { $script:S.Dirty = $true }
 
             # keep redrawing while anything is running (spinners + elapsed
-            # times animate), including cron/external runs in the activity card
-            if ($script:S.Dirty -or $script:S.Run -or @($script:S.Running).Count -gt 0) {
+            # times animate), including cron/external runs in the activity
+            # card — but at ~10fps: nothing animates faster, and a full-frame
+            # rebuild 30x/s just burns CPU next to a busy run
+            $animating = $script:S.Run -or @($script:S.Running).Count -gt 0
+            if ($script:S.Dirty -or ($animating -and $script:S.Tick % 3 -eq 0)) {
                 Show-TuiFrame
                 $script:S.Dirty = $false
             }
@@ -181,7 +195,7 @@ function Start-StoTui {
                 Complete-StoRun -Handle $script:S.Run | Out-Null
             }
         } catch { }
-        [Console]::Write("`e[?1000;1006l`e[0m`e[?25h`e[?1049l")
+        [Console]::Write("`e[?1000;1002;1006l`e[0m`e[?25h`e[?1049l")
         [Console]::TreatControlCAsInput = $false
     }
 }
@@ -202,7 +216,12 @@ function Read-TuiEscapeSequence {
     }
     $buf = [Text.StringBuilder]::new()
     $guard = 0
-    while ([Console]::KeyAvailable -and $guard -lt 32) {
+    while ($guard -lt 32) {
+        if (-not [Console]::KeyAvailable) {
+            # drag events arrive in bursts — give a split sequence a moment
+            Start-Sleep -Milliseconds 2
+            if (-not [Console]::KeyAvailable) { break }
+        }
         $guard++
         $c = [Console]::ReadKey($true).KeyChar
         [void]$buf.Append($c)
@@ -218,48 +237,145 @@ function Read-TuiEscapeSequence {
 function Invoke-TuiMouse {
     param([int]$Button, [int]$X, [int]$Y, [bool]$Press)
     if ($script:S.Mode -notin 'list', 'history') { return }
+    $lw = Get-TuiListWidth
     if (($Button -band 0x40) -ne 0) {
-        # wheel: 64 = up, 65 = down
+        # wheel: 64 = up, 65 = down — scrolls the pane under the pointer
         $delta = if (($Button -band 1) -eq 0) { -3 } else { 3 }
         if ($script:S.Mode -eq 'history') {
             $hi = $script:S.History
             $items = Get-TuiHistoryItems
             $hi.Sel = [Math]::Min([Math]::Max(0, $hi.Sel + $delta), [Math]::Max(0, $items.Count - 1))
+        } elseif ($X -le ($lw + 1)) {
+            Move-TuiSelection ([Math]::Sign($delta))
         } else {
             Move-TuiScroll $delta
         }
         return
     }
-    if ($script:S.Mode -eq 'history' -and $Press -and $Button -eq 0) {
+    $motion = ($Button -band 0x20) -ne 0
+    $btn = $Button -band 0x03
+    $row = $Y - 3
+
+    # drag in progress: extend the output-pane selection
+    if ($motion -and $btn -eq 0 -and $script:S.SelDrag) {
+        $pos = Get-TuiOutputPos -X $X -Y $Y
+        if ($pos) {
+            $script:S.Sel = @{ A = $script:S.SelDrag; B = $pos }
+            $script:S.Follow = $false   # selecting while output streams must not yank the view
+            $script:S.Dirty = $true
+        }
+        return
+    }
+    if ($motion) { return }
+
+    # release: a drag copies the selection; a plain click falls through to
+    # the click-to-copy code check recorded at press time
+    if (-not $Press -and $btn -eq 0) {
+        $drag = $script:S.SelDrag
+        $script:S.SelDrag = $null
+        if ($script:S.Sel) { Copy-TuiSelection }
+        elseif ($drag -and $drag.ContainsKey('ClickRow')) { Copy-TuiCodeAt -Row $drag.ClickRow -Cell $drag.ClickCell }
+        return
+    }
+    if (-not $Press -or $btn -ne 0) { return }
+
+    if ($script:S.Mode -eq 'history') {
         # left click on a history row selects it (title + header rows first)
-        $lw = Get-TuiListWidth
-        $row = $Y - 3
         if ($X -lt ($lw + 3) -or $row -lt 2 -or $row -ge (Get-TuiBodyHeight)) { return }
         $hi = $script:S.History
         $idx = [int]$hi.Top + ($row - 2)
         if ($idx -lt (Get-TuiHistoryItems).Count) { $hi.Sel = $idx }
         return
     }
-    if ($script:S.Mode -eq 'list' -and $Press -and $Button -eq 0) {
-        # left click (body starts at row 3)
-        $lw = Get-TuiListWidth
-        $row = $Y - 3
-        if ($row -lt 0 -or $row -ge (Get-TuiBodyHeight)) { return }
-        if ($X -le ($lw + 1)) {
-            # list pane: select that row (and focus the pane); clicks on the
-            # details card / its separator select nothing
-            $script:S.FocusPane = 'list'
-            if ($row -ge (Get-TuiListHeight)) { return }
-            $idx = $script:S.ListTop + $row
-            if ($idx -lt $script:S.Visible.Count) { $script:S.Selected = $idx }
-        }
-        elseif ($X -ge ($lw + 3)) {
-            # output pane: focus it; clicking a device-login code copies it
-            # (clicks on the cards below the output panel select nothing)
-            $script:S.FocusPane = 'output'
-            if ($row -lt (Get-TuiOutputHeight)) { Copy-TuiCodeAt -Row $row -Cell ($X - $lw - 3) }
+    # list mode press (body starts at row 3); any press clears an old selection
+    $script:S.Sel = $null
+    $script:S.Dirty = $true
+    if ($row -lt 0 -or $row -ge (Get-TuiBodyHeight)) { return }
+    if ($X -le ($lw + 1)) {
+        # list pane: select that row (and focus the pane); clicks on the
+        # details card / its separator select nothing
+        $script:S.FocusPane = 'list'
+        if ($row -ge (Get-TuiListHeight)) { return }
+        $idx = $script:S.ListTop + $row
+        if ($idx -lt $script:S.Visible.Count) { $script:S.Selected = $idx }
+    }
+    elseif ($X -ge ($lw + 3)) {
+        # output pane: focus it and anchor a potential drag selection; if the
+        # button comes straight back up, the release handler runs the old
+        # click-to-copy device-code check instead
+        $script:S.FocusPane = 'output'
+        if ($row -lt (Get-TuiOutputHeight)) {
+            $pos = Get-TuiOutputPos -X $X -Y $Y
+            if ($pos) {
+                $pos.ClickRow = $row
+                $pos.ClickCell = $X - $lw - 3
+                $script:S.SelDrag = $pos
+            }
         }
     }
+}
+
+# terminal coords -> output-pane position @{ Line (wrapped index); Col (cell) },
+# clamped to the pane and the buffer; $null when the buffer is empty
+function Get-TuiOutputPos {
+    param([int]$X, [int]$Y)
+    if ($script:S.Wrapped.Count -eq 0) { return $null }
+    $lw = Get-TuiListWidth
+    $row = [Math]::Min([Math]::Max(0, $Y - 3), (Get-TuiOutputHeight) - 1)
+    $line = [Math]::Min($script:S.Scroll + $row, $script:S.Wrapped.Count - 1)
+    $cell = [Math]::Max(0, $X - $lw - 3)
+    @{ Line = $line; Col = $cell }
+}
+
+# selection normalized to A <= B with B.Line clamped to the buffer
+function Get-TuiSelNorm {
+    $sel = $script:S.Sel
+    if (-not $sel -or $script:S.Wrapped.Count -eq 0) { return $null }
+    $a = $sel.A; $b = $sel.B
+    if ($b.Line -lt $a.Line -or ($b.Line -eq $a.Line -and $b.Col -lt $a.Col)) { $a, $b = $b, $a }
+    if ($a.Line -ge $script:S.Wrapped.Count) { return $null }
+    @{ A = $a; B = $b; BLine = [Math]::Min([int]$b.Line, $script:S.Wrapped.Count - 1) }
+}
+
+# display cell -> char index into $Text (wide chars are 2 cells)
+function Get-TuiCellCharIndex {
+    param([string]$Text, [int]$Cell)
+    if ($Cell -le 0 -or -not $Text) { return 0 }
+    if ($Text -match '^[\x20-\x7e]*$') { return [Math]::Min($Cell, $Text.Length) }
+    $w = 0; $i = 0
+    while ($i -lt $Text.Length) {
+        if ($w -ge $Cell) { return $i }
+        $w += Get-StoCodepointWidth ([char]::ConvertToUtf32($Text, $i))
+        $i += [char]::IsSurrogatePair($Text, $i) ? 2 : 1
+    }
+    $Text.Length
+}
+
+# copy the dragged selection: stream semantics (anchor->end of line, full
+# middle lines, start->release), wrapped folds of one source line rejoined
+function Copy-TuiSelection {
+    $n = Get-TuiSelNorm
+    if (-not $n) { return }
+    $wrapped = $script:S.Wrapped
+    $sb = [Text.StringBuilder]::new()
+    for ($i = [int]$n.A.Line; $i -le $n.BLine; $i++) {
+        $text = $wrapped[$i]
+        $from = if ($i -eq [int]$n.A.Line) { Get-TuiCellCharIndex $text ([int]$n.A.Col) } else { 0 }
+        $to = if ($i -eq $n.BLine) { Get-TuiCellCharIndex $text ([int]$n.B.Col + 1) } else { $text.Length }
+        if ($to -gt $from) { [void]$sb.Append($text.Substring($from, $to - $from)) }
+        if ($i -lt $n.BLine) {
+            # same source line folded by wrapping -> rejoin with the space the
+            # wrap consumed; a real line break stays a newline
+            if ($script:S.WrapSrc[$i + 1] -eq $script:S.WrapSrc[$i]) { [void]$sb.Append(' ') }
+            else { [void]$sb.Append("`n") }
+        }
+    }
+    $text = $sb.ToString()
+    if (-not $text.Trim()) { $script:S.Sel = $null; $script:S.Dirty = $true; return }   # empty drag — no toast
+    $how = Copy-StoClipboard -Text $text
+    $lines = $n.BLine - [int]$n.A.Line + 1
+    $what = if ($lines -gt 1) { "$lines lines" } else { "$($text.Length) chars" }
+    Set-TuiStatus "copied $what to clipboard ($($how -replace '^copied ', ''))" -Kind ok
 }
 
 # Click-to-copy for device-login codes (e.g. Microsoft "enter the code
@@ -324,15 +440,44 @@ function Add-TuiOutput {
     $cfg = Get-StoConfig
     foreach ($l in $Lines) {
         $clean = $script:AnsiRegex.Replace("$l", '')
+        # a raw tab reaches the terminal as a variable-width jump that shears
+        # the padded row — and the scrollbar column — off the panel edge;
+        # other C0 controls corrupt the frame outright
+        if ($clean.Contains("`t")) { $clean = Expand-TuiTabs $clean }
+        $clean = [regex]::Replace($clean, '[\x00-\x08\x0b-\x1f\x7f]', '')
         $script:S.Lines.Add($clean)
-        foreach ($w in (Get-TuiWrappedLine $clean)) { $script:S.Wrapped.Add($w) }
+        $src = $script:S.Lines.Count - 1
+        foreach ($w in (Get-TuiWrappedLine $clean)) {
+            $script:S.Wrapped.Add($w)
+            $script:S.WrapSrc.Add($src)
+        }
     }
-    $max = [int]$cfg.maxOutputLines
-    if ($script:S.Lines.Count -gt $max) {
+    # trim with hysteresis: trimming exactly at the cap re-wraps the whole
+    # buffer on every appended line once it's full (30x/s during a chatty run)
+    $max = [Math]::Max(100, [int]$cfg.maxOutputLines)
+    if ($script:S.Lines.Count -gt $max * 1.1) {
         $script:S.Lines.RemoveRange(0, $script:S.Lines.Count - $max)
         Reset-TuiWrap
     }
     $script:S.Dirty = $true
+}
+
+# expand tabs to 8-column stops (display-cell aware)
+function Expand-TuiTabs {
+    param([string]$Line)
+    $sb = [Text.StringBuilder]::new()
+    $parts = $Line.Split("`t")
+    $col = 0
+    for ($i = 0; $i -lt $parts.Count; $i++) {
+        [void]$sb.Append($parts[$i])
+        if ($i -lt $parts.Count - 1) {
+            $col += Get-StoDisplayWidth $parts[$i]
+            $pad = 8 - ($col % 8)
+            [void]$sb.Append(' ' * $pad)
+            $col += $pad
+        }
+    }
+    $sb.ToString()
 }
 
 # full-width rule with inset text: ─── ▶ backup-db · 12:00:03 ───────────
@@ -385,14 +530,20 @@ function Get-TuiWrappedLine {
 
 function Reset-TuiWrap {
     $script:S.Wrapped = [System.Collections.Generic.List[string]]::new()
-    foreach ($l in $script:S.Lines) {
-        foreach ($w in (Get-TuiWrappedLine $l)) { $script:S.Wrapped.Add($w) }
+    $script:S.WrapSrc = [System.Collections.Generic.List[int]]::new()
+    $script:S.Sel = $null; $script:S.SelDrag = $null   # wrapped indexes just moved
+    for ($i = 0; $i -lt $script:S.Lines.Count; $i++) {
+        foreach ($w in (Get-TuiWrappedLine $script:S.Lines[$i])) {
+            $script:S.Wrapped.Add($w)
+            $script:S.WrapSrc.Add($i)
+        }
     }
 }
 
 function Clear-TuiOutput {
-    $script:S.Lines.Clear(); $script:S.Wrapped.Clear()
+    $script:S.Lines.Clear(); $script:S.Wrapped.Clear(); $script:S.WrapSrc.Clear()
     $script:S.Scroll = 0; $script:S.Follow = $true
+    $script:S.Sel = $null; $script:S.SelDrag = $null
     $script:S.Dirty = $true
 }
 
@@ -427,8 +578,14 @@ function Get-TuiAnim {
     @{ T = 1 - $u * $u * $u; Data = $a.Data }   # cubic ease-out
 }
 
-# spinner frame for the current tick, tinted along a BrCyan→Blue ramp that
-# cycles with the frames (precomputed once — no per-frame color math)
+# spinner frame index off the wall clock (~10fps), not the loop tick, so the
+# animation speed doesn't change with the redraw cadence
+function Get-TuiSpinnerIndex {
+    [int]([Math]::Floor($script:Clock.ElapsedMilliseconds / 100) % $script:SpinnerFrames.Count)
+}
+
+# spinner frame, tinted along a BrCyan→Blue ramp that cycles with the frames
+# (precomputed once — no per-frame color math)
 function Get-TuiSpinner {
     if (-not $script:SpinnerColors) {
         $p = (Get-StoTheme).Palette
@@ -437,7 +594,7 @@ function Get-TuiSpinner {
             ConvertTo-AnsiFg (Get-StoBlendHex $p.BrCyan $p.Blue ([Math]::Abs($i * 2.0 / $n - 1)))
         })
     }
-    $i = $script:S.Tick % $script:SpinnerFrames.Count
+    $i = Get-TuiSpinnerIndex
     "$($script:SpinnerColors[$i])$($script:SpinnerFrames[$i])"
 }
 
@@ -811,6 +968,16 @@ function Open-TuiConfirm {
 # ===========================================================================
 function Invoke-TuiKey {
     param([ConsoleKeyInfo]$Key)
+    # ctrl+c quits cleanly from every mode — it belongs to the terminal, not
+    # to whichever overlay happens to be open
+    if ($Key.Key -eq 'C' -and ($Key.Modifiers -band [ConsoleModifiers]::Control)) {
+        if ($script:S.Run) {
+            $script:S.Env = $null; $script:S.History = $null; $script:S.Input = $null; $script:S.Deps = $null
+            $script:S.Mode = 'list'
+            Open-TuiConfirm -Message 'a script is running — kill it and quit?' -OnYes { $script:S.Quit = $true }
+        } else { $script:S.Quit = $true }
+        return
+    }
     switch ($script:S.Mode) {
         'list' { Invoke-TuiKeyList $Key }
         'deps' { Invoke-TuiKeyDeps $Key }
@@ -824,8 +991,7 @@ function Invoke-TuiKey {
 
 function Invoke-TuiKeyList {
     param([ConsoleKeyInfo]$Key)
-    $ctrlC = ($Key.Key -eq 'C' -and $Key.Modifiers -band [ConsoleModifiers]::Control)
-    if ($ctrlC -or $Key.KeyChar -eq 'q') {
+    if ($Key.KeyChar -eq 'q') {
         if ($script:S.Run) {
             Open-TuiConfirm -Message 'a script is running — kill it and quit?' -OnYes { $script:S.Quit = $true }
         } else { $script:S.Quit = $true }
@@ -1236,12 +1402,17 @@ function Show-TuiFrame {
     # chip-style: only the title carries the accent fill; the rest of the
     # line is transparent with the repo/host info kept muted on the right
     $title = ' ▸ scriptorium '
-    $repoList = @(Get-StoRepos | Where-Object Url)
-    $repo = if ($repoList.Count -gt 1) {
-        ($repoList | ForEach-Object Name) -join ' + '
-    } elseif ($repoList.Count -eq 1) {
-        ($repoList[0].Url -replace '^https://(x-access-token:[^@]+@)?', '')
-    } else { 'no scripts repo configured' }
+    if (-not $script:S.HeaderRepo) {
+        # config can't change mid-session — build the repo chip text once, not
+        # via Get-StoRepos object churn on every frame
+        $repoList = @(Get-StoRepos | Where-Object Url)
+        $script:S.HeaderRepo = if ($repoList.Count -gt 1) {
+            ($repoList | ForEach-Object Name) -join ' + '
+        } elseif ($repoList.Count -eq 1) {
+            ($repoList[0].Url -replace '^https://(x-access-token:[^@]+@)?', '')
+        } else { 'no scripts repo configured' }
+    }
+    $repo = $script:S.HeaderRepo
     $ver = if ($script:S.AppVersion) { " · $($script:S.AppVersion)" } else { '' }
     $sync = ''
     if ($script:S.ContainsKey('LastSync') -and $script:S.LastSync) {
@@ -1272,7 +1443,7 @@ function Show-TuiFrame {
     # ---- panel top border --------------------------------------------------
     $listTitle = if ($script:S.Filter) { " ≡ scripts /$($script:S.Filter) " } else { ' ≡ scripts ' }
     $spin = ''
-    if ($script:S.Run) { $spin = $script:SpinnerFrames[$script:S.Tick % $script:SpinnerFrames.Count] + ' ' }
+    if ($script:S.Run) { $spin = $script:SpinnerFrames[(Get-TuiSpinnerIndex)] + ' ' }
     $outTitle = " ❯ $spin$($script:S.OutTitle) "
     if ($listTitle.Length -gt $lw) { $listTitle = $listTitle.Substring(0, $lw) }
     if ($outTitle.Length -gt $rw) { $outTitle = $outTitle.Substring(0, $rw) }
@@ -1469,6 +1640,9 @@ function Get-TuiListRows {
             $ms = $script:Clock.ElapsedMilliseconds - $script:S.MarqueeAt - 1000
             $loop = $scr.Name + '   ·   '
             $off = if ($ms -gt 0) { [int][Math]::Floor($ms / 165) % $loop.Length } else { 0 }
+            # never start the window on a low surrogate — Substring would split
+            # the pair and the width walk downstream throws
+            if ($off -gt 0 -and [char]::IsLowSurrogate($loop[$off])) { $off++ }
             $nameText = ($loop + $loop).Substring($off)
         }
         $name = Format-TuiPad -Text $nameText -Width ($Width - 12)
@@ -1515,10 +1689,21 @@ function Get-TuiDetailRows {
         $root = "$((Get-StoPaths).ScriptsDir)"
         if ($root -and $entry.StartsWith($root)) { $entry = $entry.Substring($root.Length).TrimStart('/', '\') }
         else { $entry = $entry.Replace($HOME, '~') }
-        $envN = Get-TuiEnvVarCount -Script $sel
-        $mods = if (Test-StoPythonScript $sel) {
-            if (Test-StoVenv -Script $sel) { 'venv ✓' } else { 'venv —' }
-        } elseif ($sel.ModuleDir -and (Test-Path $sel.ModuleDir)) { 'mods ✓' } else { 'mods —' }
+        # fs-derived facts (env var count, venv/module presence) on a 2s TTL —
+        # during a run this card renders ~10x/s and these stat() the disk
+        $dc = $script:S.DetailCache
+        if (-not $dc -or $dc.Name -ne $sel.Name -or ((Get-Date) - $dc.At).TotalSeconds -gt 2) {
+            $dc = @{
+                Name = $sel.Name; At = (Get-Date)
+                EnvN = (Get-TuiEnvVarCount -Script $sel)
+                Mods = $(if (Test-StoPythonScript $sel) {
+                        if (Test-StoVenv -Script $sel) { 'venv ✓' } else { 'venv —' }
+                    } elseif ($sel.ModuleDir -and (Test-Path $sel.ModuleDir)) { 'mods ✓' } else { 'mods —' })
+            }
+            $script:S.DetailCache = $dc
+        }
+        $envN = $dc.EnvN
+        $mods = $dc.Mods
         $cron = '—'
         if ($script:S.Schedules.ContainsKey($sel.Name)) {
             $expr = $script:S.Schedules[$sel.Name]
@@ -1586,7 +1771,7 @@ function Get-TuiActivityRows {
     if ($running.Count -eq 0) {
         $rows += "$($t.Muted)$(Format-TuiPad -Text ' · idle — nothing running' -Width $Width)"
     } else {
-        $spin = $script:SpinnerFrames[$script:S.Tick % $script:SpinnerFrames.Count]
+        $spin = $script:SpinnerFrames[(Get-TuiSpinnerIndex)]
         # if they don't all fit, the last row becomes a "+n more" summary
         $show = if ($running.Count -gt $Count) { $Count - 1 } else { $running.Count }
         for ($i = 0; $i -lt $show; $i++) {
@@ -1692,6 +1877,7 @@ function Get-TuiOutputRows {
     }
 
     $rows = @()
+    $sel = Get-TuiSelNorm
     for ($i = 0; $i -lt $Count; $i++) {
         $idx = $offset + $i
         $text = if ($idx -lt $wrapped.Count) { $wrapped[$idx] } else { '' }
@@ -1709,11 +1895,23 @@ function Get-TuiOutputRows {
             if ($i -ge $thumbPos -and $i -lt ($thumbPos + $thumbLen)) { "$($t.Blue)█" } else { "$($t.Muted)│" }
         } else { ' ' }
         $padded = Format-TuiPad -Text $text -Width $textW
-        # inverse-highlight search matches; ANSI-only insertion, width unchanged
-        $term = $script:S.SearchTerm
-        if ($term -and $text) {
-            $padded = [regex]::Replace($padded, '(' + [regex]::Escape($term) + ')',
-                "$($t.SelBg)$($t.White)" + '$1' + "$($t.Reset)$($t.Bg)$color", 'IgnoreCase')
+        if ($sel -and $idx -ge [int]$sel.A.Line -and $idx -le $sel.BLine) {
+            # mouse selection: reverse-video the dragged span (trumps search
+            # highlighting on these rows — both would fight over the cells)
+            $c1 = if ($idx -eq [int]$sel.A.Line) { [int]$sel.A.Col } else { 0 }
+            $c2 = if ($idx -eq $sel.BLine) { [int]$sel.B.Col } else { $textW - 1 }
+            $i1 = Get-TuiCellCharIndex $padded $c1
+            $i2 = Get-TuiCellCharIndex $padded ($c2 + 1)
+            if ($i2 -gt $i1) {
+                $padded = $padded.Substring(0, $i1) + "`e[7m" + $padded.Substring($i1, $i2 - $i1) + "`e[27m" + $padded.Substring($i2)
+            }
+        } else {
+            # inverse-highlight search matches; ANSI-only insertion, width unchanged
+            $term = $script:S.SearchTerm
+            if ($term -and $text) {
+                $padded = [regex]::Replace($padded, '(' + [regex]::Escape($term) + ')',
+                    "$($t.SelBg)$($t.White)" + '$1' + "$($t.Reset)$($t.Bg)$color", 'IgnoreCase')
+            }
         }
         $rows += "$color$padded$bar"
     }
@@ -1904,7 +2102,7 @@ function Get-TuiHelpRows {
         @('j / k', 'navigate the list (vim-style) · g / G top / bottom'),
         @('/', 'filter the script list (live, esc restores)'),
         @('tab', 'switch pane focus — j/k/g/G scroll the focused pane'),
-        @('mouse', 'wheel scrolls · click selects · click an auth code to copy it'),
+        @('mouse', 'wheel scrolls · click selects · drag over output copies the text'),
         @('t', 'send a test event to the n8n webhook'),
         @('?', 'this help'),
         @('q', 'quit'),
@@ -1953,14 +2151,14 @@ function Get-TuiStatusLine {
             $pre = $in.Text.Substring(0, $in.Cursor)
             $cur = if ($in.Cursor -lt $in.Text.Length) { $in.Text[$in.Cursor] } else { ' ' }
             $post = if ($in.Cursor -lt $in.Text.Length) { $in.Text.Substring($in.Cursor + 1) } else { '' }
-            $plainLen = " $($in.Prompt): $($in.Text) ".Length + 1
+            $plainLen = (Get-StoDisplayWidth " $($in.Prompt): $($in.Text) ") + 1
             $pad = [Math]::Max(0, $Width - $plainLen)
             return " $($t.Cyan)$($in.Prompt):$($t.Fg) $pre$($t.SelBg)$($t.White)$cur$($t.Reset)$($t.Bg)$($t.Fg)$post$(' ' * $pad)"
         }
         'confirm' {
             $c = $script:S.Confirm
             $plain = " $($c.Message)  y confirm · esc cancel"
-            $pad = [Math]::Max(0, $Width - $plain.Length)
+            $pad = [Math]::Max(0, $Width - (Get-StoDisplayWidth $plain))
             return " $($t.BrYellow)$($c.Message)$($t.Fg)  $($t.Green)y$($t.Fg) confirm · $($t.Muted)esc cancel$(' ' * $pad)"
         }
     }

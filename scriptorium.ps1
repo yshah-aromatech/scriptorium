@@ -130,7 +130,9 @@ if ($historyOnly) {
     if ($historyName) { $items = @($items | Where-Object { "$($_.script)" -eq $historyName }) }
     if ($items.Count -eq 0) { Write-Host 'no runs recorded'; exit 0 }
     foreach ($h in $items) {
-        $when = "$($h.startedAt)" -replace 'T', ' ' -replace '\.\d+Z$', 'Z'
+        # ConvertFrom-Json yields Kind=Utc [datetime] — print as local time
+        $started = $h.startedAt -as [datetime]
+        $when = if ($started) { $started.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss') } else { "$($h.startedAt)" }
         '{0}  {1,-9} {2,-25} {3,8}  cpu {4,5}%  mem {5,7}MB  [{6}]' -f
         $when, $h.status, $h.script, (Format-StoDuration ([double]$h.durationSec)),
         $h.resources.cpuMaxPercent, $h.resources.memMaxMb, $h.trigger

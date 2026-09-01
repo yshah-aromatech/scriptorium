@@ -187,13 +187,107 @@ Describe 'Initialize-Sto config handling' {
         $new = Join-Path $paths.LogsDir 'new.log'
         'x' | Set-Content $old; 'x' | Set-Content $new
         (Get-Item $old).LastWriteTime = (Get-Date).AddDays(-30)
-        1..20 | ForEach-Object { "{""script"":""s$_""}" } | Set-Content $paths.HistoryFile
+        $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+        1..20 | ForEach-Object { "{""script"":""s$_"",""status"":""success"",""startedAt"":""$stamp""}" } |
+            Set-Content $paths.HistoryFile
 
-        Clear-StoOldData
+        Clear-StoOldData -Force
         Test-Path $old | Should -BeFalse
         Test-Path $new | Should -BeTrue
         @(Get-Content $paths.HistoryFile).Count | Should -Be 5
         (Get-Content $paths.HistoryFile | Select-Object -Last 1) | Should -Match 's20'
+    }
+}
+
+Describe 'Clear-StoOldData retention policy' {
+    BeforeAll {
+        # defined in BeforeAll (not the Describe body) so it exists at run
+        # phase, not just discovery
+        function Add-Row([string]$Script, [string]$Status, [double]$AgeDays, [string]$LogFile = '') {
+            $at = (Get-Date).ToUniversalTime().AddDays(-$AgeDays).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            $row = @{ script = $Script; status = $Status; startedAt = $at }
+            if ($LogFile) { $row.logFile = $LogFile }
+            ($row | ConvertTo-Json -Compress) | Add-Content -Path $script:paths.HistoryFile
+        }
+    }
+    BeforeEach {
+        $script:appDir = Join-Path ([IO.Path]::GetTempPath()) "pss-ret-$(New-Guid)"
+        New-Item -ItemType Directory -Path $script:appDir -Force | Out-Null
+        @{ dataDir = (Join-Path $script:appDir 'data') } | ConvertTo-Json |
+            Set-Content (Join-Path $script:appDir 'config.json')
+        Initialize-Sto -AppDir $script:appDir
+        $script:paths = Get-StoPaths
+        # fake a frequent (*/5) schedule for 'fast' — Cron.psm1 isn't loaded here
+        function global:Get-StoSchedules { @{ fast = '*/5 * * * *' } }
+        function global:Get-StoCronNext { param([string]$Expression, [datetime]$From = (Get-Date)) $From.AddMinutes(5) }
+    }
+    AfterEach {
+        Remove-Item $script:appDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item function:global:Get-StoSchedules, function:global:Get-StoCronNext -ErrorAction SilentlyContinue
+    }
+
+    It 'keeps 30 days, drops older, and deletes pruned rows'' logs' {
+        $oldLog = Join-Path $script:paths.LogsDir 'gone.log'
+        'x' | Set-Content $oldLog
+        Add-Row 'slow' 'success' 40 $oldLog
+        Add-Row 'slow' 'failure' 20
+        Add-Row 'slow' 'success' 2
+        Clear-StoOldData -Force
+        $rows = @(Get-Content $script:paths.HistoryFile)
+        $rows.Count | Should -Be 2
+        Test-Path $oldLog | Should -BeFalse
+    }
+
+    It 'keeps successes of frequent scripts only 1 day, failures 30 days' {
+        $staleLog = Join-Path $script:paths.LogsDir 'stale-ok.log'
+        'x' | Set-Content $staleLog
+        Add-Row 'fast' 'success' 2 $staleLog     # frequent + stale success -> pruned
+        Add-Row 'fast' 'success' 0.5             # fresh success -> kept
+        Add-Row 'fast' 'failure' 20              # failure -> kept
+        Add-Row 'fast' 'killed' 20               # interrupted -> kept
+        Add-Row 'slow' 'success' 20              # not frequent -> kept
+        Clear-StoOldData -Force
+        $rows = @(Get-Content $script:paths.HistoryFile)
+        $rows.Count | Should -Be 4
+        ($rows -join '') | Should -Not -Match 'stale-ok'
+        Test-Path $staleLog | Should -BeFalse
+    }
+
+    It 'drops corrupt rows and skips the prune when re-run within the hour' {
+        Add-Row 'slow' 'success' 2
+        'not json' | Add-Content $script:paths.HistoryFile
+        Clear-StoOldData -Force
+        @(Get-Content $script:paths.HistoryFile).Count | Should -Be 1
+        Add-Row 'slow' 'success' 40   # would be pruned, but the stamp throttles
+        Clear-StoOldData
+        @(Get-Content $script:paths.HistoryFile).Count | Should -Be 2
+    }
+
+    It 'never deletes log files outside the logs dir' {
+        $outside = Join-Path $script:appDir 'precious.log'
+        'x' | Set-Content $outside
+        Add-Row 'slow' 'success' 40 $outside
+        Clear-StoOldData -Force
+        Test-Path $outside | Should -BeTrue
+    }
+
+    It 'never deletes from a sibling dir sharing the logs-dir prefix' {
+        $sibDir = "$($script:paths.LogsDir)-archive"
+        New-Item -ItemType Directory -Path $sibDir -Force | Out-Null
+        $sib = Join-Path $sibDir 'keepme.log'
+        'x' | Set-Content $sib
+        Add-Row 'slow' 'success' 40 $sib
+        Clear-StoOldData -Force
+        Test-Path $sib | Should -BeTrue
+    }
+
+    It 'always keeps the newest row per script, even a stale success' {
+        $log = Join-Path $script:paths.LogsDir 'newest.log'
+        'x' | Set-Content $log
+        Add-Row 'fast' 'success' 5 $log   # stale by the 1-day rule, but the script's only row
+        Clear-StoOldData -Force
+        @(Get-Content $script:paths.HistoryFile).Count | Should -Be 1
+        Test-Path $log | Should -BeTrue   # its log survives with it
     }
 }
 

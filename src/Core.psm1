@@ -3,7 +3,7 @@
 $script:AppDir = $null
 $script:Config = $null
 $script:Paths = $null
-$script:Secrets = [System.Collections.Generic.List[string]]::new()
+$script:Secrets = [System.Collections.Generic.HashSet[string]]::new()   # every run registers; the MCP server lives for weeks
 $script:ConfigWarnings = [System.Collections.Generic.List[string]]::new()
 $script:ColorMode = 'truecolor'   # truecolor | 256
 
@@ -131,8 +131,8 @@ $script:ConfigDefaults = [ordered]@{
     openRouterModel   = 'google/gemini-3.1-flash-lite'
     syncOnLaunch      = $false
     logRetentionDays  = 30
-    historyMaxLines   = 5000
-    historyDays       = 7          # history tab time window (0 = last 200 runs)
+    historyMaxLines   = 50000      # safety backstop only — retention is time-based
+    historyDays       = 30         # history window: retention + history tab (0 = last 200 runs in the tab)
     webhookTimeoutSec = 15
     colorMode         = 'auto'      # auto | truecolor | 256
     mcpPort           = 8765
@@ -247,12 +247,29 @@ function Initialize-Sto {
 }
 
 # ---------------------------------------------------------------------------
-# Retention: prune old run logs and cap the history file so a long-lived
-# server never fills its disk. Runs at every startup (TUI and headless).
+# Retention — runs at every startup (TUI and headless), throttled to once an
+# hour since every cron run boots the app. Policy:
+#   - history is a rolling window of historyDays (default 30) days
+#   - scripts cron-scheduled every <=10 minutes keep success rows only 1 day;
+#     failures/killed/timeout/skipped keep the full window
+#   - a pruned history row deletes its log file with it; orphaned logs fall
+#     back to the logRetentionDays age prune
+#   - historyMaxLines is only a safety backstop against pathological growth
 # ---------------------------------------------------------------------------
 function Clear-StoOldData {
+    param([switch]$Force)
     $cfg = $script:Config
     $paths = $script:Paths
+
+    $stamp = Join-Path $paths.DataDir '.last-prune'
+    if (-not $Force) {
+        try {
+            if ((Test-Path $stamp) -and ((Get-Date) - (Get-Item -Force $stamp).LastWriteTime).TotalHours -lt 1) { return }
+        } catch { }
+    }
+    try { New-Item -ItemType File -Path $stamp -Force | Out-Null } catch { }
+
+    # aged/orphaned log files
     try {
         $days = [double]$cfg.logRetentionDays
         if ($days -gt 0 -and (Test-Path $paths.LogsDir)) {
@@ -262,16 +279,85 @@ function Clear-StoOldData {
                 Remove-Item -Force -ErrorAction SilentlyContinue
         }
     } catch { }
+
+    # history rows + their log files
     try {
+        if (-not (Test-Path $paths.HistoryFile)) { return }
+        $winDays = [double]$cfg.historyDays
+        if ($winDays -le 0) { $winDays = 30 }   # historyDays=0 only changes the tab view, not retention
+        $nowUtc = (Get-Date).ToUniversalTime()
+        $histCutoff = $nowUtc.AddDays(-$winDays)
+        $successCutoff = $nowUtc.AddDays(-1)
+        $frequent = Get-StoFrequentScripts
+        # pass 1: newest row index per script — every status surface (list
+        # badges, --list, MCP list_scripts) is last-row-wins per script, so
+        # the newest row must survive the prune even when it's a stale success
+        $newest = @{}
+        $rowIdx = 0
+        foreach ($line in [IO.File]::ReadLines($paths.HistoryFile)) {
+            if ($line -match '"script"\s*:\s*"([^"]*)"') { $newest[$Matches[1]] = $rowIdx }
+            $rowIdx++
+        }
+        $keep = [System.Collections.Generic.List[string]]::new()
+        $dropLogs = [System.Collections.Generic.List[string]]::new()
+        $dropped = 0
+        $rowIdx = 0
+        foreach ($line in [IO.File]::ReadLines($paths.HistoryFile)) {
+            $idx = $rowIdx++
+            $h = $null
+            if ($line.Trim()) { try { $h = $line | ConvertFrom-Json } catch { } }
+            $at = if ($h) { $h.startedAt -as [datetime] } else { $null }
+            if (-not $at) { $dropped++; continue }   # blank/corrupt rows are dead weight
+            $at = $at.ToUniversalTime()
+            $stale = ($at -lt $histCutoff) -or
+                ("$($h.status)" -eq 'success' -and $at -lt $successCutoff -and $frequent.ContainsKey("$($h.script)"))
+            if ($stale -and $newest["$($h.script)"] -ne $idx) {
+                $dropped++
+                if ("$($h.logFile)") { $dropLogs.Add("$($h.logFile)") }
+                continue
+            }
+            $keep.Add($line)
+        }
         $max = [int]$cfg.historyMaxLines
-        if ($max -gt 0 -and (Test-Path $paths.HistoryFile)) {
-            $lines = @(Get-Content $paths.HistoryFile -ErrorAction SilentlyContinue)
-            if ($lines.Count -gt $max) {
-                $lines[($lines.Count - $max)..($lines.Count - 1)] |
-                    Set-Content -Path $paths.HistoryFile -Encoding UTF8
+        if ($max -gt 0 -and $keep.Count -gt $max) {
+            $dropped += $keep.Count - $max
+            $keep.RemoveRange(0, $keep.Count - $max)
+        }
+        if ($dropped -gt 0) {
+            # ponytail: rewrite can drop a history append racing in this exact
+            # instant; hourly throttle + atomic move keep the window tiny
+            $tmp = "$($paths.HistoryFile).tmp"
+            [IO.File]::WriteAllLines($tmp, $keep)
+            [IO.File]::Move($tmp, $paths.HistoryFile, $true)   # one rename(2) — Move-Item -Force deletes then renames
+            $logsRoot = [IO.Path]::GetFullPath($paths.LogsDir).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+            foreach ($lf in $dropLogs) {
+                try {
+                    # never delete anything outside our own logs dir
+                    if ([IO.Path]::GetFullPath($lf).StartsWith($logsRoot, [StringComparison]::Ordinal) -and (Test-Path $lf)) {
+                        Remove-Item $lf -Force -ErrorAction SilentlyContinue
+                    }
+                } catch { }
             }
         }
     } catch { }
+}
+
+# script name -> $true for every cron-scheduled script firing at 10-minute
+# intervals or tighter (gap between its next two firings <= 10 min).
+# Cron.psm1 loads alongside this module in the app; standalone imports
+# (tests) just get an empty map.
+function Get-StoFrequentScripts {
+    $map = @{}
+    if (-not (Get-Command Get-StoSchedules -ErrorAction SilentlyContinue)) { return $map }
+    foreach ($kv in (Get-StoSchedules).GetEnumerator()) {
+        try {
+            $n1 = Get-StoCronNext -Expression $kv.Value
+            if (-not $n1) { continue }
+            $n2 = Get-StoCronNext -Expression $kv.Value -From $n1
+            if ($n2 -and ($n2 - $n1).TotalMinutes -le 10) { $map[$kv.Key] = $true }
+        } catch { }
+    }
+    $map
 }
 
 function Get-StoConfig { $script:Config }
@@ -442,7 +528,7 @@ function Register-StoSecret {
     if (-not $Value -or $Value.Length -lt 8) { return }
     if (-not $Force -and $Name -and
         $Name -notmatch 'TOKEN|KEY|SECRET|PASSWORD|PASSWD|PASS|PAT|CREDENTIAL|WEBHOOK|AUTH|CONN|DSN|BEARER') { return }
-    if (-not $script:Secrets.Contains($Value)) { $script:Secrets.Add($Value) }
+    [void]$script:Secrets.Add($Value)
 }
 
 function Hide-StoSecret {
@@ -590,21 +676,39 @@ function Copy-StoClipboard {
             @{ Cmd = 'wl-copy'; Args = @() },
             @{ Cmd = 'xclip'; Args = @('-selection', 'clipboard') },
             @{ Cmd = 'xsel'; Args = @('--clipboard', '--input') })) {
-        if (Get-Command $tool.Cmd -ErrorAction SilentlyContinue) {
-            try {
-                $Text | & $tool.Cmd @($tool.Args) 2>$null
-                if ($LASTEXITCODE -eq 0) { return "copied via $($tool.Cmd)" }
-            } catch { }
-        }
+        $exe = (Get-Command $tool.Cmd -ErrorAction SilentlyContinue)
+        if (-not $exe) { continue }
+        try {
+            # stdin via Process so the clipboard gets the text verbatim —
+            # a PowerShell pipe to a native command appends a trailing newline
+            $psi = [System.Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = $exe.Source
+            foreach ($a in $tool.Args) { [void]$psi.ArgumentList.Add($a) }
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardInput = $true
+            $p = [System.Diagnostics.Process]::Start($psi)
+            $p.StandardInput.Write($Text)
+            $p.StandardInput.Close()
+            if ($p.WaitForExit(3000) -and $p.ExitCode -eq 0) { return "copied via $($tool.Cmd)" }
+        } catch { }
     }
-    # OSC 52 — works over SSH if the terminal supports it
-    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Text))
-    [Console]::Write("`e]52;c;$b64`a")
-    'copied via OSC 52'
+    # OSC 52 — works over SSH if the terminal supports it. Terminals cap the
+    # payload (commonly ~100KB base64), so cap the text rather than silently
+    # sending a sequence the terminal drops whole.
+    $capped = $false
+    if ($Text.Length -gt 72KB) { $Text = $Text.Substring($Text.Length - 72KB); $capped = $true }
+    $osc = "`e]52;c;$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Text)))`a"
+    if ($env:TMUX -or $env:STY) {
+        # tmux/screen swallow OSC 52 unless wrapped in a DCS passthrough
+        # (inner ESC doubled); tmux additionally needs `allow-passthrough on`
+        $osc = "`ePtmux;`e$osc`e\"
+    }
+    [Console]::Write($osc)
+    if ($capped) { 'copied last 72KB via OSC 52' } else { 'copied via OSC 52' }
 }
 
 Export-ModuleMember -Function Initialize-Sto, Get-StoConfig, Get-StoConfigWarnings, Get-StoScriptsRepo, Get-StoRepos, Add-StoRepoConfig,
 Get-StoPaths, Get-StoAppDir, Get-StoAppVersion, Get-StoTheme, Read-StoEnvFile, Read-StoEnvDoc, Register-StoSecret,
 Hide-StoSecret, Format-StoDuration, Format-StoRelativeTime, Copy-StoClipboard,
 ConvertTo-AnsiFg, ConvertTo-AnsiBg, ConvertTo-Ansi256Index, Get-StoBlendHex,
-Get-StoDisplayWidth, Get-StoCodepointWidth, Format-StoCell, Split-StoArguments, Clear-StoOldData
+Get-StoDisplayWidth, Get-StoCodepointWidth, Format-StoCell, Split-StoArguments, Clear-StoOldData, Get-StoFrequentScripts

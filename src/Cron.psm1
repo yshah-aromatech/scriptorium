@@ -11,13 +11,19 @@ $script:LegacyBlockEnd = '# <<< psscripts managed block <<<'
 function Test-StoBlockStart { param([string]$Line) $Line -in $script:BlockStart, $script:LegacyBlockStart }
 function Test-StoBlockEnd { param([string]$Line) $Line -in $script:BlockEnd, $script:LegacyBlockEnd }
 
-function Get-StoCrontabLines {
+# @{ Ok; Lines } — Ok=$false means `crontab -l` actually FAILED (spool
+# permissions, missing binary), which is NOT the same as an empty crontab:
+# writing back on a failed read would wipe every unmanaged entry the user has.
+function Get-StoCrontab {
     try {
         $out = & crontab -l 2>$null
-        if ($LASTEXITCODE -ne 0 -or $null -eq $out) { return @() }
-        @($out)
-    } catch { @() }
+        if ($LASTEXITCODE -eq 0 -and $null -ne $out) { return @{ Ok = $true; Lines = @($out) } }
+        # "no crontab for <user>" exits 1 with no stdout — an empty crontab
+        @{ Ok = ($null -eq $out -or @($out).Count -eq 0); Lines = @() }
+    } catch { @{ Ok = $false; Lines = @() } }
 }
+
+function Get-StoCrontabLines { (Get-StoCrontab).Lines }
 
 # script name -> cron expression
 function Get-StoSchedules {
@@ -43,10 +49,13 @@ function Save-StoSchedules {
     $appDir = Get-StoAppDir
     $pwshBin = [string]$cfg.pwshBin
 
-    # everything outside the managed block is preserved untouched
+    # everything outside the managed block is preserved untouched — and a
+    # failed crontab read must abort, or those entries would be destroyed
+    $tab = Get-StoCrontab
+    if (-not $tab.Ok) { return $false }
     $kept = [System.Collections.Generic.List[string]]::new()
     $inBlock = $false
-    foreach ($line in (Get-StoCrontabLines)) {
+    foreach ($line in $tab.Lines) {
         if (Test-StoBlockStart $line) { $inBlock = $true; continue }
         if (Test-StoBlockEnd $line) { $inBlock = $false; continue }
         if (-not $inBlock) { $kept.Add($line) }
@@ -59,7 +68,10 @@ function Save-StoSchedules {
         foreach ($name in ($Schedules.Keys | Sort-Object)) {
             $expr = $Schedules[$name]
             $log = Join-Path $paths.LogsDir "cron-$name.log"
-            $new.Add("$expr cd '$appDir' && '$pwshBin' -NoProfile -File scriptorium.ps1 --run '$name' --cron >> '$log' 2>&1")
+            # % is special to crontab (command terminator); paths/names are
+            # single-quoted, and names are pre-validated by Set-StoSchedule
+            $cmd = "cd '$appDir' && '$pwshBin' -NoProfile -File scriptorium.ps1 --run '$name' --cron >> '$log' 2>&1"
+            $new.Add("$expr $($cmd -replace '%', '\%')")
         }
         $new.Add($script:BlockEnd)
     }
@@ -72,6 +84,9 @@ function Save-StoSchedules {
 
 function Set-StoSchedule {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Expression)
+    # a quote or space in the name would break the shell-quoted cron line AND
+    # the reader regex that parses it back — refuse rather than corrupt
+    if ($Name -notmatch '^[A-Za-z0-9._-]+$') { return $false }
     $schedules = Get-StoSchedules
     $schedules[$Name] = $Expression
     Save-StoSchedules -Schedules $schedules

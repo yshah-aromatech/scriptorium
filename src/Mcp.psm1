@@ -185,6 +185,9 @@ function Invoke-StoMcpListScripts {
     $statuses = Get-StoLastStatuses
     $schedules = @{}
     try { $schedules = Get-StoSchedules } catch { }
+    # one lock-dir walk for all scripts, not a Get-Process per script
+    $running = @{}
+    foreach ($r in @(Get-StoRunningScripts)) { $running[$r.Name] = $true }
     $items = foreach ($s in @(Get-StoScripts)) {
         $st = $statuses[$s.Name]
         [ordered]@{
@@ -193,7 +196,7 @@ function Invoke-StoMcpListScripts {
             repo            = "$($s.Repo)"
             description     = "$($s.Description)"
             entry           = [IO.Path]::GetFileName("$($s.Entry)")
-            running         = (Test-StoScriptLocked -Name $s.Name)
+            running         = $running.ContainsKey($s.Name)
             lastStatus      = if ($st) { $st.Status } else { 'never run' }
             lastRunAt       = if ($st -and $st.At) { $st.At.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $null }
             lastDurationSec = if ($st) { $st.DurationSec } else { $null }
@@ -225,15 +228,17 @@ function Invoke-StoMcpRunScript {
         foreach ($k in $Arguments['env'].Keys) { $extraEnv["$k"] = "$($Arguments['env'][$k])" }
     }
     $timeoutOverride = 0.0
-    if ($null -ne ($Arguments['timeout_minutes'] -as [double])) { $timeoutOverride = [double]$Arguments['timeout_minutes'] }
+    if ($Arguments.ContainsKey('timeout_minutes')) { $timeoutOverride = [double]$Arguments['timeout_minutes'] }
 
     # same auto-install-without-prompt behavior as `scriptorium --run`
     $installed = @()
+    $installFailed = $false
     $missing = @(Get-StoMissingDeps -Script $target)
     if ($missing.Count -gt 0) {
         $cfg = Get-StoConfig
         $cmd = Get-StoInstallCommand -Script $target -Modules $missing
         & ([string]$cfg.pwshBin) -NoProfile -NonInteractive -Command $cmd | Out-Null
+        $installFailed = ($LASTEXITCODE -ne 0)
         $installed = @($missing | ForEach-Object Display)
     }
 
@@ -265,26 +270,32 @@ function Invoke-StoMcpRunScript {
     }
     if ($result.status -eq 'skipped') { $out.note = 'already running (locked); try again later' }
     if ($installed.Count -gt 0) { $out.installedModules = $installed }
+    if ($installFailed) { $out.depInstallWarning = 'dependency install exited non-zero — a failure may be caused by missing modules' }
     @{ Text = ($out | ConvertTo-Json -Depth 6 -Compress); IsError = $false }
 }
 
 function Invoke-StoMcpGetHistory {
     param([hashtable]$Arguments)
     $limit = 20
-    if ($null -ne ($Arguments['limit'] -as [int])) { $limit = [Math]::Min(200, [Math]::Max(1, [int]$Arguments['limit'])) }
+    # ContainsKey, not `-as [int]`: $null -as [int] is 0, so an omitted limit
+    # used to collapse the default 20 down to Max(1,0) = 1
+    if ($Arguments.ContainsKey('limit')) { $limit = [Math]::Min(200, [Math]::Max(1, [int]$Arguments['limit'])) }
     $name = "$($Arguments['script'])"
 
-    $items = @(Get-StoHistory -Last 500)
+    $items = @(Get-StoHistory -Last 2000)
     if ($name) { $items = @($items | Where-Object { "$($_.script)" -eq $name }) }
     $items = @($items | Select-Object -Last $limit)
     [array]::Reverse($items)   # newest first
     $runs = foreach ($h in $items) {
+        # ConvertFrom-Json turned the ISO string into [datetime] — render it
+        # back to ISO, not the culture's "G" format
+        $startedAt = $h.startedAt -as [datetime]
         [ordered]@{
             script      = "$($h.script)"
             trigger     = "$($h.trigger)"
             status      = "$($h.status)"
             exitCode    = $h.exitCode
-            startedAt   = "$($h.startedAt)"
+            startedAt   = $(if ($startedAt) { $startedAt.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } else { "$($h.startedAt)" })
             durationSec = $h.durationSec
             logFile     = "$($h.logFile)"
             logId       = $(if ("$($h.logFile)") { [IO.Path]::GetFileName("$($h.logFile)") } else { $null })
@@ -302,10 +313,10 @@ function Invoke-StoMcpGetRunLog {
     }
     $path = Join-Path (Get-StoPaths).LogsDir $logId
     if (-not (Test-Path $path)) {
-        return @{ Text = "log '$logId' not found (rotated out after logRetentionDays?)"; IsError = $true }
+        return @{ Text = "log '$logId' not found (pruned by retention — success logs of frequently-scheduled scripts keep 1 day, everything else $((Get-StoConfig).logRetentionDays) days)"; IsError = $true }
     }
     $tailKb = 64
-    if ($null -ne ($Arguments['tail_kb'] -as [int])) { $tailKb = [Math]::Min(256, [Math]::Max(1, [int]$Arguments['tail_kb'])) }
+    if ($Arguments.ContainsKey('tail_kb')) { $tailKb = [Math]::Min(256, [Math]::Max(1, [int]$Arguments['tail_kb'])) }
     $out = [ordered]@{
         logId = $logId
         log   = (Get-StoLogTail -LogFile $path -TailKb $tailKb)
@@ -405,7 +416,7 @@ function Invoke-StoMcpUpdatePackages {
     if ($LASTEXITCODE -eq 0) {
         $lines.Add('== apt upgrade (powershell + python) ==')
         & bash -c 'sudo -n apt-get update -q && sudo -n apt-get install -y --only-upgrade powershell python3 python3-pip python3-venv' 2>&1 |
-            ForEach-Object { $lines.Add("$_") }
+            ForEach-Object { $lines.Add((Hide-StoSecret "$_")) }
     } else {
         $lines.Add('apt stage skipped: passwordless sudo unavailable — run manually: sudo apt-get update && sudo apt-get install -y --only-upgrade powershell python3 python3-pip python3-venv')
     }
@@ -413,12 +424,15 @@ function Invoke-StoMcpUpdatePackages {
     $lines.Add('== module dirs ==')
     & ([string]$cfg.pwshBin) -NoProfile -NonInteractive -Command (Get-StoModuleUpgradeCommand) 2>&1 |
         ForEach-Object { $lines.Add((Hide-StoSecret "$_")) }
+    $okMods = ($LASTEXITCODE -eq 0)
     $lines.Add('== python venvs ==')
     & ([string]$cfg.pwshBin) -NoProfile -NonInteractive -Command (Get-StoVenvUpgradeCommand) 2>&1 |
         ForEach-Object { $lines.Add((Hide-StoSecret "$_")) }
+    $okVenvs = ($LASTEXITCODE -eq 0)
 
-    $out = [ordered]@{ ok = $true; output = ($lines -join "`n") }
-    @{ Text = ($out | ConvertTo-Json -Depth 3 -Compress); IsError = $false }
+    $ok = ($okMods -and $okVenvs)
+    $out = [ordered]@{ ok = $ok; output = ($lines -join "`n") }
+    @{ Text = ($out | ConvertTo-Json -Depth 3 -Compress); IsError = (-not $ok) }
 }
 
 # ---------------------------------------------------------------------------
@@ -490,15 +504,16 @@ function Invoke-StoMcpRequest {
             if (-not $toolName) {
                 return New-StoMcpError -Id $id -Code -32602 -Message "invalid params: missing tool 'name'"
             }
-            if ($toolName -notin @(Get-StoMcpTools | ForEach-Object name)) {
-                $valid = (Get-StoMcpTools | ForEach-Object name) -join ', '
-                return New-StoMcpError -Id $id -Code -32602 -Message "unknown tool '$toolName' — valid tools: $valid"
+            $toolNames = @(Get-StoMcpTools | ForEach-Object name)
+            if ($toolName -notin $toolNames) {
+                return New-StoMcpError -Id $id -Code -32602 -Message "unknown tool '$toolName' — valid tools: $($toolNames -join ', ')"
             }
             $toolArgs = if ($params['arguments'] -is [System.Collections.IDictionary]) { $params['arguments'] } else { @{} }
             try {
                 $r = Invoke-StoMcpTool -Name $toolName -Arguments $toolArgs
             } catch {
-                return New-StoMcpError -Id $id -Code -32603 -Message "internal error running tool '$toolName': $($_.Exception.Message)"
+                # exception text can carry a tokened URL — redact before it leaves
+                return New-StoMcpError -Id $id -Code -32603 -Message (Hide-StoSecret "internal error running tool '$toolName': $($_.Exception.Message)")
             }
             return New-StoMcpResult -Id $id -Result ([ordered]@{
                     content = @(, ([ordered]@{ type = 'text'; text = "$($r.Text)" }))
@@ -530,10 +545,19 @@ function Start-StoMcpServer {
 
     try {
         while ($listener.IsListening) {
-            $ctx = $listener.GetContext()
+            # an aborted client connection throws out of GetContext — that
+            # must not take the whole service down (systemd sees a clean exit
+            # and would not even restart it)
+            $ctx = $null
+            try { $ctx = $listener.GetContext() } catch {
+                if (-not $listener.IsListening) { break }
+                Start-Sleep -Milliseconds 100
+                continue
+            }
             $status = 500
             try {
                 $status = Write-StoMcpResponse -Context $ctx -Token $Token
+                Write-Host ("{0:HH:mm:ss}  {1} {2} -> {3}" -f (Get-Date), $ctx.Request.HttpMethod, $ctx.Request.Url.AbsolutePath, $status)
             } catch {
                 try {
                     $ctx.Response.StatusCode = 500
@@ -543,7 +567,6 @@ function Start-StoMcpServer {
             } finally {
                 try { $ctx.Response.Close() } catch { }
             }
-            Write-Host ("{0:HH:mm:ss}  {1} {2} -> {3}" -f (Get-Date), $ctx.Request.HttpMethod, $ctx.Request.Url.AbsolutePath, $status)
         }
     } finally {
         try { $listener.Stop(); $listener.Close() } catch { }
@@ -571,7 +594,7 @@ WorkingDirectory=$AppDir
 # system units without User= don't set HOME, and the app expands ~/.scriptorium
 # with it — %h is the service manager's home (/root for the system manager)
 Environment=HOME=%h
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]
@@ -656,16 +679,30 @@ function Write-StoMcpResponse {
         # no SSE stream (GET) and no session to delete (DELETE) — stateless server
         return (& $sendText 405 '{"error":"method not allowed"}')
     }
+    # auth BEFORE reading the body — an unauthenticated client must not be
+    # able to drive allocation
+    $auth = "$($req.Headers['Authorization'])"
+    $authorized = ($auth -match '^\s*Bearer\s+(.+?)\s*$') -and ($Matches[1] -ceq $Token)
+    if (-not $authorized) {
+        return (& $sendText 401 '{"error":"unauthorized"}')
+    }
+    # bound the read regardless of Content-Length — chunked requests report -1
     if ($req.ContentLength64 -gt $script:McpMaxBodyBytes) {
         return (& $sendText 413 '{"error":"payload too large"}')
     }
-
     $body = ''
     $reader = [IO.StreamReader]::new($req.InputStream, [Text.Encoding]::UTF8)
-    try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
-
-    $auth = "$($req.Headers['Authorization'])"
-    $authorized = ($auth -match '^\s*Bearer\s+(.+?)\s*$') -and ($Matches[1] -ceq $Token)
+    try {
+        $buf = [char[]]::new($script:McpMaxBodyBytes + 1)
+        $total = 0
+        while ($total -lt $buf.Length) {
+            $n = $reader.Read($buf, $total, $buf.Length - $total)
+            if ($n -le 0) { break }
+            $total += $n
+        }
+        if ($total -gt $script:McpMaxBodyBytes) { return (& $sendText 413 '{"error":"payload too large"}') }
+        $body = [string]::new($buf, 0, $total)
+    } finally { $reader.Dispose() }
 
     $r = Invoke-StoMcpRequest -Body $body -Authorized $authorized
     & $sendText ([int]$r.StatusCode) $r.Json

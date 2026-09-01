@@ -10,7 +10,8 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 - **Two runtimes, one pipeline** — folders with a `.ps1` entry run under pwsh with a per-script module dir prepended to `PSModulePath`; folders with a `.py` entry run under a per-script venv (created automatically, `PYTHONUNBUFFERED=1`, cwd = script folder so `python-dotenv` finds `.env` natively). Locks, logs, history, secret redaction, timeouts and the webhook are identical for both. A muted `ps`/`py` tag in the list shows each script's runtime
 - **Multiple script repos** — the `repos` config key syncs any number of repos (e.g. `powershell-scripts` + `python-scripts`) side by side; the legacy single `scriptsRepo` key keeps working unchanged
 - **Automatic dependency detection** — no manifest needed. PowerShell: the source is scanned with the AST (`#Requires -Modules` with version constraints honored, `using module`, `Import-Module` calls; built-in and local modules excluded) and missing modules are installed from the PowerShell Gallery. Python: imports are scanned with the Python AST inside the script's venv (stdlib and local modules excluded), missing packages are pip-installed with common import→pip name mismatches mapped (`cv2`→`opencv-python`, `PIL`→`pillow`, …); a `requirements.txt` in the script folder takes precedence over import scanning. Either way you're prompted (`y` install & run / `n` run anyway / `esc` cancel)
-- **Live output** — stdout/stderr streamed into the TUI (word-wrapped to the panel, wide-character aware, keyboard- and mouse-wheel-scrollable with a scrollbar, sticky-follow) and saved to a timestamped log file per run; `y` copies the whole buffer to your clipboard (wl-copy/xclip/xsel or OSC 52 over SSH)
+- **Live output** — stdout/stderr streamed into the TUI (word-wrapped to the panel, wide-character aware, tabs expanded, keyboard- and mouse-wheel-scrollable with a scrollbar, sticky-follow) and saved to a timestamped log file per run; `y` copies the whole buffer to your clipboard (wl-copy/xclip/xsel or OSC 52 over SSH)
+- **Mouse text selection** — drag over the output panel to select text (live highlight); releasing copies it to the clipboard with a "copied" indicator. Because the TUI owns the mouse, the selection stays inside the panel — it never bleeds into a neighboring tmux pane. Wrapped long lines are rejoined on copy. In tmux, OSC 52 copy needs `set -g allow-passthrough on`
 - **Resource monitoring** — CPU % and RSS memory sampled across the whole process tree every second via `/proc`; average and peak reported, plus a per-run series that renders as a sparkline in the history view. CPU is relative to the whole machine (all cores = 100%), so a multi-threaded script never reads as >100%
 - **n8n webhook reporting** — success/failure, exit code, duration, avg/max CPU & memory, host, and a log tail POSTed after every run. Delivery is retried, and reports that still can't be delivered are queued on disk and re-sent after the next successful delivery — cron-run reports survive n8n downtime
 - **Cron scheduling** — press `e` on any script to set a cron expression (`*/15 * * * *`, `@daily`, …) or plain English. Schedules are written into your user crontab (in a managed block that leaves your other entries alone) and scheduled runs go through the exact same pipeline: own module dir, auto-installed deps, logging, resource stats, and n8n webhook (payload carries `"trigger": "cron"`). The status bar shows when the selected script fires next
@@ -46,7 +47,7 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 | `Ctrl+F` | search the output panel (case-insensitive, matches highlighted); `n` / `N` jump to the next / previous match, empty search clears |
 | `?` | help overlay with all keybindings |
 | `PgUp` / `PgDn` / `Home` / `End` | scroll output (scrollbar shows position; auto-follows new output until you scroll up, `End` re-engages follow) |
-| mouse | wheel scrolls the output panel, click selects a script (or a history row) and focuses the clicked pane; clicking a device-login code (e.g. Microsoft device sign-in) in the output copies it to the clipboard |
+| mouse | wheel scrolls the pane under the pointer, click selects a script (or a history row) and focuses the clicked pane; drag over the output panel selects text and copies it on release (stays inside the pane, even in tmux); clicking a device-login code (e.g. Microsoft device sign-in) in the output copies it to the clipboard |
 | `q` / `Ctrl+C` | quit |
 
 ## Installation
@@ -122,7 +123,7 @@ scriptorium --sync
 ]
 ```
 
-Each repo clones into `~/.scriptorium/scripts/<name>/` (an existing single-repo clone is migrated into its subfolder automatically on the next sync). One `GITHUB_TOKEN` covers all repos — the fine-grained PAT needs Contents:Read on each. Script names must be unique across repos; a duplicate folder name gets qualified as `<repoName>-<folder>` (with a verbose warning) — keep folder names unique to avoid it. With only the legacy `scriptsRepo` key set, everything works exactly as before.
+Each repo clones into `~/.scriptorium/scripts/<name>/` (an existing single-repo clone is migrated into its subfolder automatically on the next sync). One `GITHUB_TOKEN` covers all repos — the fine-grained PAT needs Contents:Read on each. Script names must be unique across repos; a folder name that appears in more than one repo gets qualified as `<repoName>-<folder>` in **every** repo (deterministic — the name never depends on repo order), so keep folder names unique to avoid renames: the name keys locks, history, log files and the crontab entry. With only the legacy `scriptsRepo` key set, everything works exactly as before.
 
 ## Per-script .env files
 
@@ -132,7 +133,7 @@ Every per-script `.env` value (8+ characters) is treated as a secret and replace
 
 Keep `.env` gitignored in the scripts repo and commit a `.env.example` instead — when a script has no `.env` yet, the editor opens pre-filled from `.env.example`. Local `.env` files survive repo syncs (the hard-reset/clean excludes them), but a tracked `.env` would be overwritten by sync on every change from the repo.
 
-Module dirs, the scripts clone, logs, history, per-script locks, the webhook retry queue, and tools (PSScriptAnalyzer) are stored under `~/.scriptorium/` (configurable via `dataDir`). Logs older than `logRetentionDays` and history beyond `historyMaxLines` are pruned automatically at startup.
+Module dirs, the scripts clone, logs, history, per-script locks, the webhook retry queue, and tools (PSScriptAnalyzer) are stored under `~/.scriptorium/` (configurable via `dataDir`). Retention is time-based and runs at startup (throttled to once an hour): history keeps a rolling `historyDays` (default 30) window — except that **scripts cron-scheduled every 10 minutes or tighter keep success rows only 1 day** (failures/killed/timeout/skipped keep the full window, and each script's newest row always survives so status badges stay truthful). A pruned history row deletes its log file with it; other logs age out after `logRetentionDays`. Note: changing a script's schedule to ≤10-minute cadence reclassifies its whole success backlog on the next sweep.
 
 ## n8n webhook payload
 
@@ -267,8 +268,8 @@ Otherwise the TUI prints the exact commands to run manually (and still upgrades 
 | `openRouterModel` | model for plain-English → cron | `google/gemini-3.1-flash-lite` |
 | `syncOnLaunch` | sync the scripts repo automatically when the TUI starts | `false` |
 | `logRetentionDays` | delete run logs older than this at startup (0 = keep forever) | `30` |
-| `historyMaxLines` | cap `history.jsonl` at this many runs (0 = unlimited) | `5000` |
-| `historyDays` | history tab shows runs from the last N days (0 = last 200 runs) | `7` |
+| `historyMaxLines` | safety cap on `history.jsonl` rows — retention is time-based, this only guards pathological growth (0 = uncapped) | `50000` |
+| `historyDays` | rolling history retention window in days; also the history tab's view window (0 = tab shows last 200 runs, retention stays 30 days) | `30` |
 | `webhookTimeoutSec` | per-attempt webhook timeout | `15` |
 | `colorMode` | `auto` (truecolor if `$COLORTERM` says so, else 256-color), `truecolor`, or `256` | `auto` |
 | `mcpPort` | MCP server port (`--mcp`; `--port` overrides per run) | `8765` |
@@ -281,7 +282,8 @@ Unknown keys and non-numeric values for numeric keys are reported as warnings at
 - **clone/fetch fails** — check `GITHUB_TOKEN` in `.env`; the token needs Contents: Read on the scripts repo. Tokens expire — generate a new one and just rerun sync (`s`); the remote URL is refreshed automatically.
 - **module install fails** — check the module name exists on the [PowerShell Gallery](https://www.powershellgallery.com); corporate networks may need a proxy (`$env:HTTPS_PROXY`).
 - **webhook not firing** — press `t` to send a test event; check the n8n workflow is active and the URL is the production webhook URL, not the test one.
-- **garbled UI** — the TUI needs UTF-8 and truecolor for best results; terminals without truecolor get an automatic 256-color fallback (`colorMode` forces either). Mouse reporting is enabled — hold Shift while dragging to select text in most terminals.
+- **garbled UI** — the TUI needs UTF-8 and truecolor for best results; terminals without truecolor get an automatic 256-color fallback (`colorMode` forces either). Mouse reporting is enabled — drag inside the output panel to select & copy through the app, or hold Shift while dragging for the terminal's native selection.
+- **copy does nothing over SSH/tmux** — the clipboard falls back to OSC 52, which tmux blocks by default: add `set -g allow-passthrough on` (and ideally `set -g set-clipboard on`) to `~/.tmux.conf`. Very large copies are capped at 72KB over OSC 52.
 - **wrong duplicate-run skip** — if a run was killed hard (host reboot) a stale lock may linger in `~/.scriptorium/locks/`; it's reclaimed automatically when the owning PID is dead, or delete the file manually.
 
 ## Development

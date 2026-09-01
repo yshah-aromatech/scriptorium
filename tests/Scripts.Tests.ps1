@@ -183,8 +183,10 @@ Describe 'multi-repo config' {
         'print(1)' | Set-Content (Join-Path $script:sroot 'pyrepo/foo/main.py')
         'print(1)' | Set-Content (Join-Path $script:sroot 'pyrepo/bar/main.py')
         $s = @(Get-StoScripts)
-        ($s | ForEach-Object Name) | Should -Be @('foo', 'bar', 'pyrepo-foo')
-        ($s | Where-Object Name -eq 'foo').Repo | Should -Be 'psrepo'
+        # duplicates qualify in EVERY repo (deterministic identity — first-wins
+        # would flip names when repo order/content changes)
+        ($s | ForEach-Object Name) | Should -Be @('psrepo-foo', 'bar', 'pyrepo-foo')
+        ($s | Where-Object Name -eq 'psrepo-foo').Repo | Should -Be 'psrepo'
         ($s | Where-Object Name -eq 'pyrepo-foo').Runtime | Should -Be 'python'
     }
 

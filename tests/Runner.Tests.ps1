@@ -31,6 +31,8 @@ Describe 'Lock-StoScript / Unlock-StoScript' {
     It 'reclaims a stale lock whose owner is dead' {
         $stale = Join-Path (Get-StoPaths).LocksDir 'lock-c.lock'
         '999999' | Set-Content $stale
+        # a lock younger than ~10s is left alone (mid-reclaim race guard)
+        (Get-Item $stale).LastWriteTime = (Get-Date).AddMinutes(-5)
         $l = Lock-StoScript -Name 'lock-c'
         $l.Acquired | Should -BeTrue
         Unlock-StoScript -Handle @{ LockFile = $l.File }

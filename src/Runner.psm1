@@ -43,6 +43,13 @@ function Lock-StoScript {
             try { $ownerPid = [int](Get-Content $file -Raw -ErrorAction Stop).Trim() } catch { }
             $alive = $ownerPid -and (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)
             if ($alive) { return @{ Acquired = $false; Pid = $ownerPid } }
+            # a fresh lock file may be another process mid-reclaim of the same
+            # stale lock — backing off beats both of us acquiring it
+            try {
+                if (((Get-Date) - (Get-Item -Force $file -ErrorAction Stop).LastWriteTime).TotalSeconds -lt 10) {
+                    return @{ Acquired = $false; Pid = $ownerPid }
+                }
+            } catch { }
             # stale lock (owner died without cleanup) — reclaim and retry
             try { Remove-Item $file -Force -ErrorAction Stop } catch { return @{ Acquired = $false; Pid = $ownerPid } }
         }
@@ -119,7 +126,9 @@ function Start-StoRun {
     }
 
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH-mm-ss-fffZ')
-    $logFile = Join-Path $paths.LogsDir "$($Script.Name)-$stamp.log"
+    # sanitized: the name lands in shell-quoted cron lines and MCP logIds
+    $safeName = $Script.Name -replace '[^A-Za-z0-9._-]', '_'
+    $logFile = Join-Path $paths.LogsDir "$safeName-$stamp.log"
 
     $isPython = ($null -ne $Script.PSObject.Properties['Runtime'] -and "$($Script.Runtime)" -eq 'python')
 
@@ -265,8 +274,12 @@ function New-StoHandle {
         return $handle
     }
     if ($LogFile) {
-        $handle.LogWriter = [IO.StreamWriter]::new($LogFile, $false, [Text.Encoding]::UTF8)
-        $handle.LogWriter.AutoFlush = $true
+        # non-fatal: a full disk or unwritable logs dir must not orphan the
+        # already-started process (and its lock) — run without a log instead
+        try {
+            $handle.LogWriter = [IO.StreamWriter]::new($LogFile, $false, [Text.Encoding]::UTF8)
+            $handle.LogWriter.AutoFlush = $true
+        } catch { $handle.LogWriter = $null }
     }
     $handle.OutTask = $proc.StandardOutput.ReadLineAsync()
     $handle.ErrTask = $proc.StandardError.ReadLineAsync()
@@ -414,13 +427,15 @@ function Stop-StoRun {
         return
     }
     $pids = Get-StoTreePids -RootPid $proc.Id
-    foreach ($p in $pids) { & /bin/kill -TERM $p 2>$null }
+    & /bin/kill -TERM @pids 2>$null
     $deadline = (Get-Date).AddSeconds(3)
     while (-not $proc.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
-    if (-not $proc.HasExited) {
-        foreach ($p in (Get-StoTreePids -RootPid $proc.Id)) { & /bin/kill -KILL $p 2>$null }
-        try { $proc.WaitForExit(2000) | Out-Null } catch { }
-    }
+    # KILL survivors from the ORIGINAL snapshot: children that ignored TERM
+    # get reparented to init once the root exits, so a re-walk from the root
+    # misses exactly the processes that need the escalation
+    $alive = @($pids | Where-Object { Test-Path "/proc/$_" })
+    if ($alive.Count -gt 0) { & /bin/kill -KILL @alive 2>$null }
+    try { $proc.WaitForExit(2000) | Out-Null } catch { }
 }
 
 # ---------------------------------------------------------------------------
@@ -443,7 +458,6 @@ function Complete-StoRun {
         $Handle.Status = if ($Handle.ExitCode -eq 0) { 'success' } else { 'failure' }
     }
     if ($Handle.LogWriter) { try { $Handle.LogWriter.Dispose() } catch { } ; $Handle.LogWriter = $null }
-    Unlock-StoScript -Handle $Handle
 
     $duration = [Math]::Round(($Handle.FinishedAt - $Handle.StartedAt).TotalSeconds, 1)
     $n = [Math]::Max(1, $Handle.Samples)
@@ -462,6 +476,7 @@ function Complete-StoRun {
 
     $result = [ordered]@{
         event       = 'script_run'
+        runId       = [guid]::NewGuid().ToString()   # stable row identity + webhook dedupe key
         script      = $Handle.Name
         runtime     = if ($Handle.ContainsKey('Runtime')) { $Handle.Runtime } else { 'powershell' }
         repo        = if ($Handle.ContainsKey('Repo')) { $Handle.Repo } else { '' }
@@ -477,13 +492,18 @@ function Complete-StoRun {
         logFile     = $Handle.LogFile
     }
     $Handle.Result = $result
-    if ($Handle.Kind -ne 'run') { return $result }
+    if ($Handle.Kind -ne 'run') { Unlock-StoScript -Handle $Handle; return $result }
 
-    # history (without the log payload)
+    # history (without the log payload) — a single write() so concurrent
+    # appenders (cron + MCP + TUI) can't interleave mid-row; Add-Content's
+    # 1KB writer buffer splits long rows into two writes
     try {
-        ($result | ConvertTo-Json -Depth 6 -Compress) |
-            Add-Content -Path $paths.HistoryFile -Encoding UTF8
-    } catch { }
+        [IO.File]::AppendAllText($paths.HistoryFile,
+            ($result | ConvertTo-Json -Depth 6 -Compress) + "`n", [Text.UTF8Encoding]::new($false))
+    } catch { Write-Warning "history write failed: $($_.Exception.Message)" }
+    # unlock only after the row is written: a queued re-run of a sub-second
+    # script could otherwise append its row first and lose last-status-wins
+    Unlock-StoScript -Handle $Handle
 
     # webhook gets a log tail
     $payload = [ordered]@{}
@@ -570,23 +590,43 @@ function Send-StoWebhook {
 }
 
 # Flush the dead-letter queue: resend in order, stop at the first failure,
-# keep whatever couldn't be sent.
+# keep whatever couldn't be sent. The queue file is moved aside first so two
+# runs completing together can't both flush (duplicate deliveries) or clobber
+# each other's rewrite; at most 50 send per flush so a week-long backlog
+# can't freeze run completion.
 function Send-StoWebhookQueue {
     $paths = Get-StoPaths
     $qf = $paths.WebhookQueueFile
     if (-not (Test-Path $qf)) { return 0 }
-    $lines = @(Get-Content $qf -ErrorAction SilentlyContinue | Where-Object { $_ })
-    if ($lines.Count -eq 0) {
-        Remove-Item $qf -Force -ErrorAction SilentlyContinue
+    $flushFile = "$qf.flush"
+    try {
+        [IO.File]::Move($qf, $flushFile)   # throws if another flush owns it
+    } catch {
+        # a flusher that died mid-pass leaves .flush behind — reclaim it
+        try {
+            if ((Test-Path $flushFile) -and ((Get-Date) - (Get-Item $flushFile).LastWriteTime).TotalMinutes -gt 10) {
+                Get-Content $flushFile -ErrorAction SilentlyContinue | Add-Content -Path $qf -Encoding UTF8
+                Remove-Item $flushFile -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
         return 0
     }
+    $lines = @(Get-Content $flushFile -ErrorAction SilentlyContinue | Where-Object { $_ })
     $sent = 0
     foreach ($line in $lines) {
+        if ($sent -ge 50) { break }
         if (Send-StoWebhookRaw -Body $line) { $sent++ } else { break }
     }
-    $remaining = $lines | Select-Object -Skip $sent
-    if ($remaining) { $remaining | Set-Content -Path $qf -Encoding UTF8 }
-    else { Remove-Item $qf -Force -ErrorAction SilentlyContinue }
+    $remaining = @($lines | Select-Object -Skip $sent)
+    if ($remaining.Count -gt 0) {
+        # unsent backlog goes back in FRONT of anything queued while we flushed
+        $tail = @()
+        if (Test-Path $qf) { $tail = @(Get-Content $qf -ErrorAction SilentlyContinue | Where-Object { $_ }) }
+        Set-Content -Path $flushFile -Value (@($remaining) + $tail) -Encoding UTF8
+        try { [IO.File]::Move($flushFile, $qf, $true) } catch { }
+    } else {
+        Remove-Item $flushFile -Force -ErrorAction SilentlyContinue
+    }
     $sent
 }
 
@@ -607,14 +647,20 @@ function Get-StoHistory {
     param([int]$Last = 100, [double]$SinceDays = 0)
     $paths = Get-StoPaths
     if (-not (Test-Path $paths.HistoryFile)) { return @() }
-    $lines = if ($SinceDays -gt 0) {
-        Get-Content $paths.HistoryFile -ErrorAction SilentlyContinue
-    } else {
-        Get-Content $paths.HistoryFile -Tail $Last -ErrorAction SilentlyContinue
-    }
-    $items = foreach ($l in $lines) {
-        try { $l | ConvertFrom-Json } catch { }
-    }
+    $lines = @(if ($SinceDays -gt 0) {
+            Get-Content $paths.HistoryFile -ErrorAction SilentlyContinue
+        } else {
+            Get-Content $paths.HistoryFile -Tail $Last -ErrorAction SilentlyContinue
+        }) | Where-Object { $_ }
+    # one array parse instead of N per-line parses (~20x faster on a 30-day
+    # window); a corrupt row falls back to the per-line path
+    $items = $null
+    if (@($lines).Count -gt 0) {
+        try { $items = @(('[' + ($lines -join ',') + ']') | ConvertFrom-Json) } catch { }
+        if ($null -eq $items) {
+            $items = @(foreach ($l in $lines) { try { $l | ConvertFrom-Json } catch { } })
+        }
+    } else { $items = @() }
     if ($SinceDays -gt 0) {
         # startedAt parses with its original Kind — normalize to UTC to compare
         $cutoff = (Get-Date).ToUniversalTime().AddDays(-$SinceDays)
@@ -630,10 +676,14 @@ function Get-StoLastStatuses {
     # script name -> @{ Status; At (finish [datetime], local); DurationSec;
     # Resources (cpu/mem stats of that run) } of the most recent run
     $map = @{}
-    foreach ($h in (Get-StoHistory -Last 500)) {
+    # 2000 rows: one busy */5 script writes ~290 rows/day — a 500-row tail
+    # made every OTHER script read as 'never run' within a couple of days
+    foreach ($h in (Get-StoHistory -Last 2000)) {
         if (-not $h -or -not $h.script) { continue }
-        $at = $null
-        try { $at = ([datetime]::Parse("$($h.finishedAt)", $null, [Globalization.DateTimeStyles]::AdjustToUniversal)).ToLocalTime() } catch { }
+        # ConvertFrom-Json already yields Kind=Utc [datetime] for the ISO Z
+        # strings — just normalize to local
+        $at = $h.finishedAt -as [datetime]
+        if ($at) { $at = $at.ToLocalTime() }
         $map[$h.script] = [pscustomobject]@{
             Status      = "$($h.status)"
             At          = $at

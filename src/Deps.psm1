@@ -128,7 +128,10 @@ function Get-StoScriptDeps {
         if ($d -match '[/\\]' -or $d -match '\.(psm1|psd1|dll)$') { continue }   # local/path import
         if ($script:BuiltinModules -contains $d) { continue }
         if (Test-Path (Join-Path $Script.Dir "$d.psm1")) { continue }            # local module next to script
-        if (Test-Path (Join-Path $Script.Dir $d)) { continue }                   # local module folder
+        # bare-folder check only for folder scripts: a loose root script's Dir
+        # is the whole repo, where every sibling SCRIPT folder would false-match
+        if (-not ($null -ne $Script.PSObject.Properties['Loose'] -and $Script.Loose) -and
+            (Test-Path (Join-Path $Script.Dir $d))) { continue }                 # local module folder
         $mapped = if ($script:ModuleNameMap.ContainsKey($d.ToLower())) { $script:ModuleNameMap[$d.ToLower()] } else { $d }
         if ($seen.Add($mapped)) {
             $result.Add((New-StoDep -Name $mapped -RequiredVersion $spec.Rv -MinimumVersion $spec.MinV -MaximumVersion $spec.MaxV))
@@ -155,8 +158,11 @@ function Resolve-StoModuleElement {
 # with version constraints checked against the installed versions.
 # ---------------------------------------------------------------------------
 function Get-StoInstalledModules {
-    # name(lower) -> list of installed [version]s (0.0 when unknown)
-    param([Parameter(Mandatory)]$Script)
+    # name(lower) -> list of installed [version]s (0.0 when unknown).
+    # -Names limits the system-module walk to those names — a full
+    # Get-Module -ListAvailable walks every PSModulePath dir and costs seconds
+    # on every run start
+    param([Parameter(Mandatory)]$Script, [string[]]$Names = @())
     $installed = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
     $add = {
         param([string]$Name, $Version)
@@ -174,7 +180,9 @@ function Get-StoInstalledModules {
             else { & $add $d.Name $null }
         }
     }
-    foreach ($m in (Get-Module -ListAvailable -ErrorAction SilentlyContinue)) {
+    $listArgs = @{}
+    if ($Names.Count -gt 0) { $listArgs.Name = $Names }
+    foreach ($m in (Get-Module -ListAvailable @listArgs -ErrorAction SilentlyContinue)) {
         & $add $m.Name $m.Version
     }
     $installed
@@ -200,7 +208,7 @@ function Get-StoMissingDeps {
     if (Test-StoPythonScript $Script) { return @(Get-StoMissingPythonDeps -Script $Script) }
     $deps = @(Get-StoScriptDeps -Script $Script)
     if (-not $deps) { return @() }
-    $installed = Get-StoInstalledModules -Script $Script
+    $installed = Get-StoInstalledModules -Script $Script -Names @($deps | ForEach-Object Name)
     @($deps | Where-Object { -not (Test-StoDepSatisfied -Dep $_ -Installed $installed) })
 }
 

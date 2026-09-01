@@ -137,7 +137,12 @@ function Resolve-StoEntry {
 
     if ($Meta -and $Meta.PSObject.Properties['entry'] -and $Meta.entry) {
         $p = Join-Path $DirPath ([string]$Meta.entry)
-        if (Test-Path $p) { return (Resolve-Path -LiteralPath $p).Path }
+        if (Test-Path $p) {
+            $full = (Resolve-Path -LiteralPath $p).Path
+            # containment: an entry like "../../x" must not escape the folder
+            $rootFull = [IO.Path]::GetFullPath($DirPath).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+            if ($full.StartsWith($rootFull, [StringComparison]::Ordinal)) { return $full }
+        }
     }
 
     # matched/compared case-insensitively because the server FS is case-sensitive
@@ -193,46 +198,58 @@ function New-StoScriptInfo {
         EnvExample     = Join-Path $Dir $(if ($EnvBase) { "$EnvBase.env.example" } else { '.env.example' })
         ModuleDir      = Join-Path $paths.ModulesDir $Name
         VenvDir        = Join-Path $paths.VenvsDir $Name
+        Loose          = [bool]$EnvBase   # loose root file: Dir is the whole repo root
     }
 }
 
 function Get-StoScripts {
     $scripts = [System.Collections.Generic.List[object]]::new()
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $repos = @(Get-StoRepos)
 
-    foreach ($repo in @(Get-StoRepos)) {
+    # collect all candidates first and count each base name across repos:
+    # duplicates qualify as <repo>-<name> in EVERY repo, deterministically.
+    # First-wins qualification would flip an existing script's identity when
+    # repo order or contents change — and Name keys the locks, history,
+    # log files and the crontab entry.
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    $nameCount = @{}   # PS hashtables are case-insensitive for string keys
+    foreach ($repo in $repos) {
         $root = $repo.Root
         if (-not (Test-Path $root)) { continue }
-
         foreach ($dir in (Get-ChildItem $root -Directory | Where-Object Name -notin $script:SkipDirs | Sort-Object Name)) {
-            $meta = $null
-            $metaFile = Join-Path $dir.FullName 'script.json'
-            if (Test-Path $metaFile) {
-                try { $meta = Get-Content $metaFile -Raw | ConvertFrom-Json } catch { }
-            }
-            $entry = Resolve-StoEntry -DirPath $dir.FullName -DirName $dir.Name -Meta $meta
-            if (-not $entry) { continue }
-
-            # identity is the folder name; a cross-repo duplicate gets a stable
-            # qualified name (locks/history/cron/log files all key on Name)
-            $name = $dir.Name
-            if (-not $seen.Add($name)) {
-                $name = "$($repo.Name)-$($dir.Name)"
-                [void]$seen.Add($name)
-                Write-Verbose "duplicate script folder '$($dir.Name)' — qualified as '$name'"
-            }
-            $scripts.Add((New-StoScriptInfo -Name $name -Dir $dir.FullName -Entry $entry -Meta $meta -RepoName $repo.Name -EnvBase ''))
+            $candidates.Add(@{ Repo = $repo; Dir = $dir; Base = $dir.Name; IsFile = $false })
+            $nameCount[$dir.Name] = 1 + [int]$nameCount[$dir.Name]
         }
-
         # loose .ps1/.py files in the repo root
         foreach ($file in (Get-ChildItem $root -File | Where-Object { $_.Extension -in '.ps1', '.py' } | Sort-Object Name)) {
-            $name = [IO.Path]::GetFileNameWithoutExtension($file.Name)
-            if (-not $seen.Add($name)) {
-                $name = "$($repo.Name)-$([IO.Path]::GetFileNameWithoutExtension($file.Name))"
-                [void]$seen.Add($name)
-            }
-            $scripts.Add((New-StoScriptInfo -Name $name -Dir $root -Entry $file.FullName -Meta $null -RepoName $repo.Name -EnvBase ([IO.Path]::GetFileNameWithoutExtension($file.Name))))
+            $base = [IO.Path]::GetFileNameWithoutExtension($file.Name)
+            $candidates.Add(@{ Repo = $repo; File = $file; Base = $base; IsFile = $true })
+            $nameCount[$base] = 1 + [int]$nameCount[$base]
         }
+    }
+
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($c in $candidates) {
+        $name = if ($nameCount[$c.Base] -gt 1) {
+            Write-Verbose "duplicate script name '$($c.Base)' — qualified as '$($c.Repo.Name)-$($c.Base)'"
+            "$($c.Repo.Name)-$($c.Base)"
+        } else { $c.Base }
+        # same repo holding both a folder and a loose file of one name still
+        # collides after qualification — suffix the later one (fixed order)
+        if (-not $seen.Add($name)) { $name = "$name-2"; [void]$seen.Add($name) }
+
+        if ($c.IsFile) {
+            $scripts.Add((New-StoScriptInfo -Name $name -Dir $c.Repo.Root -Entry $c.File.FullName -Meta $null -RepoName $c.Repo.Name -EnvBase $c.Base))
+            continue
+        }
+        $meta = $null
+        $metaFile = Join-Path $c.Dir.FullName 'script.json'
+        if (Test-Path $metaFile) {
+            try { $meta = Get-Content $metaFile -Raw | ConvertFrom-Json } catch { }
+        }
+        $entry = Resolve-StoEntry -DirPath $c.Dir.FullName -DirName $c.Dir.Name -Meta $meta
+        if (-not $entry) { continue }
+        $scripts.Add((New-StoScriptInfo -Name $name -Dir $c.Dir.FullName -Entry $entry -Meta $meta -RepoName $c.Repo.Name -EnvBase ''))
     }
 
     $scripts
@@ -302,13 +319,19 @@ function Get-StoScriptDetail {
     param([Parameter(Mandatory)]$Script)
     $isPython = ("$($Script.Runtime)" -eq 'python')
 
-    # README.md (case-insensitive; server FS is case-sensitive), capped 16KB
+    # README.md (case-insensitive; server FS is case-sensitive), capped 16KB.
+    # Loose root scripts get none — their Dir is the repo root, and shipping
+    # the whole repo README as one script's doc misleads the agent.
     $readme = ''
-    $readmeFile = Get-ChildItem $Script.Dir -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ieq 'readme.md' } | Select-Object -First 1
+    $isLoose = ($null -ne $Script.PSObject.Properties['Loose'] -and $Script.Loose)
+    $readmeFile = if ($isLoose) { $null } else {
+        Get-ChildItem $Script.Dir -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ieq 'readme.md' } | Select-Object -First 1
+    }
     if ($readmeFile) {
         $readme = Get-Content $readmeFile.FullName -Raw -ErrorAction SilentlyContinue
         if ($readme.Length -gt 16KB) { $readme = $readme.Substring(0, 16KB) + "`n[truncated]" }
+        $readme = Hide-StoSecret $readme
     }
 
     # documented env vars from .env.example; configured = key NAMES only

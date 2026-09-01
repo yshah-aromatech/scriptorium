@@ -18,7 +18,9 @@ BeforeAll {
             Filter = ''; Statuses = @{}; Schedules = @{}; NextRunCache = @{}
             Lines = [System.Collections.Generic.List[string]]::new()
             Wrapped = [System.Collections.Generic.List[string]]::new()
+            WrapSrc = [System.Collections.Generic.List[int]]::new()
             WrapWidth = 0; Scroll = 0; Follow = $true
+            Sel = $null; SelDrag = $null; HeaderRepo = $null; DetailCache = $null
             OutTitle = 'output'; Mode = 'list'
             Input = $null; Confirm = $null; Deps = $null; Env = $null; History = $null
             Run = $null; Queue = [System.Collections.Generic.List[object]]::new()
