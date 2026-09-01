@@ -68,6 +68,12 @@ func TestDiscoverFallsBackToSolePS1(t *testing.T) {
 // M4: script.json "args" coercion mirrors PS's
 // `@($Meta.args | ForEach-Object { "$_" })` — a bare non-array value wraps
 // to one arg, and an array element-wise stringifies (numbers included).
+//
+// r2: PS's actual gate is `$Meta.args -and ...` — a PS-falsy value (null,
+// false, "", numeric zero, an empty array) must yield NO args, not a
+// spurious one-element wrap. A non-empty string (even "0") and a truthy
+// scalar like `true` still wrap to one arg (verified against live pwsh:
+// `@($true | ForEach-Object { "$_" })` -> "True").
 func TestDiscoverArgsCoercion(t *testing.T) {
 	cases := []struct {
 		name, argsJSON string
@@ -76,6 +82,12 @@ func TestDiscoverArgsCoercion(t *testing.T) {
 		{"bare string wraps to one arg", `"one two"`, []string{"one two"}},
 		{"numbers stringify", `[1,2]`, []string{"1", "2"}},
 		{"strings pass through", `["a","b"]`, []string{"a", "b"}},
+		{"empty string is falsy", `""`, []string{}},
+		{"numeric zero is falsy", `0`, []string{}},
+		{"false is falsy", `false`, []string{}},
+		{"null is falsy", `null`, []string{}},
+		{"empty array is falsy", `[]`, []string{}},
+		{"true is truthy and stringifies capitalized", `true`, []string{"True"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

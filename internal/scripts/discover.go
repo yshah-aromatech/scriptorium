@@ -249,7 +249,7 @@ func loadScriptMeta(path string) *scriptMeta {
 			m.Description = s
 		}
 	}
-	if raw, ok := rawByKeyCI(obj, "args"); ok {
+	if raw, ok := rawByKeyCI(obj, "args"); ok && !psFalsy(raw) {
 		m.Args = coerceArgs(raw)
 	}
 	if raw, ok := rawByKeyCI(obj, "timeoutMinutes"); ok {
@@ -277,10 +277,41 @@ func rawByKeyCI(obj map[string]json.RawMessage, key string) (json.RawMessage, bo
 	return nil, false
 }
 
+// psFalsy reports whether raw is a PS-falsy JSON value — null, false, an
+// empty string, numeric zero, or an empty array — mirroring PowerShell's
+// boolean coercion that gates Get-StoScriptMeta's args wrap (PS:
+// `... -and $Meta.args`; verified against live pwsh for every case here).
+// A non-empty string (even "0"), a non-zero number, true, a non-empty
+// array, and an object are all truthy.
+func psFalsy(raw json.RawMessage) bool {
+	var v any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if dec.Decode(&v) != nil {
+		return false // malformed — treat as truthy so it isn't silently swallowed
+	}
+	switch x := v.(type) {
+	case nil:
+		return true
+	case bool:
+		return !x
+	case string:
+		return x == ""
+	case json.Number:
+		f, err := x.Float64()
+		return err == nil && f == 0
+	case []any:
+		return len(x) == 0
+	default:
+		return false
+	}
+}
+
 // coerceArgs mirrors PS's `@($Meta.args | ForEach-Object { "$_" })`: a JSON
 // array is stringified element-by-element; a bare non-array value pipes
 // through ForEach-Object as a single item, wrapping to one arg the same way
-// decodeRepos wraps a non-array "repos" value.
+// decodeRepos wraps a non-array "repos" value. Callers must gate on
+// psFalsy(raw) first — this only coerces, it doesn't skip falsy input.
 func coerceArgs(raw json.RawMessage) []string {
 	var arr []json.RawMessage
 	if json.Unmarshal(raw, &arr) != nil {
@@ -295,14 +326,22 @@ func coerceArgs(raw json.RawMessage) []string {
 
 // stringifyJSON renders one JSON value the way PS's "$_" string
 // interpolation would for a script.json args element: a string passes
-// through verbatim, a number keeps its original decimal text (via
-// json.Number, avoiding float64 round-tripping artifacts like 1e+08), and
-// any other shape (bool, array, object, null) — not exercised by real
-// script.json args — yields "".
+// through verbatim, a bool renders capitalized ("True"/"False", .NET's
+// ToString — verified against live pwsh), a number keeps its original
+// decimal text (via json.Number, avoiding float64 round-tripping artifacts
+// like 1e+08), and any other shape (array, object, null) — not exercised
+// by real script.json args — yields "".
 func stringifyJSON(raw json.RawMessage) string {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		return s
+	}
+	var b bool
+	if json.Unmarshal(raw, &b) == nil {
+		if b {
+			return "True"
+		}
+		return "False"
 	}
 	var num json.Number
 	dec := json.NewDecoder(bytes.NewReader(raw))
