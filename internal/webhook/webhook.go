@@ -13,10 +13,13 @@ package webhook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -221,12 +224,28 @@ func (c *Client) FlushQueue() int {
 // unlinking the original name. Linking keeps the inode, so the .flush mtime
 // still dates from the last queue append, which is what the stale check below
 // measures.
+//
+// The two ways a link fails are not the same failure. EEXIST is the contended
+// path: another flusher holds the claim, and the caller's reclaimStale
+// decides whether that claim is abandoned. Anything else means linking itself
+// did not work here — some filesystems (and some container overlay setups)
+// refuse hard links outright — and a queue that could never be claimed would
+// never drain again, so those fall back to a rename. The fallback cannot be
+// atomic-exclusive, so it is gated on .flush being absent: best-effort
+// fail-if-exists, with a window no worse than not draining at all.
 func claim(qf, flushFile string) bool {
-	if err := os.Link(qf, flushFile); err != nil {
+	err := os.Link(qf, flushFile)
+	if err == nil {
+		_ = os.Remove(qf)
+		return true
+	}
+	if errors.Is(err, fs.ErrExist) {
 		return false
 	}
-	_ = os.Remove(qf)
-	return true
+	if _, serr := os.Stat(flushFile); serr == nil {
+		return false // someone holds the claim — never clobber their backlog
+	}
+	return os.Rename(qf, flushFile) == nil
 }
 
 // reclaimStale rescues the backlog of a flusher that died mid-pass. PS does
@@ -235,6 +254,12 @@ func claim(qf, flushFile string) bool {
 func reclaimStale(qf, flushFile string) {
 	st, err := os.Stat(flushFile)
 	if err != nil || time.Since(st.ModTime()) <= staleFlush {
+		return
+	}
+	// a .flush still sharing its inode with the queue file is a claim caught
+	// between its link and its unlink, not an abandoned pass — and because
+	// linking preserves the mtime, such a claim looks arbitrarily old
+	if sys, ok := st.Sys().(*syscall.Stat_t); ok && sys.Nlink > 1 {
 		return
 	}
 	lines := readLines(flushFile)

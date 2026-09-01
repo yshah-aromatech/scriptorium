@@ -362,6 +362,37 @@ func TestFlushQueueLeavesAFreshFlushFileAlone(t *testing.T) {
 	}
 }
 
+// A .flush that still shares its inode with the queue file is a claim caught
+// between its link and its unlink, not an abandoned pass — and because the
+// link preserves the mtime, such a claim looks arbitrarily old to the stale
+// check. Reclaiming it would append the backlog to the very file it was
+// linked from (duplicating every line) and then unlink the live claim.
+func TestFlushQueueLeavesAMidClaimSharedInodeAlone(t *testing.T) {
+	h := newHarness(t)
+	lines := numbered(2)
+	writeQueue(t, h.qf, lines...)
+	if err := os.Link(h.qf, h.qf+".flush"); err != nil {
+		t.Skipf("hard links unsupported here: %v", err)
+	}
+	old := time.Now().Add(-11 * time.Minute)
+	if err := os.Chtimes(h.qf+".flush", old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := h.c.FlushQueue(); n != 0 {
+		t.Fatalf("FlushQueue = %d, want 0 — the claim is another flusher's", n)
+	}
+	if got := len(h.rec.got()); got != 0 {
+		t.Fatalf("server saw %d requests", got)
+	}
+	if got := queueLines(t, h.qf); !reflect.DeepEqual(got, lines) {
+		t.Fatalf("queue = %v, want %v — the backlog was duplicated into its own file", got, lines)
+	}
+	if got := queueLines(t, h.qf+".flush"); !reflect.DeepEqual(got, lines) {
+		t.Fatalf(".flush = %v, want the live claim untouched", got)
+	}
+}
+
 // A successful Send drains the backlog behind it.
 func TestSendFlushesTheQueueAfterASuccess(t *testing.T) {
 	h := newHarness(t)
