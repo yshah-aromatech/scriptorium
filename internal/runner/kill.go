@@ -29,11 +29,18 @@ func killTree(pgid int, snapshot []int, done <-chan struct{}) {
 		return // a signal to group 0 would hit our own process group
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	reaped := false
 	select {
 	case <-done:
+		reaped = true
 	case <-time.After(killGrace):
 	}
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	if !reaped {
+		// only while the root is still unreaped: once it has been waited for
+		// the kernel is free to hand its pid — and with it this process group
+		// id — to something else, and the SIGKILL would hit a stranger
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	}
 
 	if !procstat.HasProc() {
 		return
@@ -43,6 +50,13 @@ func killTree(pgid int, snapshot []int, done <-chan struct{}) {
 		// monitor interval) — walk the tree now, the way PS always does
 		snapshot = procstat.TreePIDs(pgid)
 	}
+	// the snapshot pass runs either way: it is the only thing that reaches an
+	// escapee that left the process group (setsid) or reparented to init.
+	// Its staleness window is narrower but real — the snapshot is up to one
+	// monitor interval old (default 1s), so the /proc check below proves the
+	// pid still exists, not that it is still the same process. That is the
+	// price of reaching escapees at all, and PS takes the same risk with the
+	// tree walk it does at kill time.
 	for _, p := range snapshot {
 		if p <= 0 {
 			continue
