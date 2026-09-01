@@ -232,23 +232,49 @@ func TestLoadAppEnv(t *testing.T) {
 	t.Cleanup(func() { os.Unsetenv("PHASE1_TEST_TOKEN") })
 }
 
-// I2: "repos" decode is per-entry and PS-shaped — @($cfg.repos) wraps a
-// bare object into a one-element array, and each array element decodes
-// independently (a malformed sibling doesn't sink the whole list).
+// I1: "repos" decode is per-entry and PS-shaped — @($cfg.repos) wraps EVERY
+// non-array shape (object, string, number, null) into a one-element array,
+// and every array element decodes independently AND SURVIVES — a malformed
+// sibling never sinks the whole list; it decodes to a zero-valued entry
+// (verified against live pwsh: this exact mixed array yields 3 raw repos
+// entries, the bare string producing an all-empty one).
 func TestReposDecodeMixedArray(t *testing.T) {
 	data := filepath.Join(t.TempDir(), "data")
 	cfg, _, _, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":[{"name":"a","url":"u"},"bare-string",{"url":""}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Repos) != 2 {
-		t.Fatalf("got %d repos %+v, want 2 (object with empty url IS kept)", len(cfg.Repos), cfg.Repos)
+	if len(cfg.Repos) != 3 {
+		t.Fatalf("got %d repos %+v, want 3 (the bare string survives as a zero-valued entry)", len(cfg.Repos), cfg.Repos)
 	}
 	if cfg.Repos[0].Name != "a" || cfg.Repos[0].URL != "u" {
 		t.Errorf("repo 0 = %+v", cfg.Repos[0])
 	}
-	if cfg.Repos[1].URL != "" {
-		t.Errorf("repo 1 = %+v", cfg.Repos[1])
+	if cfg.Repos[1] != (config.RepoEntry{}) {
+		t.Errorf("repo 1 (from the bare string) = %+v, want zero-valued", cfg.Repos[1])
+	}
+	if cfg.Repos[2].URL != "" {
+		t.Errorf("repo 2 = %+v", cfg.Repos[2])
+	}
+}
+
+// A bare "repos" string (not even an object) still wraps to ONE entry —
+// every field ends up empty (a string has no .name/.url properties in PS
+// either), so it warns for the missing url and, since decodeRepos returned a
+// non-empty slice, scripts.Repos must NOT fall back to the legacy repo (see
+// scripts.TestReposBareStringIsEmptyNotLegacy).
+func TestReposDecodeBareStringWrapsToOneEmptyEntry(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	cfg, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":"https://example.com/some-url"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Repos) != 1 || cfg.Repos[0] != (config.RepoEntry{}) {
+		t.Fatalf("got %+v, want one zero-valued entry", cfg.Repos)
+	}
+	want := "config.json: repos entry missing 'url' — skipped"
+	if len(warns) != 1 || warns[0] != want {
+		t.Fatalf("warns = %v, want [%q]", warns, want)
 	}
 }
 
@@ -263,14 +289,19 @@ func TestReposDecodeSingleObjectWraps(t *testing.T) {
 	}
 }
 
-func TestReposDecodeTypeMismatchDropsEntry(t *testing.T) {
+// I1 (P4 correction of the P1-era assumption): a repos-entry field type
+// mismatch does NOT drop the entry, and a numeric url is stringified rather
+// than zeroed — matching PS's "$($e.url)" interpolation exactly (verified
+// against live pwsh: Get-StoRepos on this config yields one repo
+// {Name:"a", Url:"123", Branch:"main"}).
+func TestReposDecodeNumericURLIsStringified(t *testing.T) {
 	data := filepath.Join(t.TempDir(), "data")
 	cfg, _, _, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":[{"name":"a","url":123}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Repos) != 0 {
-		t.Fatalf("got %+v, want 0 repos (url:123 fails whole-entry decode)", cfg.Repos)
+	if len(cfg.Repos) != 1 || cfg.Repos[0].Name != "a" || cfg.Repos[0].URL != "123" {
+		t.Fatalf("got %+v, want one repo {Name:a, URL:123}", cfg.Repos)
 	}
 }
 

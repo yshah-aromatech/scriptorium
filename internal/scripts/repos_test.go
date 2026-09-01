@@ -121,6 +121,17 @@ func TestReposNullReposIsEmptyNotLegacy(t *testing.T) {
 	}
 }
 
+// I1: a bare "repos" string wraps to one all-empty entry the same way — the
+// `@($cfg.repos)` wrap law applies to every non-array shape, not just null —
+// so this must ALSO not fall back to the legacy single repo.
+func TestReposBareStringIsEmptyNotLegacy(t *testing.T) {
+	cfg, paths := load(t, `{"repos":"https://example.com/some-url"}`)
+	repos := scripts.Repos(cfg, paths)
+	if len(repos) != 0 {
+		t.Fatalf("repos = %+v, want empty (not legacy fallback)", repos)
+	}
+}
+
 // ---------------------------------------------------------------------
 // AddRepoConfig — ported case-for-case from tests/Core.Tests.ps1
 // 'Add-StoRepoConfig'.

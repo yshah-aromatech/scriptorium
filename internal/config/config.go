@@ -32,42 +32,64 @@ type RepoEntry struct {
 	Branch string `json:"branch"`
 }
 
-// decodeRepos parses the "repos" config value the way PS's `@($cfg.repos)`
-// does: a bare JSON object wraps to a one-element array (mirroring
-// PowerShell's array-subexpression operator on a non-array). Each element
-// is then decoded independently; an element whose shape/types don't fit
-// RepoEntry fails to decode and is silently dropped AT THIS LAYER — the
-// per-entry warnings PS emits for a missing url or a bad name pattern are a
-// later phase's concern (Get-StoRepos normalization), not this decode step.
-func decodeRepos(raw json.RawMessage) []RepoEntry {
-	// a literal JSON null is PS's `@($cfg.repos)` on $null: the
-	// array-subexpression operator wraps $null into a ONE-element array
-	// (verified against pwsh), not zero — so it must NOT collapse to the
-	// same empty-slice shape as "repos": [] (which is genuinely zero
-	// entries and, in scripts.Repos, falls back to the legacy single repo).
-	// A single zero-value RepoEntry reproduces both effects: it's counted
-	// as one entry (matching PS's Count==1, so Repos() must not treat it as
-	// "no repos configured"), and its blank URL/Name warn/skip exactly like
-	// stringifying null's .url/.name in PS.
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return []RepoEntry{{}}
+// repoScalar decodes a JSON string OR number as a string, leaving any other
+// shape (bool, array, object, null) as "". This mirrors PS's per-field
+// string interpolation in Get-StoRepos/Add-StoRepoConfig (`"$($e.url)"`),
+// which stringifies whatever type a repos-entry field holds — verified
+// against live pwsh: `{"url":123}` binds Url to the string "123", not "".
+// PS also stringifies bool/array fields (e.g. `true`->"True"), but only the
+// string/number shapes are reproduced here; see the parity-inventory
+// divergence note for the rest.
+type repoScalar string
+
+func (s *repoScalar) UnmarshalJSON(data []byte) error {
+	var str string
+	if json.Unmarshal(data, &str) == nil {
+		*s = repoScalar(str)
+		return nil
 	}
+	var num json.Number
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if dec.Decode(&num) == nil {
+		*s = repoScalar(num.String())
+	}
+	return nil // any other shape leaves the zero value ""
+}
+
+// UnmarshalJSON decodes one repos-array entry field-by-field via repoScalar,
+// so neither a single undecodable field nor a whole non-object element (e.g.
+// a bare string sibling in the array) drops the entry — see decodeRepos.
+func (r *RepoEntry) UnmarshalJSON(data []byte) error {
+	var aux struct {
+		Name   repoScalar `json:"name"`
+		URL    repoScalar `json:"url"`
+		Branch repoScalar `json:"branch"`
+	}
+	_ = json.Unmarshal(data, &aux) // any shape mismatch just leaves fields at "" — the entry always decodes
+	r.Name, r.URL, r.Branch = string(aux.Name), string(aux.URL), string(aux.Branch)
+	return nil
+}
+
+// decodeRepos parses the "repos" config value the way PS's `@($cfg.repos)`
+// does: the array-subexpression operator wraps ANY non-array value (an
+// object, a bare string/number/bool, or null) into a one-element array —
+// this "wrap law" applies uniformly, verified against live pwsh for every
+// shape below. Each element then decodes independently via RepoEntry's
+// tolerant UnmarshalJSON, so a malformed sibling never sinks the whole list
+// — it just decodes to a zero-valued entry, matching PS's property access on
+// a shape with no matching field ($null, silently).
+func decodeRepos(raw json.RawMessage) []RepoEntry {
 	var elems []json.RawMessage
-	if json.Unmarshal(raw, &elems) != nil {
-		// not an array — check whether it's a bare object to wrap
-		var obj map[string]json.RawMessage
-		if json.Unmarshal(raw, &obj) != nil {
-			return nil
-		}
+	if json.Unmarshal(raw, &elems) != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		// json.Unmarshal of a literal `null` into a []json.RawMessage
+		// succeeds with a nil (zero-length) slice rather than erroring, so
+		// the null case needs its own check to still wrap to one element.
 		elems = []json.RawMessage{raw}
 	}
-	var out []RepoEntry
-	for _, e := range elems {
-		var entry RepoEntry
-		if json.Unmarshal(e, &entry) != nil {
-			continue
-		}
-		out = append(out, entry)
+	out := make([]RepoEntry, len(elems))
+	for i, e := range elems {
+		_ = json.Unmarshal(e, &out[i]) // RepoEntry.UnmarshalJSON never errors
 	}
 	return out
 }
