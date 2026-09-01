@@ -134,3 +134,22 @@ func TestLogTail(t *testing.T) {
 		t.Fatal("tail larger than file must return whole file")
 	}
 }
+
+// ParseRow tolerates field-type mismatches (eras we don't model): a STRING
+// durationSec field decodes to the zero value, the row still appears.
+func TestParseRowToleratesOddEra(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "history.jsonl")
+	s := history.NewStore(p)
+	// durationSec is a STRING "60", not a number — an era we don't model
+	line := `{"script":"odd","status":"success","startedAt":"2026-05-01T12:00:00.000Z","durationSec":"60","host":"h","logFile":"/tmp/z.log"}`
+	if err := os.WriteFile(p, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Last(10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("Last: %d rows err %v, want 1", len(rows), err)
+	}
+	if rows[0].Script != "odd" || rows[0].Status != "success" {
+		t.Fatalf("parsed row = %+v, want Script=odd Status=success", rows[0])
+	}
+}

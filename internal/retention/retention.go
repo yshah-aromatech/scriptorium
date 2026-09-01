@@ -14,7 +14,6 @@
 package retention
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -144,7 +143,7 @@ func pruneHistory(o Options, now time.Time) error {
 	var dropLogs []string
 	dropped := 0
 	for i, line := range lines {
-		row, ok := parseRow(line)
+		row, ok := history.ParseRow(line)
 		at := row.StartedAt.Time()
 		if !ok || at.IsZero() {
 			dropped++ // blank/corrupt rows are dead weight
@@ -153,7 +152,8 @@ func pruneHistory(o Options, now time.Time) error {
 		at = at.UTC()
 		stale := at.Before(histCutoff) ||
 			(row.Status == "success" && at.Before(successCutoff) && frequent[row.Script])
-		if stale && newest[row.Script] != i {
+		idx, isNewest := newest[row.Script]
+		if stale && (!isNewest || idx != i) {
 			dropped++
 			if row.LogFile != nil && *row.LogFile != "" {
 				dropLogs = append(dropLogs, *row.LogFile)
@@ -190,20 +190,6 @@ func pruneHistory(o Options, now time.Time) error {
 
 	deleteLogs(o.LogsDir, dropLogs)
 	return nil
-}
-
-// parseRow mirrors what ConvertFrom-Json decides in the PS app: only a line
-// that is not valid JSON is corrupt. Valid JSON whose field TYPES don't match
-// Row is a row from an era we don't model — encoding/json still fills in every
-// field it could decode, and the fields the policy reads are exactly those. A
-// prune must never silently delete a row just because it is unfamiliar.
-func parseRow(line string) (history.Row, bool) {
-	var row history.Row
-	if strings.TrimSpace(line) == "" || !json.Valid([]byte(line)) {
-		return row, false
-	}
-	_ = json.Unmarshal([]byte(line), &row)
-	return row, true
 }
 
 // deleteLogs removes the pruned rows' logs — and nothing that is not ours.

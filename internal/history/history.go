@@ -60,8 +60,9 @@ type Store struct {
 func NewStore(path string) *Store { return &Store{path: path} }
 
 // Append writes one row. The marshalled row and its newline go out in a single
-// write(2) on an O_APPEND fd, so a row can never interleave with a row another
-// process (cron, MCP, TUI) is appending at the same instant.
+// Write call on an O_APPEND fd (never interleaves mid-row with concurrent appenders),
+// so a row can never interleave with a row another process (cron, MCP, TUI) is
+// appending at the same instant.
 func (s *Store) Append(row Row) error {
 	b, err := json.Marshal(row)
 	if err != nil {
@@ -98,6 +99,19 @@ func (s *Store) RawLines() ([]string, error) {
 	return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n"), nil
 }
 
+// ParseRow parses one history.jsonl line the way ConvertFrom-Json does:
+// any valid-JSON object is a row (type errors on individual fields are
+// eras we don't model — the other fields still decode); blank or
+// invalid-JSON lines are not rows.
+func ParseRow(line string) (Row, bool) {
+	var r Row
+	if strings.TrimSpace(line) == "" || !json.Valid([]byte(line)) {
+		return r, false
+	}
+	_ = json.Unmarshal([]byte(line), &r)
+	return r, true
+}
+
 // rows parses every line it can, skipping blank and corrupt ones — a torn
 // write must not take the whole history down with it.
 func (s *Store) rows() ([]Row, error) {
@@ -107,11 +121,8 @@ func (s *Store) rows() ([]Row, error) {
 	}
 	out := make([]Row, 0, len(lines))
 	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var r Row
-		if json.Unmarshal([]byte(line), &r) != nil {
+		r, ok := ParseRow(line)
+		if !ok {
 			continue
 		}
 		out = append(out, r)

@@ -169,6 +169,9 @@ func TestNeverDeletesOutsideLogsDir(t *testing.T) {
 	if !exists(outside) {
 		t.Fatal("a log outside LogsDir must never be deleted")
 	}
+	if got := lines(t, o.HistoryFile); len(got) != 1 {
+		t.Fatalf("history = %d lines, want exactly 1 (the kept fresh row)", len(got))
+	}
 }
 
 // 5. Pester: 'never deletes from a sibling dir sharing the logs-dir prefix'
@@ -186,6 +189,9 @@ func TestSiblingDirSharingLogsPrefixSurvives(t *testing.T) {
 
 	if !exists(sib) {
 		t.Fatal("a sibling dir sharing the LogsDir prefix must never be pruned")
+	}
+	if got := lines(t, o.HistoryFile); len(got) != 1 {
+		t.Fatalf("history = %d lines, want exactly 1 (the kept fresh row)", len(got))
 	}
 }
 
@@ -254,6 +260,10 @@ func TestHeldFlockSkipsSilently(t *testing.T) {
 
 	if got := lines(t, o.HistoryFile); len(got) != 2 {
 		t.Fatalf("rows = %d, want 2 (history untouched while the flock is held)", len(got))
+	}
+	stamp := filepath.Join(o.DataDir, ".last-prune")
+	if _, err := os.Stat(stamp); !os.IsNotExist(err) {
+		t.Fatal(".last-prune stamp must not exist when flock prevents the prune")
 	}
 }
 
