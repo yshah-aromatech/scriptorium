@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/yshah-aromatech/scriptorium/internal/config"
+	"github.com/yshah-aromatech/scriptorium/internal/psfixtures"
 	"github.com/yshah-aromatech/scriptorium/internal/secret"
 )
 
@@ -231,21 +232,131 @@ func TestLoadAppEnv(t *testing.T) {
 	t.Cleanup(func() { os.Unsetenv("PHASE1_TEST_TOKEN") })
 }
 
-func fixtureDir(t *testing.T) string {
-	t.Helper()
-	d, err := os.Getwd()
+// I2: "repos" decode is per-entry and PS-shaped — @($cfg.repos) wraps a
+// bare object into a one-element array, and each array element decodes
+// independently (a malformed sibling doesn't sink the whole list).
+func TestReposDecodeMixedArray(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	cfg, _, _, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":[{"name":"a","url":"u"},"bare-string",{"url":""}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for {
-		p := filepath.Join(d, "testdata", "psfixtures")
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			t.Fatal("testdata/psfixtures not found")
-		}
-		d = parent
+	if len(cfg.Repos) != 2 {
+		t.Fatalf("got %d repos %+v, want 2 (object with empty url IS kept)", len(cfg.Repos), cfg.Repos)
 	}
+	if cfg.Repos[0].Name != "a" || cfg.Repos[0].URL != "u" {
+		t.Errorf("repo 0 = %+v", cfg.Repos[0])
+	}
+	if cfg.Repos[1].URL != "" {
+		t.Errorf("repo 1 = %+v", cfg.Repos[1])
+	}
+}
+
+func TestReposDecodeSingleObjectWraps(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	cfg, _, _, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":{"name":"a","url":"u"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Repos) != 1 || cfg.Repos[0].Name != "a" || cfg.Repos[0].URL != "u" {
+		t.Fatalf("got %+v, want one repo {a, u}", cfg.Repos)
+	}
+}
+
+func TestReposDecodeTypeMismatchDropsEntry(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	cfg, _, _, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":[{"name":"a","url":123}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Repos) != 0 {
+		t.Fatalf("got %+v, want 0 repos (url:123 fails whole-entry decode)", cfg.Repos)
+	}
+}
+
+// M2: a leading UTF-8 BOM must not break JSON decoding, and trailing
+// garbage after the top-level object must still be a hard error.
+func TestConfigJSONStripsLeadingBOM(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("\ufeff{\"dataDir\":\""+data+"\"}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, warns, err := config.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns) != 0 {
+		t.Fatalf("unexpected warnings: %v", warns)
+	}
+	if cfg.DataDir != data {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, data)
+	}
+}
+
+func TestConfigJSONTrailingGarbageIsHardError(t *testing.T) {
+	_, _, _, err := config.Load(appDirWith(t, `{"mcpPort":1} trailing`))
+	if err == nil || !strings.Contains(err.Error(), "config.json is not valid JSON") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// M3: numeric-key int conversion rounds half-to-even like PS's [int] cast,
+// not truncates.
+func TestNumericIntConversionRoundsToEven(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	cfg, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","mcpPort":8765.7}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns) != 0 || cfg.McpPort != 8766 {
+		t.Fatalf("warns=%v McpPort=%v, want 8766", warns, cfg.McpPort)
+	}
+}
+
+// M4: non-finite and out-of-int32-range numeric values must warn and keep
+// the default rather than producing undefined int-conversion garbage.
+func TestNumericRejectsNonFiniteAndOverflow(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	cfg, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","mcpPort":"Infinity"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns) != 1 || cfg.McpPort != 8765 {
+		t.Fatalf("warns=%v McpPort=%v, want 1 warning and default 8765", warns, cfg.McpPort)
+	}
+
+	data2 := filepath.Join(t.TempDir(), "data")
+	cfg2, _, warns2, err := config.Load(appDirWith(t, `{"dataDir":"`+data2+`","mcpPort":1e300}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns2) != 1 || cfg2.McpPort != 8765 {
+		t.Fatalf("warns=%v McpPort=%v, want 1 warning and default 8765", warns2, cfg2.McpPort)
+	}
+}
+
+// M5: config key matching is case-insensitive, mirroring PS's [ordered]
+// hashtable lookup semantics.
+func TestConfigKeyMatchingIsCaseInsensitive(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	cfg, _, warns, err := config.Load(appDirWith(t, `{"DataDir":"`+data+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns) != 0 {
+		t.Fatalf("unexpected warnings: %v", warns)
+	}
+	if cfg.DataDir != data {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, data)
+	}
+}
+
+func fixtureDir(t *testing.T) string {
+	t.Helper()
+	dir, err := psfixtures.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

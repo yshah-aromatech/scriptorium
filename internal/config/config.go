@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -28,6 +29,34 @@ type RepoEntry struct {
 	Name   string `json:"name"`
 	URL    string `json:"url"`
 	Branch string `json:"branch"`
+}
+
+// decodeRepos parses the "repos" config value the way PS's `@($cfg.repos)`
+// does: a bare JSON object wraps to a one-element array (mirroring
+// PowerShell's array-subexpression operator on a non-array). Each element
+// is then decoded independently; an element whose shape/types don't fit
+// RepoEntry fails to decode and is silently dropped AT THIS LAYER — the
+// per-entry warnings PS emits for a missing url or a bad name pattern are a
+// later phase's concern (Get-StoRepos normalization), not this decode step.
+func decodeRepos(raw json.RawMessage) []RepoEntry {
+	var elems []json.RawMessage
+	if json.Unmarshal(raw, &elems) != nil {
+		// not an array — check whether it's a bare object to wrap
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(raw, &obj) != nil {
+			return nil
+		}
+		elems = []json.RawMessage{raw}
+	}
+	var out []RepoEntry
+	for _, e := range elems {
+		var entry RepoEntry
+		if json.Unmarshal(e, &entry) != nil {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // Config is the fully-defaulted, parsed config.json.
@@ -87,6 +116,22 @@ var knownNonNumericKeys = map[string]bool{
 	"syncOnLaunch":    true,
 	"colorMode":       true,
 	"mcpBind":         true,
+}
+
+// numericKeyByLower and nonNumericKeyByLower map a lower-cased key name to
+// its canonical spelling. PS's config is an [ordered] hashtable, whose key
+// lookup (`$cfg.Contains`, `$cfg[...]`) is case-insensitive by default, so
+// e.g. "DataDir" must bind to the canonical "dataDir" field. Duplicate keys
+// differing only by case: applied in document order, so the last one wins.
+var numericKeyByLower = lowerKeys(numericDefaults)
+var nonNumericKeyByLower = lowerKeys(knownNonNumericKeys)
+
+func lowerKeys[V any](m map[string]V) map[string]string {
+	out := make(map[string]string, len(m))
+	for k := range m {
+		out[strings.ToLower(k)] = k
+	}
+	return out
 }
 
 func defaultConfig() *Config {
@@ -175,27 +220,32 @@ func applyConfigJSON(cfg *Config, data []byte) ([]string, error) {
 	var warnings []string
 	for i, key := range keys {
 		raw := raws[i]
-		if def, ok := numericDefaults[key]; ok {
+		lower := strings.ToLower(key)
+		if canon, ok := numericKeyByLower[lower]; ok {
+			def := numericDefaults[canon]
 			num, ok := jsonNumber(raw)
 			if !ok {
 				warnings = append(warnings, fmt.Sprintf("config.json: '%s' must be a number, got '%s' — using default %s", key, rawDisplay(raw), formatDefault(def)))
 				continue
 			}
-			assignNumeric(cfg, key, num)
+			assignNumeric(cfg, canon, num)
 			continue
 		}
-		if !knownNonNumericKeys[key] {
+		canon, ok := nonNumericKeyByLower[lower]
+		if !ok {
 			warnings = append(warnings, fmt.Sprintf("config.json: unknown key '%s' — ignored (typo?)", key))
 			continue
 		}
-		assignNonNumeric(cfg, key, raw)
+		assignNonNumeric(cfg, canon, raw)
 	}
 	return warnings, nil
 }
 
 // orderedObject decodes a JSON object's top-level keys and raw values in
-// document order.
+// document order. A leading UTF-8 BOM is stripped first, and anything after
+// the closing '}' (besides trailing whitespace) is a hard error.
 func orderedObject(data []byte) (keys []string, raws []json.RawMessage, err error) {
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	dec := json.NewDecoder(bytes.NewReader(data))
 	tok, err := dec.Token()
 	if err != nil {
@@ -224,12 +274,25 @@ func orderedObject(data []byte) (keys []string, raws []json.RawMessage, err erro
 	if _, err := dec.Token(); err != nil { // closing '}'
 		return nil, nil, err
 	}
+	if _, err := dec.Token(); err != io.EOF {
+		if err == nil {
+			return nil, nil, fmt.Errorf("unexpected trailing data after top-level JSON object")
+		}
+		return nil, nil, err
+	}
 	return keys, raws, nil
 }
 
 // jsonNumber reports whether raw is a JSON number literal, or a JSON
 // string whose contents parse as one (PS's `-as [double]` cast accepts
 // both — an upgrading user's quoted "9443" must still bind), and its value.
+// NaN/±Inf (reachable only via a quoted string like "Infinity" — a bare
+// JSON number literal can't spell one) and values outside int32 range are
+// treated as invalid: Go's int() conversion of such a float is
+// undefined/platform-dependent, unlike PS's [int] cast (which throws at
+// use) — a config warning is safer than either. This is a deliberate
+// divergence from PS, which would let the value through here and only fail
+// later at the point of use.
 func jsonNumber(raw json.RawMessage) (float64, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -237,22 +300,22 @@ func jsonNumber(raw json.RawMessage) (float64, bool) {
 	if err != nil {
 		return 0, false
 	}
+	var f float64
 	switch v := tok.(type) {
 	case json.Number:
-		f, err := v.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return f, true
+		f, err = v.Float64()
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		if err != nil {
-			return 0, false
-		}
-		return f, true
+		f, err = strconv.ParseFloat(strings.TrimSpace(v), 64)
 	default:
 		return 0, false
 	}
+	if err != nil {
+		return 0, false
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) || f > math.MaxInt32 || f < math.MinInt32 {
+		return 0, false
+	}
+	return f, true
 }
 
 // rawDisplay renders raw the way PS string-interpolation would: a JSON
@@ -274,28 +337,34 @@ func formatDefault(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
+// toInt matches PS's [int] cast on a double, which rounds half-to-even
+// (banker's rounding) rather than truncating.
+func toInt(v float64) int {
+	return int(math.RoundToEven(v))
+}
+
 func assignNumeric(cfg *Config, key string, v float64) {
 	switch key {
 	case "monitorIntervalMs":
-		cfg.MonitorIntervalMs = int(v)
+		cfg.MonitorIntervalMs = toInt(v)
 	case "logTailKb":
-		cfg.LogTailKb = int(v)
+		cfg.LogTailKb = toInt(v)
 	case "runTimeoutMinutes":
 		cfg.RunTimeoutMinutes = v
 	case "maxOutputLines":
-		cfg.MaxOutputLines = int(v)
+		cfg.MaxOutputLines = toInt(v)
 	case "logRetentionDays":
 		cfg.LogRetentionDays = v
 	case "historyMaxLines":
-		cfg.HistoryMaxLines = int(v)
+		cfg.HistoryMaxLines = toInt(v)
 	case "historyDays":
 		cfg.HistoryDays = v
 	case "webhookTimeoutSec":
-		cfg.WebhookTimeoutSec = int(v)
+		cfg.WebhookTimeoutSec = toInt(v)
 	case "missedGraceMinutes":
 		cfg.MissedGraceMinutes = v
 	case "mcpPort":
-		cfg.McpPort = int(v)
+		cfg.McpPort = toInt(v)
 	}
 }
 
@@ -316,10 +385,7 @@ func assignNonNumeric(cfg *Config, key string, raw json.RawMessage) {
 			cfg.Branch = s
 		}
 	case "repos":
-		var r []RepoEntry
-		if json.Unmarshal(raw, &r) == nil {
-			cfg.Repos = r
-		}
+		cfg.Repos = decodeRepos(raw)
 	case "pythonBin":
 		var s string
 		if json.Unmarshal(raw, &s) == nil {
