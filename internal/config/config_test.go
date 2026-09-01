@@ -117,6 +117,30 @@ func TestBadNumericKeepsDefault(t *testing.T) {
 	}
 }
 
+// PS's `-as [double]` cast accepts a quoted numeric string, so a
+// numeric-gated key given as e.g. "5" must be silently honored, not warned.
+func TestQuotedNumericStringIsAccepted(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	cfg, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","runTimeoutMinutes":"5"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns) != 0 || cfg.RunTimeoutMinutes != 5.0 {
+		t.Fatalf("warns=%v RunTimeoutMinutes=%v", warns, cfg.RunTimeoutMinutes)
+	}
+}
+
+func TestQuotedNumericStringMcpPort(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	cfg, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","mcpPort":"9443"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns) != 0 || cfg.McpPort != 9443 {
+		t.Fatalf("warns=%v McpPort=%v", warns, cfg.McpPort)
+	}
+}
+
 func TestInvalidJSONIsHardError(t *testing.T) {
 	_, _, _, err := config.Load(appDirWith(t, `{not json`))
 	if err == nil || !strings.Contains(err.Error(), "config.json is not valid JSON") {

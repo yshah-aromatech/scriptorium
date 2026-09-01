@@ -227,7 +227,9 @@ func orderedObject(data []byte) (keys []string, raws []json.RawMessage, err erro
 	return keys, raws, nil
 }
 
-// jsonNumber reports whether raw is a JSON number literal and its value.
+// jsonNumber reports whether raw is a JSON number literal, or a JSON
+// string whose contents parse as one (PS's `-as [double]` cast accepts
+// both — an upgrading user's quoted "9443" must still bind), and its value.
 func jsonNumber(raw json.RawMessage) (float64, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -235,15 +237,22 @@ func jsonNumber(raw json.RawMessage) (float64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	num, ok := tok.(json.Number)
-	if !ok {
+	switch v := tok.(type) {
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
 		return 0, false
 	}
-	f, err := num.Float64()
-	if err != nil {
-		return 0, false
-	}
-	return f, true
 }
 
 // rawDisplay renders raw the way PS string-interpolation would: a JSON
