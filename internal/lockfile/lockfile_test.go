@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
-	"github.com/yshah-aromatech/scriptorium/internal/lockfile/pwshtest"
+	"github.com/yshah-aromatech/scriptorium/internal/pwshtest"
 )
 
 func dir(t *testing.T) *lockfile.Dir { t.Helper(); return lockfile.NewDir(t.TempDir()) }

@@ -1,7 +1,9 @@
-// Package pwshtest is the shared gate every pwsh-interop test (lockfile,
-// scripts discovery cross-check, ...) uses to find pwsh: locally, a missing
-// pwsh skips; in CI a missing pwsh is a hard failure, since a silently
-// skipped interop test defeats the point of having one.
+// Package pwshtest is the shared gate every pwsh-interop test across the
+// module (lockfile, scripts discovery cross-check, ...) uses to find pwsh:
+// locally, a missing pwsh skips; in CI a missing pwsh is a hard failure,
+// since a silently skipped interop test defeats the point of having one.
+// It lives directly under internal/ (not nested in any one caller's
+// package) because it's shared by multiple, unrelated packages.
 package pwshtest
 
 import (

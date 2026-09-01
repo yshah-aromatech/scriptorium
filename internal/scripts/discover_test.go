@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/yshah-aromatech/scriptorium/internal/config"
-	"github.com/yshah-aromatech/scriptorium/internal/lockfile/pwshtest"
+	"github.com/yshah-aromatech/scriptorium/internal/pwshtest"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 )
 

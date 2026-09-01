@@ -3,7 +3,7 @@ package pwshtest_test
 import (
 	"testing"
 
-	"github.com/yshah-aromatech/scriptorium/internal/lockfile/pwshtest"
+	"github.com/yshah-aromatech/scriptorium/internal/pwshtest"
 )
 
 // Locally (CI unset), a missing pwsh must skip, not fail — a Skip'd subtest
