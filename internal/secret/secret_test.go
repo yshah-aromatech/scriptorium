@@ -2,6 +2,7 @@ package secret_test
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,20 @@ func TestNamePatternGate(t *testing.T) {
 	r.Add("GREETING", "forced-secret-value", true)
 	if got := r.Redact("x forced-secret-value y"); got != "x *** y" {
 		t.Fatalf("force must register any name: %q", got)
+	}
+}
+
+// I1: PS -notmatch is case-insensitive, so a lowercase secret-ish name must
+// still register, and a lowercase non-secret-ish name must still not.
+func TestNamePatternGateCaseInsensitive(t *testing.T) {
+	r := secret.NewRegistry()
+	r.Add("github_token", "lowercase-name-val", false)
+	if got := r.Redact("x lowercase-name-val y"); got != "x *** y" {
+		t.Fatalf("lowercase TOKEN-ish name must register: %q", got)
+	}
+	r.Add("greeting", "still-not-secret-value", false)
+	if got := r.Redact("still-not-secret-value"); got != "still-not-secret-value" {
+		t.Fatalf("non-secret-looking lowercase name must not register: %q", got)
 	}
 }
 
@@ -77,6 +92,42 @@ func TestLineWriterRedacts(t *testing.T) {
 	want := "a *** b\nsecond ***\n"
 	if buf.String() != want {
 		t.Fatalf("got %q, want %q", buf.String(), want)
+	}
+}
+
+// flakyWriter errors on its call index `failOn`, then succeeds on every
+// other call.
+type flakyWriter struct {
+	buf    bytes.Buffer
+	failOn int
+	calls  int
+}
+
+func (f *flakyWriter) Write(p []byte) (int, error) {
+	defer func() { f.calls++ }()
+	if f.calls == f.failOn {
+		return 0, errors.New("boom")
+	}
+	return f.buf.Write(p)
+}
+
+// M7: a write error partway through a batch must not cause an
+// already-flushed line to re-emit on a later successful flush.
+func TestLineWriterErrorDoesNotDuplicateFlushedLine(t *testing.T) {
+	r := secret.NewRegistry()
+	r.Add("T_TOKEN", "line-secret-val", true)
+	fw := &flakyWriter{failOn: 1} // line1 flushes fine (call 0), line2 fails (call 1)
+	w := r.LineWriter(fw)
+	if _, err := w.Write([]byte("line-secret-val one\nline-secret-val two\n")); err == nil {
+		t.Fatal("expected a write error")
+	}
+	fw.failOn = -1 // stop failing
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := "*** one\n*** two\n"
+	if fw.buf.String() != want {
+		t.Fatalf("got %q, want %q (line one must not repeat)", fw.buf.String(), want)
 	}
 }
 

@@ -15,14 +15,18 @@ import (
 	"sync"
 )
 
-var namePattern = regexp.MustCompile(`TOKEN|KEY|SECRET|PASSWORD|PASSWD|PASS|PAT|CREDENTIAL|WEBHOOK|AUTH|CONN|DSN|BEARER`)
+// (?i): PS -notmatch is case-insensitive, so the name gate must be too.
+var namePattern = regexp.MustCompile(`(?i)TOKEN|KEY|SECRET|PASSWORD|PASSWD|PASS|PAT|CREDENTIAL|WEBHOOK|AUTH|CONN|DSN|BEARER`)
 
+// Registry is the redaction chokepoint: values Add registers are the only
+// ones Redact (and its LineWriter) ever scrub. Safe for concurrent use.
 type Registry struct {
 	mu     sync.RWMutex
 	values map[string]struct{}
 	sorted []string // longest-first snapshot, rebuilt on Add
 }
 
+// NewRegistry returns an empty Registry ready for Add/Redact.
 func NewRegistry() *Registry {
 	return &Registry{values: map[string]struct{}{}}
 }
@@ -72,6 +76,7 @@ func (r *Registry) LineWriter(w io.Writer) io.WriteCloser {
 	return &lineWriter{r: r, w: w}
 }
 
+// lineWriter is not safe for concurrent use; create one per stream.
 type lineWriter struct {
 	r   *Registry
 	w   io.Writer
@@ -87,10 +92,15 @@ func (lw *lineWriter) Write(p []byte) (int, error) {
 			break
 		}
 		line := s[:idx]
-		s = s[idx+1:]
 		if _, err := io.WriteString(lw.w, lw.r.Redact(line)+"\n"); err != nil {
+			// s still starts at the line that just failed — nothing
+			// already-flushed is retained, so a later retry can't
+			// re-emit it.
+			lw.buf.Reset()
+			lw.buf.WriteString(s)
 			return len(p), err
 		}
+		s = s[idx+1:]
 	}
 	lw.buf.Reset()
 	lw.buf.WriteString(s)
