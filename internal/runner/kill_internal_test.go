@@ -32,22 +32,29 @@ func canary(t *testing.T) (pgid int, exited <-chan struct{}) {
 var noSnapshot = []int{1 << 30}
 
 // A killTree that arrives after the root was reaped must send NOTHING to the
-// process group: the reaped pid — and with it the group id — is the kernel's
-// to hand out again, so both group signals would be aimed at a stranger.
-func TestKillTreeSendsNoGroupSignalAfterTheReap(t *testing.T) {
+// root: its pid — and with it the group id — is the kernel's to hand out
+// again, so both group signals would be aimed at a stranger, and so would the
+// snapshot pass if it still reached the root by pid.
+//
+// The snapshot passed in carries the root, which is what a run's real
+// snapshots always do (TreePIDs returns it first), so the canary stands in for
+// the recycled pid on both paths at once. The snapshot half only bites where
+// there is a /proc to walk — off Linux the pass returns before the loop — so
+// this one has to be run in the container as well as on the host.
+func TestKillTreeSendsNoSignalToAReapedRoot(t *testing.T) {
 	pgid, exited := canary(t)
 	alreadyReaped := make(chan struct{})
 	close(alreadyReaped)
 
 	start := time.Now()
-	killTree(pgid, noSnapshot, alreadyReaped)
+	killTree(pgid, append([]int{pgid}, noSnapshot...), alreadyReaped)
 	if elapsed := time.Since(start); elapsed > killGrace {
 		t.Errorf("killTree took %v — it waited out the grace period instead of returning on the reap", elapsed)
 	}
 
 	select {
 	case <-exited:
-		t.Fatal("the canary group was signalled after the root had been reaped")
+		t.Fatal("the canary was signalled after the root had been reaped")
 	case <-time.After(300 * time.Millisecond):
 	}
 }

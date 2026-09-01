@@ -31,10 +31,11 @@ func reaped(done <-chan struct{}) bool {
 // grace period for it to go, then SIGKILL the group AND every pid of the last
 // tree snapshot that is still alive.
 //
-// Every group signal is gated on the root still being unreaped, checked afresh
-// before each one — the pid is only ours to signal until it has been waited
-// for. A killTree that arrives after the reap therefore sends nothing to the
-// group at all, and does the snapshot pass alone.
+// Every signal aimed at the root is gated on it still being unreaped, checked
+// afresh before each one — the pid is only ours until it has been waited for.
+// A killTree that arrives after the reap therefore signals the root neither by
+// group nor by pid, and does the snapshot pass over the OTHER tree members
+// alone.
 //
 // The snapshot escalation is the part that matters. Children that ignored
 // TERM are reparented to init the moment the root exits, so a re-walk from
@@ -60,20 +61,31 @@ func killTree(pgid int, snapshot []int, done <-chan struct{}) {
 	if !procstat.HasProc() {
 		return
 	}
+	// the root's own pid is the reusable one — the same reasoning that takes
+	// the group signals off the table takes it out of the snapshot pass, which
+	// would otherwise reach it by pid where -pgid no longer may
+	rootReaped := reaped(done)
 	if len(snapshot) == 0 {
+		if rootReaped {
+			// nothing safe left to walk: a fresh walk starts AT the reaped
+			// root's pid, so a recycled pid would hand us a stranger's
+			// children. PS does not get here at all — Stop-StoRun returns on
+			// HasExited before its tree walk
+			return
+		}
 		// the sampler had not ticked yet (a run killed inside its first
 		// monitor interval) — walk the tree now, the way PS always does
 		snapshot = procstat.TreePIDs(pgid)
 	}
-	// the snapshot pass runs either way: it is the only thing that reaches an
-	// escapee that left the process group (setsid) or reparented to init.
-	// Its staleness window is narrower but real — the snapshot is up to one
-	// monitor interval old (default 1s), so the /proc check below proves the
-	// pid still exists, not that it is still the same process. That is the
+	// the snapshot pass otherwise runs either way: it is the only thing that
+	// reaches an escapee that left the process group (setsid) or reparented to
+	// init. Its staleness window is narrower but real — the snapshot is up to
+	// one monitor interval old (default 1s), so the /proc check below proves
+	// the pid still exists, not that it is still the same process. That is the
 	// price of reaching escapees at all, and PS takes the same risk with the
 	// tree walk it does at kill time.
 	for _, p := range snapshot {
-		if p <= 0 {
+		if p <= 0 || (rootReaped && p == pgid) {
 			continue
 		}
 		if _, err := os.Stat("/proc/" + strconv.Itoa(p)); err != nil {

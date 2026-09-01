@@ -118,7 +118,7 @@ type Event struct {
 |---|---|---|---|
 | history.jsonl append | mutex on Store | POSIX O_APPEND | open O_APPEND, ONE Write of line+"\n" (never bufio — split writes interleave rows) |
 | history.jsonl prune | same mutex | flock on `<dataDir>/.prune.lock` | flock, re-read, filter, write .tmp, os.Rename; skip if held; keep .last-prune throttle |
-| webhook-queue.jsonl | mutex | `os.Rename(qf, qf+".flush")` AS the mutex | keep the PS protocol verbatim (PS and Go interlock during migration); keep 10-min stale reclaim + 50/flush cap |
+| webhook-queue.jsonl | mutex | claiming `qf` as `qf+".flush"` IS the mutex | `os.Link` + unlink of the original: the atomic fail-if-exists primitive POSIX offers, where a bare `os.Rename` would silently overwrite a live claim (.NET's `File.Move` throws, which is the PS behaviour being ported). `os.Rename` is the fallback for filesystems that refuse hard links, gated on `.flush` being absent. Keep the PS protocol otherwise verbatim (PS and Go interlock during migration): 10-min stale reclaim + 50/flush cap, and skip the reclaim while the `.flush` still shares its inode |
 | missed-state.json | mutex | flock on the state file | fixes the PS double-alert race without changing the format |
 | `<script>.lock` | n/a | O_CREATE\|O_EXCL is the mutex | keep the 10-second freshness backoff before stale reclaim |
 | crontab | mutex | none available | crontab -l / crontab -; keep the "abort write if read failed" guard — data-loss guard, never simplify |

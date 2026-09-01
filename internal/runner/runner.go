@@ -403,31 +403,24 @@ func (s *supervisor) supervise(stdout, stderr io.ReadCloser) {
 		_ = s.cmd.Wait()
 		close(waitDone)
 	}()
-	reaped := func() bool {
-		select {
-		case <-waitDone:
-			return true
-		default:
-			return false
-		}
-	}
 	// completion has priority at the boundary, both as the loop condition and
 	// again inside the deadline branches: PS guards its whole timeout branch
 	// with `-not $proc.HasExited`, so a process that exited while the timer
-	// was going off is a finished run, not a timed-out one.
-	for !reaped() {
+	// was going off is a finished run, not a timed-out one. reaped (kill.go)
+	// is that same guard, and is what gates the kill signals too.
+	for !reaped(waitDone) {
 		select {
 		case <-waitDone:
 		case sm := <-s.samples:
 			s.onSample(sm)
 		case <-timeoutC:
 			timeoutC = nil
-			if !reaped() {
+			if !reaped(waitDone) {
 				s.onTimeout()
 			}
 		case <-ctxC:
 			ctxC = nil
-			if !reaped() {
+			if !reaped(waitDone) {
 				s.onCancel()
 			}
 		}
