@@ -16,11 +16,13 @@ import (
 )
 
 // DocEntry is one documented key from a .env.example: the KEY=VALUE line
-// plus the #-comment block immediately above it (joined with spaces).
+// plus the #-comment block immediately above it (joined with spaces). JSON
+// tags are the MCP-facing spelling (scripts.Detail.EnvExample serializes
+// these directly).
 type DocEntry struct {
-	Key     string
-	Default string
-	Comment string
+	Key     string `json:"key"`
+	Default string `json:"default"`
+	Comment string `json:"comment"`
 }
 
 // Read parses path into key/value pairs. Later duplicate keys overwrite
