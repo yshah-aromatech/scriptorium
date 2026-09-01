@@ -84,6 +84,30 @@ func ReadDoc(path string) ([]DocEntry, error) {
 	return entries, nil
 }
 
+// Keys returns path's key names in first-appearance order, deduped
+// (case-sensitively, matching PS's ordered-dict .Keys: the first occurrence
+// keeps its position even though a later duplicate's value would win in
+// Read). A missing file returns an empty, non-nil slice and nil error.
+func Keys(path string) ([]string, error) {
+	var keys []string
+	seen := map[string]bool{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return keys, nil
+		}
+		return keys, err
+	}
+	for _, line := range splitLines(string(data)) {
+		k, _, ok := parseLine(line)
+		if ok && !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	return keys, nil
+}
+
 // parseLine implements the shared KEY=VALUE rule, returning the raw trimmed value.
 func parseLine(raw string) (key, val string, ok bool) {
 	t := strings.TrimSpace(raw)

@@ -16,6 +16,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -39,6 +40,18 @@ type RepoEntry struct {
 // per-entry warnings PS emits for a missing url or a bad name pattern are a
 // later phase's concern (Get-StoRepos normalization), not this decode step.
 func decodeRepos(raw json.RawMessage) []RepoEntry {
+	// a literal JSON null is PS's `@($cfg.repos)` on $null: the
+	// array-subexpression operator wraps $null into a ONE-element array
+	// (verified against pwsh), not zero — so it must NOT collapse to the
+	// same empty-slice shape as "repos": [] (which is genuinely zero
+	// entries and, in scripts.Repos, falls back to the legacy single repo).
+	// A single zero-value RepoEntry reproduces both effects: it's counted
+	// as one entry (matching PS's Count==1, so Repos() must not treat it as
+	// "no repos configured"), and its blank URL/Name warn/skip exactly like
+	// stringifying null's .url/.name in PS.
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return []RepoEntry{{}}
+	}
 	var elems []json.RawMessage
 	if json.Unmarshal(raw, &elems) != nil {
 		// not an array — check whether it's a bare object to wrap
@@ -206,7 +219,33 @@ func Load(appDir string) (*Config, Paths, []string, error) {
 		}
 	}
 
+	// repos entry sanity (PS order: key warnings -> migration -> repos).
+	// Advisory only — normalization/skipping of bad entries is
+	// scripts.Repos' job, run lazily so env overrides loaded above apply.
+	warnings = append(warnings, reposEntryWarnings(cfg.Repos)...)
+
 	return cfg, paths, warnings, nil
+}
+
+// repoNamePattern is the valid repos-entry name shape, shared by the
+// config-load warning below and scripts.Repos/AddRepoConfig normalization.
+var repoNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// reposEntryWarnings ports Initialize-Sto's repos-sanity loop: each entry
+// (in array order) can warn for a missing url, a malformed name, or both —
+// url is checked before name, independently, matching PS's two separate
+// `if` statements.
+func reposEntryWarnings(repos []RepoEntry) []string {
+	var warnings []string
+	for _, r := range repos {
+		if r.URL == "" {
+			warnings = append(warnings, "config.json: repos entry missing 'url' — skipped")
+		}
+		if r.Name != "" && !repoNamePattern.MatchString(r.Name) {
+			warnings = append(warnings, fmt.Sprintf("config.json: repos entry name '%s' must match [A-Za-z0-9_-]+ — skipped", r.Name))
+		}
+	}
+	return warnings
 }
 
 // applyConfigJSON walks data's top-level object in document order (PS

@@ -165,6 +165,32 @@ func TestReadDocQuoteTrimDivergence(t *testing.T) {
 	}
 }
 
+// Phase 4 carry: envfile.Keys — ordered, first-appearance, deduped key
+// list, matching PS's ordered-dict .Keys (first position kept; value can be
+// overwritten by a later duplicate, but position doesn't move).
+func TestKeysOrderedFirstAppearanceDeduped(t *testing.T) {
+	got, err := envfile.Keys(write(t, "K=1\nA=2\nK=3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"K", "A"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestKeysMissingFileIsEmptyNotError(t *testing.T) {
+	got, err := envfile.Keys(filepath.Join(t.TempDir(), "nope.env"))
+	if err != nil || len(got) != 0 {
+		t.Fatalf("got %v, %v; want empty, nil", got, err)
+	}
+}
+
 func fixtureDir(t *testing.T) string {
 	t.Helper()
 	dir, err := psfixtures.Dir()

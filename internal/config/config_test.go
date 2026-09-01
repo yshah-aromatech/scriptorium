@@ -352,6 +352,93 @@ func TestConfigKeyMatchingIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+// Phase 4 carry: config.Load's repos entry validation warnings, appended
+// AFTER the migration warning (PS order: key warnings -> migration ->
+// repos), ported from src/Core.psm1's Initialize-Sto repos-sanity block.
+// Entries stay in cfg.Repos — normalization skipping is scripts.Repos'
+// concern; these warnings are advisory PS parity only.
+func TestReposWarningMissingURL(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	_, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":[{"name":"a"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "config.json: repos entry missing 'url' — skipped"
+	if len(warns) != 1 || warns[0] != want {
+		t.Fatalf("warns = %v, want [%q]", warns, want)
+	}
+}
+
+func TestReposWarningBadName(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	_, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":[{"name":"bad name!","url":"https://x"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "config.json: repos entry name 'bad name!' must match [A-Za-z0-9_-]+ — skipped"
+	if len(warns) != 1 || warns[0] != want {
+		t.Fatalf("warns = %v, want [%q]", warns, want)
+	}
+}
+
+// A literal JSON null "repos" value is PS's `@($cfg.repos)` wrapping $null
+// into a single-element array — one entry, empty url, warns once.
+func TestReposWarningNullReposWarnsOnce(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	_, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":null}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "config.json: repos entry missing 'url' — skipped"
+	if len(warns) != 1 || warns[0] != want {
+		t.Fatalf("warns = %v, want [%q]", warns, want)
+	}
+}
+
+func TestReposWarningOrderAfterMigration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacy := filepath.Join(home, ".psscripts")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, _, warns, err := config.Load(appDirWith(t, `{"repos":[{"url":""}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warns) != 2 {
+		t.Fatalf("warns = %v, want 2 (migration + repos)", warns)
+	}
+	if !strings.HasPrefix(warns[0], "migrated data dir: ") {
+		t.Fatalf("warns[0] = %q, want the migration warning first", warns[0])
+	}
+	if warns[1] != "config.json: repos entry missing 'url' — skipped" {
+		t.Fatalf("warns[1] = %q", warns[1])
+	}
+}
+
+// A single entry can warn twice: missing url AND a bad name, url checked
+// first (PS order).
+func TestReposWarningBothOnOneEntry(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "data")
+	_, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":[{"name":"bad!"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"config.json: repos entry missing 'url' — skipped",
+		"config.json: repos entry name 'bad!' must match [A-Za-z0-9_-]+ — skipped",
+	}
+	if len(warns) != len(want) {
+		t.Fatalf("warns = %v, want %v", warns, want)
+	}
+	for i := range want {
+		if warns[i] != want[i] {
+			t.Errorf("warns[%d] = %q, want %q", i, warns[i], want[i])
+		}
+	}
+}
+
 func fixtureDir(t *testing.T) string {
 	t.Helper()
 	dir, err := psfixtures.Dir()

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
+	"github.com/yshah-aromatech/scriptorium/internal/lockfile/pwshtest"
 )
 
 func dir(t *testing.T) *lockfile.Dir { t.Helper(); return lockfile.NewDir(t.TempDir()) }
@@ -92,10 +93,7 @@ func TestForeignLiveLockBlocks(t *testing.T) {
 // Interop direction 2: PowerShell's Test-StoScriptLocked sees a Go-held lock.
 // Skipped when pwsh is absent (present locally + on ubuntu-latest CI).
 func TestPSSeesGoLock(t *testing.T) {
-	pwsh, err := exec.LookPath("pwsh")
-	if err != nil {
-		t.Skip("pwsh not on PATH")
-	}
+	pwsh := pwshtest.RequirePwsh(t)
 	base := t.TempDir()
 	d := lockfile.NewDir(base)
 	rel, _, ok := d.Acquire("go-held")
