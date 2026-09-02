@@ -42,6 +42,8 @@ var pscorpus = []corpusCase{
 	{file: "namemap.ps1"},
 	{file: "param_block.ps1"},
 	{file: "mixed_no_deps.ps1"},
+	{file: "union_versioned_first.ps1"},
+	{file: "union_bare_first.ps1"},
 	{
 		file: "sibling_psm1.ps1",
 		setup: func(t *testing.T, dir string) {
