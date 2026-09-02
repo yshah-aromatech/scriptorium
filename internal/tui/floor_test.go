@@ -307,7 +307,7 @@ func TestSystemUpdateRunsAptStageFirstWhenSudoAllows(t *testing.T) {
 	if aptAt < 0 || modAt < 0 || venvAt < 0 {
 		t.Fatalf("not all three stages ran:\n%s", out)
 	}
-	if !(aptAt < modAt && modAt < venvAt) {
+	if aptAt >= modAt || modAt >= venvAt {
 		t.Errorf("stages ran out of order (apt=%d modules=%d venvs=%d):\n%s", aptAt, modAt, venvAt, out)
 	}
 	if !strings.Contains(m.statusText, "modules and venvs upgraded") {
