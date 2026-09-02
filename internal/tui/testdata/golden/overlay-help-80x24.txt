@@ -1,0 +1,24 @@
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2 
+─ scripts ────────────────│─ output ────────────────────────────────────────────
+─ keys ─────────────────────────────────────────────────────────────────────────
+ # views                                # run                                   
+  1       fleet                          r       run                            
+  2       run                            x       kill                           
+  3       history                        X       clear queue                    
+  4       schedules                      s       sync                           
+                                                                                
+ # move                                 # session                               
+  ↑/k     up                             :       commands                       
+  ↓/j     down                           ?       help                           
+  pgup    page up                        q       quit                           
+  pgdn    page down                                                             
+  g       top                           # overlays                              
+  G       bottom                         y/↵     confirm                        
+  tab     focus                          n       no                             
+  end     follow                         esc     close                          
+                                                                                
+ # fleet                                                                        
+────────────────────────────────────────────────────────────────────────────────
+   at 2026-09-02 14:27:00 │                                                     
+ backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
+any key close

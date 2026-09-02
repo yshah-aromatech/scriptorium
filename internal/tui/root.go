@@ -100,6 +100,10 @@ type Model struct {
 	spin   spinner.Model
 	spinOn bool
 
+	// ov is the modal layer: exactly one overlay at a time, over whichever
+	// view is behind it (overlay.go).
+	ov overlay
+
 	fleet fleetModel
 	run   runModel
 }
@@ -292,8 +296,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, m.forward(msg)
 }
 
-// forward hands a message the root does not own to the view that does.
+// forward hands a message the root does not own to the view that does. An
+// open overlay swallows the mouse entirely (inventory §1.11: the mouse is live
+// only in the list and history views, never under a modal) — a click that
+// selected a row behind a confirm prompt would be acting on a screen the user
+// cannot see.
 func (m *Model) forward(msg tea.Msg) tea.Cmd {
+	if m.ov != nil {
+		switch msg.(type) {
+		case tea.MouseClickMsg, tea.MouseWheelMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
+			return nil
+		}
+	}
 	switch m.mode {
 	case modeFleet:
 		return m.fleet.update(m, msg)
@@ -326,9 +340,25 @@ func (m *Model) onMissed(msg MissedMsg) tea.Cmd {
 
 func (m *Model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 	k := m.keys
+	// ctrl+c belongs to the terminal, not to whichever overlay happens to be
+	// open (inventory §1.2): it quits from every mode, closing anything that
+	// is up on the way out.
+	if msg.Mod == tea.ModCtrl && msg.Code == 'c' {
+		m.closeOverlay()
+		return m.quitCmd()
+	}
+	if m.ov != nil {
+		return m.onOverlayKey(msg)
+	}
 	switch {
 	case key.Matches(msg, k.Quit):
-		return tea.Quit
+		return m.quitCmd()
+	case key.Matches(msg, k.Palette):
+		m.open(newPalette(m))
+		return nil
+	case key.Matches(msg, k.Help):
+		m.open(&helpOverlay{})
+		return nil
 	case key.Matches(msg, k.Fleet):
 		return m.switchTo(modeFleet)
 	case key.Matches(msg, k.Run):
@@ -408,7 +438,11 @@ func (m *Model) body() []string {
 			"agenda by next fire · cron editing · missed-fire status",
 			"arrives in the next phase")
 	}
-	return fitRows(rows, h)
+	rows = fitRows(rows, h)
+	if m.ov != nil {
+		rows = m.applyOverlay(rows, m.w, h)
+	}
+	return rows
 }
 
 // tooSmall is the guard frame: the one thing that is still true at 30x8.

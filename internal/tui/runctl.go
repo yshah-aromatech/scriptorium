@@ -233,22 +233,6 @@ func trim1(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 // Queue
 // ---------------------------------------------------------------------------
 
-// queueUnblocked is the modal gate from inventory §4.11: the PS app drains the
-// queue only while no MODAL overlay is open (deps/confirm/input/env), and
-// keeps draining under the read-only ones (history/help).
-//
-// Phase 10 has no overlays at all, so this is true for every mode that exists —
-// deliberately written as the gate rather than omitted, so phase 11 adds its
-// modes to one list instead of rediscovering the rule. It must never return
-// false for a mode that cannot block, or the queue dead-locks.
-func (m *Model) queueUnblocked() bool {
-	switch m.mode {
-	case modeFleet, modeRun, modeHistory, modeSchedules:
-		return true
-	}
-	return false
-}
-
 // dequeue takes ONE entry per turn, re-resolving it by name against the
 // current script list: a sync while the entry waited replaces every
 // scripts.Script value, and an entry whose script is gone is reported, not

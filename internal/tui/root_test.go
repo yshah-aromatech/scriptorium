@@ -20,6 +20,10 @@ func keyMsg(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "tab":
 		return tea.KeyPressMsg{Code: tea.KeyTab}
+	case "esc":
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "backspace":
+		return tea.KeyPressMsg{Code: tea.KeyBackspace}
 	case "end":
 		return tea.KeyPressMsg{Code: tea.KeyEnd}
 	case "up":
@@ -240,9 +244,13 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 			bound[k] = true
 		}
 	}
-	for _, p11 := range []string{"a", "e", "v", "i", "l", "u", "U", "t", "y", "c", "/", "?", "ctrl+f", "n", "N", "h"} {
-		if bound[p11] {
-			t.Errorf("%q is bound in phase 10 but its overlay does not exist yet", p11)
+	// Keys whose behaviour has not been built yet stay unbound: an advertised
+	// key that does nothing is worse than one that is not advertised. Wave A1
+	// binds the overlay keys (: ? esc y n) WITH their overlays; the rest wait
+	// for the wave that implements them.
+	for _, later := range []string{"a", "e", "v", "i", "l", "u", "U", "t", "c", "/", "ctrl+f", "N", "h"} {
+		if bound[later] {
+			t.Errorf("%q is bound but its action does not exist yet", later)
 		}
 	}
 
@@ -261,7 +269,7 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 		for _, b := range m.hints() {
 			keys = append(keys, b.Help().Key)
 		}
-		want := append(append([]string{}, tc.want...), "q", "1", "2", "3", "4")
+		want := append(append([]string{}, tc.want...), "q", ":", "?", "1", "2", "3", "4")
 		if strings.Join(keys, ",") != strings.Join(want, ",") {
 			t.Errorf("mode %v focus %v hints = %v, want %v", tc.mode, tc.focus, keys, want)
 		}
@@ -289,13 +297,15 @@ func TestFooterKeepsQuitAtTheFloor(t *testing.T) {
 	}
 }
 
+// allBindings is every key the app binds, read off the ONE grouped list the
+// help overlay and the palette also read (keys.go). Hand-listing them here
+// again is exactly the drift the single source exists to prevent.
 func allBindings(k keyMap) []key.Binding {
-	return []key.Binding{
-		k.Fleet, k.Run, k.History, k.Schedules, k.Quit,
-		k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom,
-		k.Open, k.FailFilter,
-		k.Focus, k.Start, k.Kill, k.ClearQueue, k.Sync, k.Follow,
+	var out []key.Binding
+	for _, g := range k.groups() {
+		out = append(out, g.Keys...)
 	}
+	return out
 }
 
 // The header degrades in steps instead of losing the switcher: at every width

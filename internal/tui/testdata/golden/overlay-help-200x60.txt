@@ -1,0 +1,60 @@
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                                                                                                      scripts · synced 4m ago   ops-01   v1.4.2 
+─ scripts ──────────────────────────────────│─ output ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+▎✓ backup-db                       ps ↻   3m│▸ scriptorium                                                                                                                                              
+ · cleanup-tmp                     ps      —│                                                                                                                                                           
+ ✓ heartbeat                       py ↻  40s│  r run · s sync · tab focus · 1-4 views                                                                                                                   
+ ✓ nightly-report                  ps ⚠   5h│                                                                                                                                                           
+ ▶ sync-orders                     py    12m│                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+─ keys ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ # views                                                                                            # run                                                                                               
+  1       fleet                                                                                      r       run                                                                                        
+  2       run                                                                                        x       kill                                                                                       
+  3       history                                                                                    X       clear queue                                                                                
+  4       schedules                                                                                  s       sync                                                                                       
+                                                                                                                                                                                                        
+ # move                                                                                             # session                                                                                           
+  ↑/k     up                                                                                         :       commands                                                                                   
+  ↓/j     down                                                                                       ?       help                                                                                       
+  pgup    page up                                                                                    q       quit                                                                                       
+  pgdn    page down                                                                                                                                                                                     
+  g       top                                                                                       # overlays                                                                                          
+  G       bottom                                                                                     y/↵     confirm                                                                                    
+  tab     focus                                                                                      n       no                                                                                         
+  end     follow                                                                                     esc     close                                                                                      
+                                                                                                                                                                                                        
+ # fleet                                                                                                                                                                                                
+  ↵       open in run                                                                                                                                                                                   
+  f       failures                                                                                                                                                                                      
+                                                                                                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+                                            │                                                                                                                                                           
+─ details ──────────────────────────────────│                                                                                                                                                           
+ ● backup-db · powershell · scripts         │                                                                                                                                                           
+ ▸ entry backup-db/backup-db.ps1            │                                                                                                                                                           
+ ⚙ env 0 vars                               │                                                                                                                                                           
+ ↻ cron 0 2 * * * · next in 11h             │                                                                                                                                                           
+ ✦ last success · 42.5s · 3m ago            │                                                                                                                                                           
+   cpu 66% peak · mem 61.2MB peak           │                                                                                                                                                           
+   at 2026-09-02 14:27:00                   │                                                                                                                                                           
+ backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
+any key close

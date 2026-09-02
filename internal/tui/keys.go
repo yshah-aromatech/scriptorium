@@ -1,16 +1,22 @@
 package tui
 
-import "charm.land/bubbles/v2/key"
+import (
+	"strings"
+	"unicode/utf8"
 
-// keyMap is the single source of truth for keys AND for the footer hints: the
-// footer is rendered from these bindings' own help text (bubbles/help), so the
-// two can never drift the way the PS app's hand-maintained hint list did.
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+)
+
+// keyMap is the single source of truth for keys AND for everything that
+// advertises them: the footer hints, the help overlay and the command palette
+// all read these bindings' own help text, so the three can never drift the way
+// the PS app's hand-maintained hint lists did.
 //
-// Only overlay-free actions are bound in phase 10. The keys that need an
-// overlay to be honest — a e v i l u y c / , the command palette, the real help
-// screen — arrive in phase 11 WITH their overlays, and are deliberately absent
-// here rather than bound to a no-op: an advertised key that does nothing is
-// worse than a key that is not advertised yet.
+// A key is bound here only once it does something. An advertised key that
+// does nothing is worse than a key that is not advertised yet — which is why
+// the phase-10 set was deliberately small and why each phase 11 wave adds its
+// bindings WITH the behaviour behind them.
 type keyMap struct {
 	// global
 	Fleet     key.Binding
@@ -38,6 +44,13 @@ type keyMap struct {
 	ClearQueue key.Binding
 	Sync       key.Binding
 	Follow     key.Binding
+
+	// overlays
+	Palette key.Binding
+	Help    key.Binding
+	Close   key.Binding
+	Accept  key.Binding
+	Deny    key.Binding
 }
 
 func defaultKeys() keyMap {
@@ -64,15 +77,56 @@ func defaultKeys() keyMap {
 		ClearQueue: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "clear queue")),
 		Sync:       key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sync")),
 		Follow:     key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "follow")),
+
+		Palette: key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
+		Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Close:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close")),
+		Accept:  key.NewBinding(key.WithKeys("y", "enter"), key.WithHelp("y/↵", "confirm")),
+		Deny:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "no")),
+	}
+}
+
+// keyGroup is one titled section of the key set. This is the ONE enumeration
+// of every binding: the help overlay renders it, the command palette lists it,
+// and a test walks keyMap by reflection to prove nothing is missing from it —
+// so a binding added without a home here fails the build's tests rather than
+// quietly existing without ever being advertised.
+type keyGroup struct {
+	Title string
+	Keys  []key.Binding
+
+	// Modal marks a group whose keys exist only while an overlay is open.
+	// Help lists them (they are real keys a user needs to know); the palette
+	// does not, because "run y confirm" from the palette is a no-op by
+	// construction — there is nothing open to confirm.
+	Modal bool
+}
+
+func (k keyMap) groups() []keyGroup {
+	return []keyGroup{
+		{Title: "views", Keys: []key.Binding{k.Fleet, k.Run, k.History, k.Schedules}},
+		{Title: "move", Keys: []key.Binding{
+			k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom, k.Focus, k.Follow}},
+		{Title: "fleet", Keys: []key.Binding{k.Open, k.FailFilter}},
+		{Title: "run", Keys: []key.Binding{k.Start, k.Kill, k.ClearQueue, k.Sync}},
+		{Title: "session", Keys: []key.Binding{k.Palette, k.Help, k.Quit}},
+		{Title: "overlays", Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Close}},
 	}
 }
 
 // hints returns the bindings the footer shows for the current view and focused
-// pane — the live keys, and only those. Quit sits ahead of the view switcher:
-// the footer is truncated to the terminal width, and at 80 columns the tail
-// falls off — the switcher digits are still on screen in the header, but `q`
-// is nowhere else, so it is the one that has to survive.
+// pane — the live keys, and only those. An open overlay answers for itself:
+// showing list keys under a modal would advertise bindings that do nothing
+// there (the PS footer follows its mode for the same reason).
+//
+// Quit sits ahead of the view switcher: the footer is truncated to the terminal
+// width, and at 80 columns the tail falls off — the switcher digits are still
+// on screen in the header, but `q` is nowhere else, so it is the one that has
+// to survive.
 func (m *Model) hints() []key.Binding {
+	if m.ov != nil {
+		return m.ov.hints(m)
+	}
 	k := m.keys
 	var out []key.Binding
 	switch m.mode {
@@ -87,5 +141,68 @@ func (m *Model) hints() []key.Binding {
 	case modeHistory, modeSchedules:
 		// nothing of their own yet — the placeholder pane says so.
 	}
-	return append(out, k.Quit, k.Fleet, k.Run, k.History, k.Schedules)
+	out = append(out, k.Quit, k.Palette, k.Help)
+	return append(out, k.Fleet, k.Run, k.History, k.Schedules)
+}
+
+// parseKey turns a binding's key name back into the keypress that produces it
+// — "enter", "ctrl+p", "G", "?". It is what lets the command palette execute a
+// binding by REPLAYING it: the palette then needs no table of actions of its
+// own, and cannot drift from what the keys actually do.
+//
+// It mirrors ultraviolet's own key matcher (which key.Matches runs against),
+// restricted to the shapes this app's bindings use. Unknown names return false
+// rather than a wrong key.
+func parseKey(name string) (tea.KeyPressMsg, bool) {
+	var k tea.KeyPressMsg
+	parts := strings.Split(name, "+")
+	for i, part := range parts {
+		if i < len(parts)-1 {
+			switch part {
+			case "ctrl":
+				k.Mod |= tea.ModCtrl
+			case "alt":
+				k.Mod |= tea.ModAlt
+			case "shift":
+				k.Mod |= tea.ModShift
+			default:
+				return k, false
+			}
+			continue
+		}
+		if code, ok := namedKeys[part]; ok {
+			k.Code = code
+			continue
+		}
+		if utf8.RuneCountInString(part) != 1 {
+			return k, false
+		}
+		k.Code, _ = utf8.DecodeRuneInString(part)
+		if k.Mod == 0 {
+			// a printable key carries its own text; that is what Key.String
+			// reports and what key.Matches compares against
+			k.Text = part
+		}
+	}
+	return k, k.Code != 0
+}
+
+// namedKeys is the subset of ultraviolet's key names this app binds. Kept
+// small on purpose: a name that is not here is a binding nothing can replay,
+// and the round-trip test says so.
+var namedKeys = map[string]rune{
+	"enter":     tea.KeyEnter,
+	"tab":       tea.KeyTab,
+	"esc":       tea.KeyEscape,
+	"space":     tea.KeySpace,
+	"up":        tea.KeyUp,
+	"down":      tea.KeyDown,
+	"left":      tea.KeyLeft,
+	"right":     tea.KeyRight,
+	"home":      tea.KeyHome,
+	"end":       tea.KeyEnd,
+	"pgup":      tea.KeyPgUp,
+	"pgdown":    tea.KeyPgDown,
+	"delete":    tea.KeyDelete,
+	"backspace": tea.KeyBackspace,
 }
