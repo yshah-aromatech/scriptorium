@@ -10,7 +10,7 @@ package cron
 // this file, so the invariant that governs every write path is: a `crontab -l`
 // that actually FAILED (spool permissions, missing binary) is not an empty
 // crontab, and writing back on one would destroy every unmanaged entry.
-// read() returns ok=false for that case and no caller writes when it does.
+// Read returns ok=false for that case and no caller writes when it does.
 
 import (
 	"errors"
@@ -32,12 +32,14 @@ const (
 	BlockStart = "# >>> scriptorium managed block — do not edit by hand >>>"
 	BlockEnd   = "# <<< scriptorium managed block <<<"
 
-	legacyBlockStart = "# >>> psscripts managed block — do not edit by hand >>>"
-	legacyBlockEnd   = "# <<< psscripts managed block <<<"
+	// Exported so internal/migrate can tell an adopted block from one still
+	// wearing the pre-rename markers.
+	LegacyBlockStart = "# >>> psscripts managed block — do not edit by hand >>>"
+	LegacyBlockEnd   = "# <<< psscripts managed block <<<"
 )
 
-func isBlockStart(line string) bool { return line == BlockStart || line == legacyBlockStart }
-func isBlockEnd(line string) bool   { return line == BlockEnd || line == legacyBlockEnd }
+func isBlockStart(line string) bool { return line == BlockStart || line == LegacyBlockStart }
+func isBlockEnd(line string) bool   { return line == BlockEnd || line == LegacyBlockEnd }
 
 // Reader regexes, copied verbatim from Get-StoSchedules. They deliberately
 // match BOTH spellings of a managed line — the PowerShell app's
@@ -72,7 +74,7 @@ type Crontab struct {
 // defaultRunner shells out to the crontab binary, resolved through PATH (so a
 // PATH shim can stand in for it). stderr is discarded, matching PS's
 // `2>$null`: "no crontab for <user>" must not read as output. A command that
-// could not START surfaces its error as stdout, which puts read() in its
+// could not START surfaces its error as stdout, which puts Read in its
 // failed-with-output arm — the same wipe-guard side PS's catch block takes.
 func defaultRunner(stdin string, args ...string) (string, bool) {
 	bin, err := exec.LookPath("crontab")
@@ -108,7 +110,7 @@ func splitLines(out string) []string {
 	return strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 }
 
-// read is Get-StoCrontab's truth table:
+// Read is Get-StoCrontab's truth table:
 //
 //	exit 0 with output      -> (lines, true)
 //	exit 0 with no output   -> (nil, true)    empty crontab
@@ -118,7 +120,7 @@ func splitLines(out string) []string {
 //
 // ok=false is the wipe guard: it means "unknown contents", and no caller may
 // write on it.
-func (c *Crontab) read() ([]string, bool) {
+func (c *Crontab) Read() ([]string, bool) {
 	out, ok := c.runner()("", "-l")
 	if ok {
 		return splitLines(out), true
@@ -133,7 +135,7 @@ func (c *Crontab) read() ([]string, bool) {
 // indistinguishable from an empty one here, exactly as in PS — only the write
 // paths care about the difference.
 func (c *Crontab) Lines() []string {
-	lines, _ := c.read()
+	lines, _ := c.Read()
 	return lines
 }
 
@@ -147,7 +149,7 @@ func (c *Crontab) Schedules() map[string]string {
 }
 
 func (c *Crontab) schedules() map[string]string {
-	lines, _ := c.read()
+	lines, _ := c.Read()
 	m := map[string]string{}
 	inBlock := false
 	for _, line := range lines {
@@ -184,7 +186,7 @@ func (c *Crontab) Save(schedules map[string]string) error {
 }
 
 func (c *Crontab) save(schedules map[string]string) error {
-	lines, ok := c.read()
+	lines, ok := c.Read()
 	if !ok {
 		return errors.New("crontab read failed — refusing to write (unmanaged entries would be destroyed)")
 	}
