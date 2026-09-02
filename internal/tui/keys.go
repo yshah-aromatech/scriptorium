@@ -42,20 +42,31 @@ type keyMap struct {
 	FailFilter key.Binding
 
 	// run
-	Focus      key.Binding
-	Start      key.Binding
-	Args       key.Binding
-	Kill       key.Binding
-	ClearQueue key.Binding
-	Sync       key.Binding
-	Follow     key.Binding
-	Env        key.Binding
-	Deps       key.Binding
-	Lint       key.Binding
-	Upgrade    key.Binding
-	ViewLog    key.Binding
-	Copy       key.Binding
-	Scoped     key.Binding
+	Focus        key.Binding
+	Start        key.Binding
+	Args         key.Binding
+	Kill         key.Binding
+	ClearQueue   key.Binding
+	Sync         key.Binding
+	Follow       key.Binding
+	Env          key.Binding
+	Deps         key.Binding
+	Lint         key.Binding
+	Upgrade      key.Binding
+	ViewLog      key.Binding
+	Copy         key.Binding
+	Scoped       key.Binding
+	Filter       key.Binding
+	SearchOutput key.Binding
+	SelfUpdate   key.Binding
+	WebhookTest  key.Binding
+	// n/N (search next/prev) are NOT fields here: lowercase "n" is already
+	// Deny's key-string below, and a second field on the same string fails
+	// TestEveryBindingIsInAGroup the same way a duplicate Enter/f would (see
+	// the fleet comment above) — but Deny's own description ("no") cannot be
+	// stretched to also mean "next match" the way Open/FailFilter's could.
+	// runview.go matches them by raw keypress instead, the same divergence
+	// wave A already made for the deps modal's y (see its comment).
 
 	// schedules
 	ScheduleEdit key.Binding
@@ -87,20 +98,24 @@ func defaultKeys() keyMap {
 		Open:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "open")),
 		FailFilter: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter")),
 
-		Focus:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
-		Start:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "run")),
-		Args:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "args")),
-		Kill:       key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")),
-		ClearQueue: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "clear queue")),
-		Sync:       key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sync")),
-		Follow:     key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "follow")),
-		Env:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", ".env")),
-		Deps:       key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "deps")),
-		Lint:       key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "lint")),
-		Upgrade:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade")),
-		ViewLog:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "last log")),
-		Copy:       key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy output")),
-		Scoped:     key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "script history")),
+		Focus:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
+		Start:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "run")),
+		Args:         key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "args")),
+		Kill:         key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")),
+		ClearQueue:   key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "clear queue")),
+		Sync:         key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sync")),
+		Follow:       key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "follow")),
+		Env:          key.NewBinding(key.WithKeys("e"), key.WithHelp("e", ".env")),
+		Deps:         key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "deps")),
+		Lint:         key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "lint")),
+		Upgrade:      key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade")),
+		ViewLog:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "last log")),
+		Copy:         key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy output")),
+		Scoped:       key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "script history")),
+		Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		SearchOutput: key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "search")),
+		SelfUpdate:   key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "self-update")),
+		WebhookTest:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "webhook test")),
 
 		ScheduleEdit: key.NewBinding(key.WithKeys("e", "enter"), key.WithHelp("e/↵", "edit")),
 
@@ -138,6 +153,12 @@ func (k keyMap) groups() []keyGroup {
 		{Title: "run", Keys: []key.Binding{
 			k.Start, k.Args, k.Kill, k.ClearQueue, k.Sync,
 			k.Env, k.Deps, k.Lint, k.Upgrade, k.ViewLog, k.Copy, k.Scoped}},
+		// its own group rather than folded into "run" above: the help
+		// overlay's two-column split balances on a group boundary, and
+		// tacking four more entries onto an already-long group pushed the
+		// balance point INSIDE it, clipping the tail off the visible window
+		// at 120x40 (TestHelpOverlayShowsTheWholeKeySet caught it).
+		{Title: "tools", Keys: []key.Binding{k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}},
 		{Title: "schedules", Keys: []key.Binding{k.ScheduleEdit}},
 		{Title: "session", Keys: []key.Binding{k.Palette, k.Help, k.Quit}},
 		{Title: "overlays", Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Save, k.Close}},
@@ -169,7 +190,8 @@ func (m *Model) hints() []key.Binding {
 			primary = []key.Binding{k.Up, k.Down, k.PageUp, k.Follow, k.Focus, k.Start, k.Kill}
 		} else {
 			primary = []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
-			secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Copy, k.Scoped, k.ClearQueue}
+			secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Copy, k.Scoped, k.ClearQueue,
+				k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}
 		}
 	case modeHistory:
 		primary = []key.Binding{k.Up, k.Down, k.Open, k.Start, k.FailFilter}

@@ -561,7 +561,7 @@ func (o *Ops) InstallDeps(args map[string]any) (any, bool, error) {
 // ---------------------------------------------------------------------
 
 func (o *Ops) UpdateApp() (any, bool, error) {
-	out, err := exec.Command("git", "-C", o.App.Paths.AppDir, "pull", "--ff-only").CombinedOutput()
+	out, err := exec.Command("git", deps.GitPullFFOnlyArgs(o.App.Paths.AppDir)...).CombinedOutput()
 	ok := err == nil
 	return map[string]any{
 		"ok":     ok,
@@ -579,13 +579,12 @@ func (o *Ops) UpdatePackages() (any, bool, error) {
 
 	if exec.Command("sudo", "-n", "true").Run() == nil {
 		lines = append(lines, "== apt upgrade (powershell + python) ==")
-		out, _ := exec.Command("bash", "-c",
-			"sudo -n apt-get update -q && sudo -n apt-get install -y --only-upgrade powershell python3 python3-pip python3-venv").CombinedOutput()
+		out, _ := exec.Command("bash", "-c", deps.AptUpgradeScript).CombinedOutput()
 		for _, l := range splitNonEmptyLines(string(out)) {
 			lines = append(lines, o.App.Sec.Redact(l))
 		}
 	} else {
-		lines = append(lines, "apt stage skipped: passwordless sudo unavailable — run manually: sudo apt-get update && sudo apt-get install -y --only-upgrade powershell python3 python3-pip python3-venv")
+		lines = append(lines, deps.AptSkipNote)
 	}
 
 	lines = append(lines, "== module dirs ==")

@@ -225,22 +225,22 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 	m := newFixtureModel(t, truecolorEnv)
 	m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
 
+	// Wave B3 closed the last of the PS floor: the output search (ctrl+f;
+	// n/N are a raw keypress match, not a keyMap field — see keys.go's
+	// comment by SearchOutput), the script filter (/), self-update (U) and
+	// the webhook test (t). PS's `y` copy-all and `c` clear-output were
+	// redesigned earlier in phase 11 — `y` is the confirm key here, and `c`
+	// copies the visible output — so this now asserts the floor keys ARE
+	// bound, the positive of what wave A's version of this test tracked.
 	bound := map[string]bool{}
 	for _, b := range allBindings(m.keys) {
 		for _, k := range b.Keys() {
 			bound[k] = true
 		}
 	}
-	// Keys whose behaviour has not been built yet stay unbound: an advertised
-	// key that does nothing is worse than one that is not advertised. Waves A1
-	// and A2 bound the overlay and action keys WITH their behaviour; what is
-	// left here is the PS floor this wave does not reach: the output search
-	// (ctrl+f, n/N), the script filter (/), self-update (U) and the webhook
-	// test (t). PS's `y` copy-all and `c` clear-output are not on this list —
-	// `y` is the confirm key here, and `c` copies the visible output.
-	for _, later := range []string{"U", "t", "/", "ctrl+f", "N"} {
-		if bound[later] {
-			t.Errorf("%q is bound but its action does not exist yet", later)
+	for _, k := range []string{"U", "t", "/", "ctrl+f"} {
+		if !bound[k] {
+			t.Errorf("%q is advertised nowhere — the PS floor is not actually closed", k)
 		}
 	}
 
@@ -252,7 +252,7 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 	}{
 		{modeFleet, focusList, []string{"↑/k", "↓/j", "↵", "f", "r", "s"}, nil},
 		{modeRun, focusList, []string{"↑/k", "↓/j", "tab", "r", "a", "x", "s"},
-			[]string{"e", "i", "l", "v", "c", "h", "X"}},
+			[]string{"e", "i", "l", "v", "c", "h", "X", "/", "ctrl+f", "U", "t"}},
 		{modeRun, focusOutput, []string{"↑/k", "↓/j", "pgup", "end", "tab", "r", "x"}, nil},
 		{modeHistory, focusList, []string{"↑/k", "↓/j", "↵", "r", "f"}, nil},
 		{modeSchedules, focusList, []string{"↑/k", "↓/j", "e/↵"}, nil},

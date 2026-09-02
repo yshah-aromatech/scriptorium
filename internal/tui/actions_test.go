@@ -324,6 +324,14 @@ func TestLintStreamsIntoThePane(t *testing.T) {
 func TestSystemUpdateChainsBothStages(t *testing.T) {
 	ta := seedToolApp(t, "echo hi\n")
 	m := toolModel(t, ta)
+	// u now probes for passwordless sudo first (wave B3's restored apt
+	// stage); an unshimmed PATH would ask the REAL sudo on whatever machine
+	// runs this test, which is exactly the non-hermetic outcome the floor
+	// tests (floor_test.go) exist to prevent. No "sudo" in this shim dir at
+	// all — the probe fails to resolve it, same as TestSystemUpdateSkips
+	// AptStageWithoutSudo, so this test's own assertions (modules, venvs)
+	// stay focused on what it was already testing.
+	shimPath(t, map[string]string{})
 
 	pump(t, m, press(m, "u"), 30*time.Second, nil)
 	out := strings.Join(m.run.out.buf.Lines, "\n")

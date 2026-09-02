@@ -66,6 +66,19 @@ type runModel struct {
 	marqueeSel int
 	marqueeAt  time.Time
 	marqueeOn  bool
+
+	// filter is the live script-list substring filter (`/`, floor item):
+	// applied on every keystroke, esc restores it. scriptsLen is the last
+	// m.scripts length reload() saw — resize()'s dirty check compares
+	// against THAT rather than len(r.list.Items()), which a filter makes
+	// smaller than m.scripts on purpose.
+	filter     string
+	scriptsLen int
+
+	// searchTerm is the output pane's search term (ctrl+f, n/N, floor item):
+	// recomputed against the CURRENT buffer on every jump, exactly like
+	// PS's Move-TuiSearch, so freshly arrived output is always searchable.
+	searchTerm string
 }
 
 func (r *runModel) init(m *Model) {
@@ -129,10 +142,28 @@ func (r *runModel) reload(m *Model) {
 	if it, ok := r.list.SelectedItem().(scriptItem); ok {
 		name = it.s.Name
 	}
-	r.list.SetItems(scriptItems(m.scripts))
+	r.scriptsLen = len(m.scripts)
+	r.list.SetItems(scriptItems(r.visibleScripts(m)))
 	if name != "" {
 		r.selectByName(m, name)
 	}
+}
+
+// visibleScripts is m.scripts narrowed by the live filter — substring, not a
+// wildcard pattern, case-insensitive (Update-TuiVisible's own rule: a filter
+// is text a user typed, never glob syntax).
+func (r *runModel) visibleScripts(m *Model) []scripts.Script {
+	if r.filter == "" {
+		return m.scripts
+	}
+	q := strings.ToLower(r.filter)
+	out := make([]scripts.Script, 0, len(m.scripts))
+	for _, s := range m.scripts {
+		if strings.Contains(strings.ToLower(s.Name), q) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (r *runModel) selected(m *Model) *scripts.Script {
@@ -148,9 +179,11 @@ func (r *runModel) selected(m *Model) *scripts.Script {
 	return &it.s
 }
 
-// selectByName is the Fleet deep-link's landing point.
+// selectByName is the Fleet deep-link's landing point. It indexes into the
+// list's OWN (possibly filtered) items, not m.scripts directly — the two can
+// differ in both length and order once `/` has narrowed the list.
 func (r *runModel) selectByName(m *Model, name string) {
-	for i, s := range m.scripts {
+	for i, s := range r.visibleScripts(m) {
 		if s.Name == name {
 			r.list.Select(i)
 			return
@@ -367,6 +400,26 @@ func (r *runModel) onKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, k.Follow):
 		r.out.toBottom()
 		return nil
+
+	case key.Matches(msg, k.Filter):
+		return r.startFilter(m)
+
+	case key.Matches(msg, k.SearchOutput):
+		return r.startSearch(m)
+
+	case key.Matches(msg, k.SelfUpdate):
+		return r.selfUpdate(m)
+
+	case key.Matches(msg, k.WebhookTest):
+		return r.webhookTest(m)
+
+	// n/N: search next/prev. Raw keypress match, not a keyMap field — see
+	// keys.go's comment by SearchOutput for why.
+	case msg.Text == "n" && msg.Mod == 0:
+		return r.searchJump(1)
+
+	case msg.Text == "N" && msg.Mod == 0:
+		return r.searchJump(-1)
 	}
 
 	// Only the NAV keys belong to the focused pane; every action above stays
@@ -418,7 +471,7 @@ func (r *runModel) resize(m *Model, w, h int) {
 	r.list.SetWidth(l.listW)
 	r.list.SetHeight(max(l.listH-1, 1)) // the title rule takes one row
 	r.out.resize(l.outW, h)
-	if len(r.list.Items()) != len(m.scripts) {
+	if r.scriptsLen != len(m.scripts) {
 		r.reload(m)
 	}
 }
@@ -430,9 +483,12 @@ func (r *runModel) view(m *Model, w, h int) []string {
 	th := m.th
 
 	left := []string{sectionRule(th, r.listTitle(), l.listW, m.focus == focusList)}
-	if len(m.scripts) == 0 {
+	switch {
+	case len(m.scripts) == 0:
 		left = append(left, " "+th.S.Muted.Render("no scripts yet — press s to sync"))
-	} else {
+	case len(r.list.Items()) == 0:
+		left = append(left, " "+th.S.Muted.Render("no matches — esc restores"))
+	default:
 		left = append(left, strings.Split(r.list.View(), "\n")...)
 	}
 	left = fitRows(left, l.listH)
@@ -452,10 +508,14 @@ func (r *runModel) view(m *Model, w, h int) []string {
 }
 
 func (r *runModel) listTitle() string {
-	if n := len(r.queue); n > 0 {
-		return "scripts · " + strconv.Itoa(n) + " queued"
+	title := "scripts"
+	if r.filter != "" {
+		title += " [/" + r.filter + "]"
 	}
-	return "scripts"
+	if n := len(r.queue); n > 0 {
+		title += " · " + strconv.Itoa(n) + " queued"
+	}
+	return title
 }
 
 // spinFor is the spinner glyph for the output title, shown only while this

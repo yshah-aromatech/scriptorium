@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
@@ -32,6 +34,12 @@ type outputPane struct {
 	// the buffer's WrapSrc back-pointers to the ORIGINAL source text.
 	anchor *cell
 	extent *cell
+
+	// search is the current output-search term (ctrl+f, n/N, floor item).
+	// Matches are found fresh against the buffer on every render rather than
+	// cached, so newly arrived output is always searchable — the same choice
+	// Move-TuiSearch makes.
+	search string
 }
 
 // cell is one position in the wrapped buffer.
@@ -230,6 +238,17 @@ func (o *outputPane) view(th theme.Theme, spin string, focused bool) []string {
 					hi = to.col
 				}
 				line = inverseSpan(text, lo, hi)
+			} else if o.search != "" {
+				if spans := searchSpans(text, o.search); len(spans) > 0 {
+					// ponytail: reverse-video the matches and drop content
+					// colouring on this row rather than composing them (PS
+					// resumes the row's colour after each match, which needs
+					// tracking which SGR was already open); upgrade if a
+					// row's own colour turns out to matter with a search live.
+					line = highlightSpans(text, spans)
+				} else {
+					line = colorLine(th, text)
+				}
 			} else {
 				line = colorLine(th, text)
 			}
@@ -272,6 +291,123 @@ func inverseSpan(text string, lo, hi int) string {
 		return text
 	}
 	return text[:a] + "\x1b[7m" + text[a:b] + "\x1b[27m" + text[b:]
+}
+
+// searchSpans returns the byte ranges of every case-insensitive occurrence of
+// term in text (n/N's match highlight — inventory §1.12).
+func searchSpans(text, term string) [][2]int {
+	if term == "" {
+		return nil
+	}
+	lower, needle := strings.ToLower(text), strings.ToLower(term)
+	var spans [][2]int
+	for at := 0; ; {
+		i := strings.Index(lower[at:], needle)
+		if i < 0 {
+			return spans
+		}
+		start := at + i
+		end := start + len(needle)
+		spans = append(spans, [2]int{start, end})
+		at = end
+	}
+}
+
+// highlightSpans reverse-videos every [start,end) byte range — plain \e[7m,
+// the same device inverseSpan uses, so it composes safely with whatever
+// colour a caller wraps the result in afterwards (7/27 only toggles the
+// reverse attribute; it never touches a surrounding SGR colour).
+func highlightSpans(text string, spans [][2]int) string {
+	if len(spans) == 0 {
+		return text
+	}
+	var b strings.Builder
+	prev := 0
+	for _, sp := range spans {
+		b.WriteString(text[prev:sp[0]])
+		b.WriteString("\x1b[7m")
+		b.WriteString(text[sp[0]:sp[1]])
+		b.WriteString("\x1b[27m")
+		prev = sp[1]
+	}
+	b.WriteString(text[prev:])
+	return b.String()
+}
+
+// searchResult is one n/N jump's outcome, for the status line.
+type searchResult struct {
+	found            bool
+	term             string
+	matchIdx, matchN int // 1-based
+}
+
+// jumpToMatch is Move-TuiSearch: matches are recomputed against the CURRENT
+// buffer on every call (new output is always searchable), the jump lands on
+// the match nearest the vertical center of the viewport, and running past
+// either end wraps to the other one.
+func (o *outputPane) jumpToMatch(term string, dir int) searchResult {
+	if term == "" {
+		return searchResult{}
+	}
+	lower := strings.ToLower(term)
+	var hits []int
+	for i, line := range o.buf.Wrapped {
+		if strings.Contains(strings.ToLower(line), lower) {
+			hits = append(hits, i)
+		}
+	}
+	if len(hits) == 0 {
+		return searchResult{term: term}
+	}
+
+	body := o.rows()
+	cur := o.scroll
+	if o.follow {
+		cur = o.maxScroll()
+	}
+	anchor := cur + body/2
+
+	target, idx := -1, -1
+	if dir > 0 {
+		for i, h := range hits {
+			if h > anchor {
+				target, idx = h, i
+				break
+			}
+		}
+		if target < 0 {
+			target, idx = hits[0], 0 // wrap to the first match
+		}
+	} else {
+		for i := len(hits) - 1; i >= 0; i-- {
+			if hits[i] < anchor {
+				target, idx = hits[i], i
+				break
+			}
+		}
+		if target < 0 {
+			target, idx = hits[len(hits)-1], len(hits)-1 // wrap to the last
+		}
+	}
+
+	o.scroll = min(max(target-body/2, 0), o.maxScroll())
+	o.follow = false
+	return searchResult{found: true, term: term, matchIdx: idx + 1, matchN: len(hits)}
+}
+
+// searchJump is n (dir>0) / N (dir<0): jump the output pane to the next or
+// previous match of r.searchTerm, wrapping at either end — Move-TuiSearch's
+// own status line, verbatim.
+func (r *runModel) searchJump(dir int) tea.Cmd {
+	if r.searchTerm == "" {
+		return status(StatusWarn, "no search term — ctrl+f to search the output")
+	}
+	res := r.out.jumpToMatch(r.searchTerm, dir)
+	if !res.found {
+		return status(StatusWarn, "no matches for '"+res.term+"'")
+	}
+	return status(StatusInfo, "match "+strconv.Itoa(res.matchIdx)+"/"+strconv.Itoa(res.matchN)+
+		" for '"+res.term+"' — n next · N prev")
 }
 
 // scrollbar returns the thumb's length and position for a viewport of h rows

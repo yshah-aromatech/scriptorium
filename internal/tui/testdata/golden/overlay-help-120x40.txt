@@ -1,25 +1,25 @@
  ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                      scripts · synced 4m ago   ops-01   v1.4.2 
 ─ scripts ──────────────────────────────│─ output ──────────────────────────────────────────────────────────────────────
 ─ keys ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- # views                                                    # schedules                                                 
-  1       fleet                                              e/↵     edit                                               
-  2       run                                                                                                           
-  3       history                                           # session                                                   
-  4       schedules                                          :       commands                                           
-                                                             ?       help                                               
- # move                                                      q       quit                                               
-  ↑/k     up                                                                                                            
-  ↓/j     down                                              # overlays                                                  
-  pgup    page up                                            y/↵     confirm                                            
-  pgdn    page down                                          n       no                                                 
-  g       top                                                ctrl+s  save                                               
-  G       bottom                                             esc     close                                              
-  tab     focus                                                                                                         
-  end     follow                                                                                                        
+ # views                                                    # tools                                                     
+  1       fleet                                              /       filter                                             
+  2       run                                                ctrl+f  search                                             
+  3       history                                            U       self-update                                        
+  4       schedules                                          t       webhook test                                       
                                                                                                                         
- # fleet                                                                                                                
-  ↵       open                                                                                                          
-  f       filter                                                                                                        
+ # move                                                     # schedules                                                 
+  ↑/k     up                                                 e/↵     edit                                               
+  ↓/j     down                                                                                                          
+  pgup    page up                                           # session                                                   
+  pgdn    page down                                          :       commands                                           
+  g       top                                                ?       help                                               
+  G       bottom                                             q       quit                                               
+  tab     focus                                                                                                         
+  end     follow                                            # overlays                                                  
+                                                             y/↵     confirm                                            
+ # fleet                                                     n       no                                                 
+  ↵       open                                               ctrl+s  save                                               
+  f       filter                                             esc     close                                              
                                                                                                                         
  # run                                                                                                                  
   r       run                                                                                                           
