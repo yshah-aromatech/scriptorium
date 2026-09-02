@@ -186,9 +186,23 @@ routes through. A dedicated test (`TestAPIAndMCPShareTheSameOpsResult`,
 internal/mcp/api_test.go) proves the two frontends return byte-identical JSON
 for the same operation.
 
-Routes, one per MCP tool that has an obvious REST shape (`GET`/`POST` list vs.
-`PUT`/`DELETE` for schedules), are listed in
-`.superpowers/sdd/2026-09-01-go-rebuild-phase9/task-3-brief.md`. Error mapping
+Routes, one per MCP tool, all under `/api/v1` on the same listener/auth:
+
+| Route | Tool |
+|---|---|
+| `GET  /api/v1/scripts` | list_scripts |
+| `GET  /api/v1/scripts/{name}` | get_script_details |
+| `POST /api/v1/scripts/{name}/run` (body `{args?,env?,timeout_minutes?}`) | run_script |
+| `POST /api/v1/scripts/{name}/deps/install` | install_deps |
+| `GET  /api/v1/history?script=&limit=` | get_history |
+| `GET  /api/v1/logs/{log_id}?tail_kb=` | get_run_log |
+| `POST /api/v1/sync` | sync_repos |
+| `GET  /api/v1/schedules` | get_schedules |
+| `PUT  /api/v1/schedules/{script}` (body `{cron}`) | set_schedule |
+| `DELETE /api/v1/schedules/{script}` | remove_schedule |
+| `POST /api/v1/update/app` · `POST /api/v1/update/packages` | update_app / update_packages |
+
+Error mapping
 is REST-honest rather than uniform: an ops-layer exception is `500` with a
 redacted message; an unknown script or a missing/malformed log_id is `404`/
 `400` (the smallest new sentinel, `mcp.ToolError.NotFound`, is what both the
