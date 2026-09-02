@@ -1,0 +1,40 @@
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                      scripts · synced 4m ago   ops-01   v1.4.2 
+─ history — heartbeat ──────────────────────────────────────────────────────────────────────────────────────────────────
+▎ 09-02 14:29  41s ✓ success heartbeat     1.2s    7% ▄█▆▅▃▂  61.2MB cron                                               
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
+↑/k up · ↓/j down · ↵ open · r run · f filter · q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules

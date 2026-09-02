@@ -27,8 +27,8 @@
   end     follow                                                                                                                                                                                        
                                                                                                                                                                                                         
  # fleet                                                                                                                                                                                                
-  ↵       open in run                                                                                                                                                                                   
-  f       failures                                                                                                                                                                                      
+  ↵       open                                                                                                                                                                                          
+  f       filter                                                                                                                                                                                        
                                                                                                                                                                                                         
  # run                                                                                                                                                                                                  
   r       run                                                                                                                                                                                           

@@ -57,4 +57,4 @@
                                                                                                                                                                    │
                                                                                                                                                                    │
  no scripts yet — press s to sync a repo
-↑/k up · ↓/j down · ↵ open in run · f failures · r run · s sync · q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules
+↑/k up · ↓/j down · ↵ open · f filter · r run · s sync · q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules

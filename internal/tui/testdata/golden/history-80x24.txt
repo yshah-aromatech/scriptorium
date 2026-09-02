@@ -1,0 +1,24 @@
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2 
+─ history ──────────────────────────────────────────────────────────────────────
+▎ 09-02 14:29 ✓ success heartbeat          1.2s                                 
+  09-02 14:26 ✓ success backup-db         42.5s                                 
+  09-02 14:17 ✗ failure sync-orders        8.1s                                 
+  09-02 09:27 ✓ success nightly-report    2m11s                                 
+  08-31 12:29 ✓ success backup-db         44.0s                                 
+  09-01 12:29 ✓ success backup-db         41.0s                                 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
+↑/k up · ↓/j down · ↵ open · r run · f filter · q quit · : commands · ? help …

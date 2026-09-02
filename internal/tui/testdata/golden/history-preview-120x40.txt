@@ -1,0 +1,40 @@
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                      scripts · synced 4m ago   ops-01   v1.4.2 
+─ history ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  09-02 14:29  41s ✓ success heartbeat          1.2s    7% ▄█▆▅▃▂  61.2MB cron                                          
+▎ 09-02 14:26   3m ✓ success backup-db         42.5s   66% ▃▆█▆▅▃  61.2MB cron                                          
+  09-02 14:17  12m ✗ failure sync-orders        8.1s   34% ▃▆█▅▂▁  61.2MB cron                                          
+  09-02 09:27 5h2m ✓ success nightly-report    2m11s   88% ▂▄▇█▆▃  61.2MB cron                                          
+  08-31 12:29   2d ✓ success backup-db         44.0s   58% ······  61.2MB cron                                          
+  09-01 12:29   1d ✓ success backup-db         41.0s   62% ······  61.2MB cron                                          
+
+
+
+
+
+
+
+
+
+
+
+
+─ log: backup-db ───────────────────────────────────────────────────────────────────────────────────────────────────────
+connecting to postgres://db.internal:5432                                                                               
+dumping schema public (18 tables)                                                                                       
+── ✓ backup-db · success · exit 0 · 42.5s                                                                               
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
+↑/k up · ↓/j down · ↵ open · r run · f filter · q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules

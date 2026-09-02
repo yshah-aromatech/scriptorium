@@ -119,8 +119,9 @@ type Model struct {
 	// view is behind it (overlay.go).
 	ov overlay
 
-	fleet fleetModel
-	run   runModel
+	fleet   fleetModel
+	run     runModel
+	history historyModel
 }
 
 // spinnerFrame is the glyph any view showing "this is running" should use.
@@ -166,6 +167,7 @@ func New(a *app.App, now func() time.Time) *Model {
 	// keep a copy of, so it has to have something to re-derive it into.
 	m.fleet.init(m)
 	m.run.init(m)
+	m.history.init(m)
 	m.useTheme(theme.New(name, theme.Profile(a.Cfg.ColorMode, os.Environ())))
 	return m
 }
@@ -341,6 +343,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.run.reload(m)
 		return m, m.run.kickMarquee(m)
 
+	case HistoryLoadedMsg:
+		m.history.onLoaded(m, msg)
+		return m, nil
+
 	case StatusMsg:
 		m.statusText, m.statusKind, m.statusAt = msg.Text, msg.Kind, m.now()
 		return m, nil
@@ -371,6 +377,8 @@ func (m *Model) forward(msg tea.Msg) tea.Cmd {
 		return m.fleet.update(m, msg)
 	case modeRun:
 		return m.run.update(m, msg)
+	case modeHistory:
+		return m.history.update(m, msg)
 	}
 	return nil
 }
@@ -435,7 +443,27 @@ func (m *Model) switchTo(to mode) tea.Cmd {
 	}
 	m.mode = to
 	m.relayout()
+	if to == modeHistory {
+		return m.loadHistory()
+	}
 	return nil
+}
+
+// loadHistory reads the History view's window off the update loop:
+// config.historyDays when it is set, else the last 200 rows — Open-TuiHistory's
+// own fallback (a days value of 0 or less means "we don't know how far back to
+// look, so show something rather than nothing").
+func (m *Model) loadHistory() tea.Cmd {
+	a := m.app
+	return func() tea.Msg {
+		var rows []history.Row
+		if a.Cfg.HistoryDays > 0 {
+			rows, _ = a.Hist.SinceDays(a.Cfg.HistoryDays)
+		} else {
+			rows, _ = a.Hist.Last(200)
+		}
+		return HistoryLoadedMsg{Rows: rows}
+	}
 }
 
 // relayout hands each view its current body box. Called on resize and on every
@@ -446,6 +474,7 @@ func (m *Model) relayout() {
 	}
 	m.fleet.resize(m, m.w, m.bodyHeight())
 	m.run.resize(m, m.w, m.bodyHeight())
+	m.history.resize(m, m.w, m.bodyHeight())
 }
 
 func (m *Model) bodyHeight() int { return max(m.h-chromeRows, 1) }
@@ -488,9 +517,7 @@ func (m *Model) body() []string {
 	case modeRun:
 		rows = m.run.view(m, m.w, h)
 	case modeHistory:
-		rows = placeholderPane(m.th, m.w, h, "History",
-			"filterable forensics table · log preview · re-run",
-			"arrives in the next phase")
+		rows = m.history.view(m, m.w, h)
 	case modeSchedules:
 		rows = placeholderPane(m.th, m.w, h, "Schedules",
 			"agenda by next fire · cron editing · missed-fire status",

@@ -33,7 +33,11 @@ type keyMap struct {
 	Top      key.Binding
 	Bottom   key.Binding
 
-	// fleet
+	// fleet — also History's Enter (preview log) and its f (scope to one
+	// script): the same physical keys, generic enough descriptions that both
+	// meanings read true (a binding's key-string must be unique across the
+	// whole map, so two views sharing a key share the field, not a lookalike
+	// copy of it — TestEveryBindingIsInAGroup enforces this).
 	Open       key.Binding
 	FailFilter key.Binding
 
@@ -77,8 +81,8 @@ func defaultKeys() keyMap {
 		Top:      key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g", "top")),
 		Bottom:   key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
 
-		Open:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "open in run")),
-		FailFilter: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "failures")),
+		Open:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "open")),
+		FailFilter: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter")),
 
 		Focus:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
 		Start:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "run")),
@@ -161,7 +165,9 @@ func (m *Model) hints() []key.Binding {
 			primary = []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
 			secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Copy, k.Scoped, k.ClearQueue}
 		}
-	case modeHistory, modeSchedules:
+	case modeHistory:
+		primary = []key.Binding{k.Up, k.Down, k.Open, k.Start, k.FailFilter}
+	case modeSchedules:
 		// nothing of their own yet — the placeholder pane says so.
 	}
 	out := append(primary, k.Quit, k.Palette, k.Help)

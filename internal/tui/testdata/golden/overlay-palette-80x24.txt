@@ -4,7 +4,6 @@
 ─ commands ─────────────────────────────────────────────────────────────────────
  ❯ ru                                                                           
  ▎ 2      run  ·  views                                                         
-   ↵      open in run  ·  fleet                                                 
    r      run  ·  run                                                           
    a      args  ·  run                                                          
    x      kill  ·  run                                                          
@@ -18,6 +17,7 @@
    c      copy output  ·  run                                                   
    h      script history  ·  run                                                
 ────────────────────────────────────────────────────────────────────────────────
+ ✗ sync-orders            py failure ▃▆█▅▂▁  12m
  ✓ nightly-report         ps success ▂▄▇█▆▃ 5h2m
  ✓ backup-db              ps success ······   2d
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h

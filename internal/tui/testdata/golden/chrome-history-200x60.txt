@@ -1,4 +1,6 @@
  ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                                                                                                      scripts · synced 4m ago   ops-01   v1.4.2 
+─ history ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ no runs yet
 
 
 
@@ -25,10 +27,8 @@
 
 
 
-                                                                                                History
-                                                                           filterable forensics table · log preview · re-run
 
-                                                                                     · arrives in the next phase ·
+
 
 
 
@@ -57,4 +57,4 @@
 
 
  ⚠ missed run: nightly-report — the scheduled fire never arrived
-q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules
+↑/k up · ↓/j down · ↵ open · r run · f filter · q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules
