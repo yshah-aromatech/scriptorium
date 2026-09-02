@@ -215,12 +215,12 @@ func runListRepos(a *app.App, stdout io.Writer) int {
 	return 0
 }
 
-// runList is --list: P7 not ready — the crontab reader doesn't exist yet,
-// so the schedule column always renders empty (the diff-oracle test runs
-// against an empty crontab too, so this is a fair diff for now).
+// runList is --list. The schedule column is the managed crontab block's
+// expression for the script, in PS's own bracket shape.
 func runList(a *app.App, stdout io.Writer) int {
 	rows, _ := a.Hist.Last(2000)
 	statuses := history.LastStatuses(rows)
+	schedules := a.Cron.Schedules()
 	all := scripts.Discover(scripts.Repos(a.Cfg, a.Paths), a.Paths)
 	for _, s := range all {
 		st := "never run"
@@ -231,7 +231,10 @@ func runList(a *app.App, stdout io.Writer) int {
 		if s.Runtime == "python" {
 			rt = "py"
 		}
-		const sched = "" // P7: no crontab reader yet
+		sched := ""
+		if expr, ok := schedules[s.Name]; ok {
+			sched = "  [" + expr + "]"
+		}
 		fmt.Fprintf(stdout, "%-30s %-3s %-10s%s\n", s.Name, rt, st, sched)
 	}
 	return 0
@@ -288,11 +291,11 @@ func runHistory(a *app.App, name string, stdout io.Writer) int {
 // runScript is --run <name>: the headless full pipeline.
 func runScript(a *app.App, f flags, stdout, stderr io.Writer) int {
 	// missed-run sweep piggybacks on every headless boot — best-effort,
-	// errors swallowed. nil Schedules (no crontab reader until P7) makes
-	// this a no-op today; PS still covers the shared server meanwhile.
+	// errors swallowed. Real schedules and the configured grace, both
+	// resolved here so Check never has to guess a default.
 	_, _ = missed.Check(missed.Options{
 		DataDir:      a.Paths.DataDir,
-		Schedules:    nil,
+		Schedules:    a.Cron.Schedules(),
 		GraceMinutes: a.Cfg.MissedGraceMinutes,
 		Locks:        a.Locks,
 		Hist:         a.Hist,

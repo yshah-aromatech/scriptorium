@@ -340,7 +340,7 @@ See §3.5: move-aside via `[IO.File]::Move` (throws if `.flush` exists → recla
 ```
 <cronExpr> cd '<appDir>' && '<pwshBin>' -NoProfile -File scriptorium.ps1 --run '<name>' --cron >> '<logsDir>/cron-<name>.log' 2>&1
 ```
-Whole line has literal `%` escaped to `\%` before writing.
+The command portion (everything from `cd ` onward) has literal `%` escaped to `\%` before writing; the expression is written verbatim. See §6.8.
 
 ### 6.3 Reader
 `--run '([^']+)'` extracts name; `^(@\S+|(?:\S+\s+){4}\S+)\s+cd ` extracts expression (either an `@keyword` or exactly 5 whitespace-separated fields before ` cd `).
@@ -368,7 +368,7 @@ Whole line has literal `%` escaped to `\%` before writing.
 Scheduled script names must match `^[A-Za-z0-9._-]+$` (checked in `Set-StoSchedule`) — protects both the shell-quoted crontab line and the `--run '([^']+)'` reader regex from corruption.
 
 ### 6.8 `%` escaping
-Any literal `%` in the fully-assembled cron line escaped to `\%` before writing (crontab treats bare `%` as a command/newline separator).
+Any literal `%` in the **command portion** of the cron line escaped to `\%` before writing (crontab treats bare `%` as a command/newline separator). `Cron.psm1:74` applies the replace to `$cmd` alone — `"$expr $($cmd -replace '%', '\%')"` — so a `%` in the *expression* is written unescaped (an expression containing one is not valid cron anyway).
 
 ---
 
@@ -687,4 +687,4 @@ This report is exhaustive against the current codebase as read; nothing was summ
 15. **A repos-entry field's non-string, non-number JSON shapes decode to `""`, where PS stringifies anything.** PS's `"$($e.url)"` interpolation stringifies whatever type a `repos` entry field holds — verified against live pwsh: a JSON `true` becomes the PS string `"True"`, and a JSON array becomes its elements space-joined (e.g. `[1,2]` -> `"1 2"`). Go's `config.repoScalar` (the tolerant per-field decoder behind `decodeRepos`) only reproduces the string-or-number cases from the reviewer-verified table; a bool, array, or object field decodes to `""` instead of PS's stringified form. Not reproduced because no real config shape needs it — `repos` entries are user-authored JSON where a url/name/branch as a bool or array isn't a realistic typo (unlike the verified `url:123` case, which numeric-vs-quoted-string config typos make plausible).
 16. **`missed-state.json` writes are flock-serialized; PS's are not.** `missed.Check` takes `LOCK_EX|LOCK_NB` on the state file and silently returns nothing when another sweep holds it, so two concurrent cron boots can never double-send one missed alert. PS acknowledges the race in a `ponytail:` comment (`Runner.psm1`) and relies on n8n-side dedupe; the spec's §3 concurrency table mandates this upgrade. The cost is the inverse edge: under contention one Go sweep is skipped entirely (the winner alerts; the loser retries on its next boot), which is strictly better than PS's duplicate.
 17. **`--history` renders an empty `when` column for an unparseable `startedAt`; PS falls back to the raw string.** PS's `$started = $h.startedAt -as [datetime]` fallback prints whatever junk the row held (misaligning its own columns); Go prints `""` in the same width. Unreachable from rows either implementation writes — `startedAt` is always machine-stamped — so this only differs on a hand-corrupted history file.
-18. **Shipping-window stubs (informational, all temporary).** Until their owning phases land, the Go binary answers honestly instead of silently diverging: bare invocation (TUI, P10) and `--mcp`/`--install-mcp-service` (P9) print a not-yet-available message to stderr and exit 1; the `--run` missed sweep is wired but inert (nil schedules) until P7's crontab reader supplies them, and PS keeps sweeping on the shared server meanwhile; `--run` performs no dependency auto-install until P8, so cron migration for repos that gain new scripts should wait for P8. Each entry here deletes when its phase ships.
+18. **Shipping-window stubs (informational, all temporary).** Until their owning phases land, the Go binary answers honestly instead of silently diverging: bare invocation (TUI, P10) and `--mcp`/`--install-mcp-service` (P9) print a not-yet-available message to stderr and exit 1; `--run` performs no dependency auto-install until P8, so cron migration for repos that gain new scripts should wait for P8. Each entry here deletes when its phase ships.

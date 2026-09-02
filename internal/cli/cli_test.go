@@ -2,18 +2,87 @@ package cli_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/yshah-aromatech/scriptorium/internal/cli"
+	"github.com/yshah-aromatech/scriptorium/internal/cron"
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
 	"github.com/yshah-aromatech/scriptorium/internal/pwshtest"
 )
+
+// ---------------------------------------------------------------------
+// 0. NOTHING in this package may reach the real crontab.
+//
+// app.Open reads the managed block on every open, so cli.Main shells out to
+// `crontab` on every call. TestMain therefore puts a fake `crontab` — one
+// that reports an empty crontab and refuses every other argument — ahead of
+// the real binary on PATH for the whole package, and shimCrontab swaps in a
+// canned block for the tests that want one. A test that forgets is still
+// safe: the package-wide shim is the floor, not an opt-in.
+// ---------------------------------------------------------------------
+
+// writeShim drops an executable fake `crontab` (and its canned spool) into
+// dir. `-l` cats the spool and exits 0; every other argument list exits 1,
+// so a write attempt can only fail — never land anywhere.
+func writeShim(dir, block string) error {
+	spool := filepath.Join(dir, "crontab.txt")
+	if err := os.WriteFile(spool, []byte(block), 0o644); err != nil {
+		return err
+	}
+	script := "#!/bin/sh\nif [ \"$1\" = \"-l\" ]; then exec cat " + spool + "; fi\nexit 1\n"
+	return os.WriteFile(filepath.Join(dir, "crontab"), []byte(script), 0o755)
+}
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "sto-crontab-shim")
+	if err != nil {
+		panic(err)
+	}
+	if err := writeShim(dir, ""); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// shimCrontab points PATH at a fake crontab serving block, for this test
+// only. It serves BOTH the in-process Go reader (exec.LookPath honors the
+// env) and any pwsh child, which inherits the same PATH.
+func shimCrontab(t *testing.T, block string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := writeShim(dir, block); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// psManagedBlock renders a managed block in the PowerShell app's spelling,
+// so the PS reader and the Go reader both parse it (the compat mandate).
+func psManagedBlock(name, expr string) string {
+	return strings.Join([]string{
+		cron.BlockStart,
+		expr + " cd '/opt/scriptorium' && 'pwsh' -NoProfile -File scriptorium.ps1 --run '" + name +
+			"' --cron >> '/tmp/cron-" + name + ".log' 2>&1",
+		cron.BlockEnd,
+	}, "\n") + "\n"
+}
 
 // setupApp writes a minimal config.json (dataDir only) and points
 // SCRIPTORIUM_APP_DIR at it, so cli.Main's ResolveAppDir picks it up. It
@@ -138,6 +207,11 @@ func TestDiffOracleListAndHistory(t *testing.T) {
 	pwshtest.RequirePwsh(t)
 	t.Setenv("N8N_WEBHOOK_URL", "")
 
+	// One seeded script is scheduled, in PS spelling, through a fake crontab
+	// both sides read: --list's schedule column has to agree byte-for-byte,
+	// not just be empty on both sides.
+	shimCrontab(t, psManagedBlock("hello", "*/5 * * * *"))
+
 	repoRoot := moduleRoot(t)
 	mainCfgPath := filepath.Join(repoRoot, "config.json")
 	if _, err := os.Stat(mainCfgPath); err == nil {
@@ -202,13 +276,48 @@ func TestDiffOracleListAndHistory(t *testing.T) {
 				t.Errorf("Go and PS %v output differ:\n--- Go (%d bytes) ---\n%q\n--- PS (%d bytes) ---\n%q",
 					args, goOut.Len(), goOut.String(), len(psOut), string(psOut))
 			}
+
+			// An identically-empty column would diff clean while proving
+			// nothing — assert the shim actually reached both readers.
+			if args[0] == "--list" {
+				if !strings.Contains(goOut.String(), "  [*/5 * * * *]") {
+					t.Errorf("Go --list has no schedule column — the crontab shim never reached it:\n%s", goOut.String())
+				}
+				if !strings.Contains(string(psOut), "  [*/5 * * * *]") {
+					t.Errorf("PS --list has no schedule column — the crontab shim never reached pwsh:\n%s", psOut)
+				}
+			}
 		})
 	}
 }
 
 // ---------------------------------------------------------------------
-// 3. The missed-run sweep piggybacks on --run without breaking it. nil
-// Schedules (no crontab reader until P7) makes it a no-op today.
+// 2b. --list schedule column, without pwsh: exactly PS's bracket shape,
+// and only on the scheduled script.
+// ---------------------------------------------------------------------
+
+func TestListScheduleColumn(t *testing.T) {
+	_, dataDir := setupApp(t)
+	writeScript(t, dataDir, "scheduled", "exit 0")
+	writeScript(t, dataDir, "unscheduled", "exit 0")
+	shimCrontab(t, psManagedBlock("scheduled", "*/5 * * * *"))
+
+	var out, errw bytes.Buffer
+	if code := cli.Main([]string{"--list"}, &out, &errw); code != 0 {
+		t.Fatalf("exit = %d, stderr: %s", code, errw.String())
+	}
+	want := fmt.Sprintf("%-30s %-3s %-10s%s\n", "scheduled", "ps", "never run", "  [*/5 * * * *]")
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("stdout =\n%q\nwant to contain\n%q", out.String(), want)
+	}
+	unwanted := fmt.Sprintf("%-30s %-3s %-10s\n", "unscheduled", "ps", "never run")
+	if !strings.Contains(out.String(), unwanted) {
+		t.Errorf("unscheduled script should carry no column:\n%q", out.String())
+	}
+}
+
+// ---------------------------------------------------------------------
+// 3. The missed-run sweep piggybacks on --run, now with real schedules.
 // ---------------------------------------------------------------------
 
 func TestRunMissedSweepDoesNotBreakTheRun(t *testing.T) {
@@ -220,8 +329,93 @@ func TestRunMissedSweepDoesNotBreakTheRun(t *testing.T) {
 	if code := cli.Main([]string{"--run", "ok"}, &out, &errw); code != 0 {
 		t.Fatalf("exit = %d, stdout: %s, stderr: %s", code, out.String(), errw.String())
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "missed-state.json")); !os.IsNotExist(err) {
-		t.Fatalf("expected no missed-state.json (nil Schedules is a no-op until P7's crontab reader exists), stat err = %v", err)
+	// An empty crontab is a real sweep over zero schedules: the state file
+	// is created and stays empty. (nil Schedules — "no reader" — is gone.)
+	b, err := os.ReadFile(filepath.Join(dataDir, "missed-state.json"))
+	if err != nil {
+		t.Fatalf("expected an empty missed-state.json after the sweep: %v", err)
+	}
+	if s := strings.TrimSpace(string(b)); s != "" && s != "{}" {
+		t.Errorf("missed-state.json = %q, want empty for an empty crontab", s)
+	}
+}
+
+// End-to-end: a schedule that fired and left no trace alerts exactly once
+// through the webhook, and the alert is stamped so it never repeats.
+func TestRunMissedSweepAlertsOnASilentSchedule(t *testing.T) {
+	pwshtest.RequirePwsh(t)
+
+	var mu sync.Mutex
+	var events []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var m map[string]any
+		if json.Unmarshal(body, &m) == nil {
+			mu.Lock()
+			events = append(events, m)
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	appDir := t.TempDir()
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgJSON := fmt.Sprintf(`{"dataDir":%q,"missedGraceMinutes":0}`, dataDir)
+	if err := os.WriteFile(filepath.Join(appDir, "config.json"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SCRIPTORIUM_APP_DIR", appDir)
+	t.Setenv("N8N_WEBHOOK_URL", srv.URL)
+	writeScript(t, dataDir, "other", "exit 0")
+	shimCrontab(t, psManagedBlock("job", "*/5 * * * *"))
+
+	// 'job' has been known for two hours, and has never been alerted on.
+	// The state file speaks .NET 'o' format in naive-local labeling.
+	seen := time.Now().Add(-2*time.Hour).Format("2006-01-02T15:04:05.0000000") + "Z"
+	state := fmt.Sprintf(`{"job":{"expr":"*/5 * * * *","firstSeen":%q,"lastAlerted":null}}`, seen)
+	if err := os.WriteFile(filepath.Join(dataDir, "missed-state.json"), []byte(state), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errw bytes.Buffer
+	if code := cli.Main([]string{"--run", "other"}, &out, &errw); code != 0 {
+		t.Fatalf("exit = %d, stdout: %s, stderr: %s", code, out.String(), errw.String())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var missedEvents []map[string]any
+	for _, e := range events {
+		if e["event"] == "missed" {
+			missedEvents = append(missedEvents, e)
+		}
+	}
+	if len(missedEvents) != 1 {
+		t.Fatalf("missed webhooks = %d, want exactly 1 (all events: %v)", len(missedEvents), events)
+	}
+	if missedEvents[0]["script"] != "job" {
+		t.Errorf("script = %v, want \"job\"", missedEvents[0]["script"])
+	}
+	if missedEvents[0]["schedule"] != "*/5 * * * *" {
+		t.Errorf("schedule = %v, want \"*/5 * * * *\"", missedEvents[0]["schedule"])
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dataDir, "missed-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after map[string]struct {
+		LastAlerted *string `json:"lastAlerted"`
+	}
+	if err := json.Unmarshal(raw, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after["job"].LastAlerted == nil || *after["job"].LastAlerted == "" {
+		t.Errorf("lastAlerted was not stamped: %s", raw)
 	}
 }
 

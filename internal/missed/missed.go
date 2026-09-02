@@ -196,9 +196,10 @@ func marshalState(state map[string]*stateEntry) ([]byte, error) {
 }
 
 // Options is everything Check needs, injected — no global config.
-// GraceMinutes is caller-resolved (the CLI passes cfg.MissedGraceMinutes);
-// a negative value falls back to Get-StoMissedRuns' own PS default (5) for
-// a caller that hasn't resolved one.
+// GraceMinutes is caller-resolved: every shipped caller passes the config's
+// missedGraceMinutes value explicitly. A negative value means "the caller
+// resolved nothing", and falls back to Get-StoMissedRuns' own PS default of
+// 5 minutes.
 type Options struct {
 	DataDir      string
 	Schedules    map[string]string
@@ -224,9 +225,10 @@ type missedPayload struct {
 // fire ONCE (deduped via lastAlerted in <dataDir>/missed-state.json), and
 // returns everything currently missed for the UI.
 //
-// nil Schedules returns (nil, nil) immediately — it means "no crontab
-// reader yet" (the P7 concern), not "zero schedules configured"; an empty,
-// non-nil map is a real sweep that drops every existing schedule's state.
+// nil Schedules returns (nil, nil) immediately — it means "this caller has
+// no schedule source", not "zero schedules configured". The CLI always
+// passes the crontab reader's map, which is empty-but-non-nil for an empty
+// crontab: a real sweep that drops every stale schedule's state.
 //
 // The state file is flock'd (LOCK_EX|LOCK_NB) for the whole read-detect-write
 // section: a held lock returns (nil, nil) silently rather than racing another
