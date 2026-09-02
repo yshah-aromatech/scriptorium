@@ -321,15 +321,15 @@ func TestSpinnerOnlyRunsWhileSomethingIs(t *testing.T) {
 }
 
 func TestFleetGoldens(t *testing.T) {
-	goldenFrames(t, "fleet", func(t *testing.T, env []string) *Model {
+	goldenFrames(t, "fleet", func(t *testing.T, env []string, w, h int) *Model {
 		return newFixtureModel(t, env)
 	})
-	goldenFrames(t, "fleet-failures", func(t *testing.T, env []string) *Model {
+	goldenFrames(t, "fleet-failures", func(t *testing.T, env []string, w, h int) *Model {
 		m := newFixtureModel(t, env)
 		m.fleet.failOnly = true
 		return m
 	})
-	goldenFrames(t, "fleet-empty", func(t *testing.T, env []string) *Model {
+	goldenFrames(t, "fleet-empty", func(t *testing.T, env []string, w, h int) *Model {
 		m := newFixtureModel(t, env)
 		m.Update(ScriptsLoadedMsg{})
 		m.Update(LiveRunsMsg(nil))

@@ -12,6 +12,7 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/format"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
+	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 )
 
 // Run lifecycle. Everything asynchronous here is a tea.Cmd — including
@@ -181,8 +182,18 @@ func (r *runModel) onRunDone(m *Model, msg RunDoneMsg) tea.Cmd {
 	r.out.append(banner(statusGlyph(row.Status)+" "+row.Script+" · "+row.Status+
 		" · exit "+exit+" · "+format.Duration(dur), w))
 	if res := row.Resources; res != nil {
-		r.out.append("   cpu avg " + trim1(res.CPUAvgPercent) + "% / peak " + trim1(res.CPUMaxPercent) +
-			"%   mem avg " + trim1(res.MemAvgMb) + "MB / peak " + trim1(res.MemMaxMb) + "MB")
+		// Two stat groups on one line where it fits, one per line where it does
+		// not. Wrapping decides these later at pane width, and it breaks
+		// mid-word — which on this line means splitting a number from its unit
+		// ("peak" / "61.2MB"). Choosing the seam here means the reader never
+		// sees that.
+		cpu := "   cpu avg " + trim1(res.CPUAvgPercent) + "% / peak " + trim1(res.CPUMaxPercent) + "%"
+		mem := "   mem avg " + trim1(res.MemAvgMb) + "MB / peak " + trim1(res.MemMaxMb) + "MB"
+		if textkit.Width(cpu+mem) <= w {
+			r.out.append(cpu + mem)
+		} else {
+			r.out.append(cpu, mem)
+		}
 	}
 	if row.LogFile != nil && *row.LogFile != "" {
 		r.out.append("   log: " + *row.LogFile)

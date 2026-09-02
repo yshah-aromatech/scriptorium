@@ -331,33 +331,38 @@ func f64Ptr(f float64) *float64 {
 }
 
 func TestGoldensRun(t *testing.T) {
-	goldenFrames(t, "run", func(t *testing.T, env []string) *Model {
+	goldenFrames(t, "run", func(t *testing.T, env []string, w, h int) *Model {
 		m := newFixtureModel(t, env)
 		m.mode = modeRun
 		return m
 	})
-	goldenFrames(t, "run-output-focus", func(t *testing.T, env []string) *Model {
+
+	// A finished run, driven through the real completion path — the banner,
+	// the stats and the log line are what onRunDone actually writes, at the
+	// width it actually writes them, so the golden pins the shipped output
+	// rather than a hand-typed imitation of it.
+	goldenFrames(t, "run-output-focus", func(t *testing.T, env []string, w, h int) *Model {
 		m := newFixtureModel(t, env)
 		m.mode = modeRun
 		m.focus = focusOutput
+		m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		m.run.selectByName(m, "backup-db")
+		m.run.handle = fakeHandle("backup-db")
 		m.run.out.begin("run: backup-db")
-		m.run.out.append("", banner("▶ backup-db · started 14:29:57", m.run.out.contentWidth()))
-		m.run.out.append(
+		m.run.out.append("", banner("▶ backup-db · started 14:29:57", m.run.out.contentWidth()),
 			"connecting to postgres://db.internal:5432",
 			"dumping schema public (18 tables)",
 			"WARNING: table audit_log is 4.2GB, this will take a while",
 			"uploading backup-2026-09-02.dump to s3://ops-backups",
-			"upload failed once, retrying",
-			banner("✓ backup-db · success · exit 0 · 42.5s", m.run.out.contentWidth()),
-			"   cpu avg 33% / peak 66%   mem avg 48.5MB / peak 61.2MB",
-			"   log: /var/log/scriptorium/backup-db-20260902-142957.log",
-		)
+			"upload failed once, retrying")
+		m.run.onRunDone(m, RunDoneMsg{Row: doneRow("backup-db", "success", 0, 42.5)})
 		return m
 	})
-	goldenFrames(t, "run-live", func(t *testing.T, env []string) *Model {
+
+	goldenFrames(t, "run-live", func(t *testing.T, env []string, w, h int) *Model {
 		m := newFixtureModel(t, env)
 		m.mode = modeRun
+		m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		m.run.selectByName(m, "backup-db")
 		m.run.handle = fakeHandle("backup-db")
 		m.run.startedAt = frozen.Add(-18 * time.Second)
@@ -458,6 +463,42 @@ func TestRunDoneReportsEverywhere(t *testing.T) {
 	}
 	if !sawStatus || !sawReload {
 		t.Errorf("run completion: status=%v fleet reload=%v", sawStatus, sawReload)
+	}
+}
+
+// The completion stats must not be left to the wrapper: at the floor it folds
+// mid-word, which on this line splits a number from its unit ("peak" /
+// "61.2MB"). Each stat line is emitted to fit instead.
+func TestCompletionStatsNeverSplitAValue(t *testing.T) {
+	for _, w := range []int{80, 120, 200} {
+		m := runAt(t, w, 24)
+		m.run.handle = fakeHandle("backup-db")
+		m.run.out.begin("run: backup-db")
+		before := len(m.run.out.buf.Lines)
+		m.run.onRunDone(m, RunDoneMsg{Row: doneRow("backup-db", "success", 0, 12.25)})
+
+		var stats []string
+		for _, l := range m.run.out.buf.Lines[before:] {
+			if strings.Contains(l, "cpu avg") || strings.Contains(l, "mem avg") {
+				stats = append(stats, l)
+			}
+		}
+		if len(stats) == 0 {
+			t.Fatalf("width %d: no stats line was emitted", w)
+		}
+		for _, l := range stats {
+			if got := textkit.Width(l); got > m.run.out.contentWidth() {
+				t.Errorf("width %d: stats line is %d cells, over the %d-cell pane — it will fold mid-value: %q",
+					w, got, m.run.out.contentWidth(), l)
+			}
+		}
+		// and every value stays whole on whichever line carries it
+		joined := strings.Join(stats, "\n")
+		for _, want := range []string{"peak 66%", "peak 61.2MB"} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("width %d: %q was split across lines:\n%s", w, want, joined)
+			}
+		}
 	}
 }
 

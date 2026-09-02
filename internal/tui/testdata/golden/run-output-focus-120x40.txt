@@ -13,7 +13,7 @@
                                         │upload failed once, retrying                                                   
                                         │─── ✓ backup-db · success · exit 0 · 42.5s ─────────────────────────────────── 
                                         │   cpu avg 33% / peak 66%   mem avg 48.5MB / peak 61.2MB                       
-                                        │   log: /var/log/scriptorium/backup-db-20260902-142957.log                     
+                                        │   log: /var/log/scriptorium/backup-db.log                                     
                                         │                                                                               
                                         │                                                                               
                                         │                                                                               
@@ -37,4 +37,4 @@
    cpu 66% peak · mem 61.2MB peak       │                                                                               
    at 2026-09-02 14:27:00               │                                                                               
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-↑/k up · ↓/j down · pgup page up · end follow · tab focus · r run · x kill · 1 fleet · 2 run · 3 history · 4 schedules …
+↑/k up · ↓/j down · pgup page up · end follow · tab focus · r run · x kill · q quit · 1 fleet · 2 run · 3 history …

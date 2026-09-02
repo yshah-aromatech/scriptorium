@@ -37,4 +37,4 @@
                                                                                    │
                                                                                    │
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-↑/k up · ↓/j down · ↵ open in run · f failures · r run · s sync · 1 fleet · 2 run · 3 history · 4 schedules · q quit
+↑/k up · ↓/j down · ↵ open in run · f failures · r run · s sync · q quit · 1 fleet · 2 run · 3 history · 4 schedules

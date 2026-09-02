@@ -68,8 +68,10 @@ func defaultKeys() keyMap {
 }
 
 // hints returns the bindings the footer shows for the current view and focused
-// pane — the live keys, and only those. The view switcher and quit come last
-// because they are always true and least interesting.
+// pane — the live keys, and only those. Quit sits ahead of the view switcher:
+// the footer is truncated to the terminal width, and at 80 columns the tail
+// falls off — the switcher digits are still on screen in the header, but `q`
+// is nowhere else, so it is the one that has to survive.
 func (m *Model) hints() []key.Binding {
 	k := m.keys
 	var out []key.Binding
@@ -85,5 +87,5 @@ func (m *Model) hints() []key.Binding {
 	case modeHistory, modeSchedules:
 		// nothing of their own yet — the placeholder pane says so.
 	}
-	return append(out, k.Fleet, k.Run, k.History, k.Schedules, k.Quit)
+	return append(out, k.Quit, k.Fleet, k.Run, k.History, k.Schedules)
 }

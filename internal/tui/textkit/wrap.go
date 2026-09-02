@@ -7,6 +7,20 @@ import (
 	"github.com/rivo/uniseg"
 )
 
+// utf16Len is a string's length in UTF-16 code units — .NET's String.Length,
+// and so the unit every index in the PS wrap algorithm counts in. A
+// supplementary-plane rune (emoji) is a surrogate pair and counts as two.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r > 0xFFFF {
+			n++
+		}
+	}
+	return n
+}
+
 // span is one wrapped row's byte extent inside its source line. The gap
 // between one span's End and the next's Start is exactly what the wrap
 // consumed — a single space at a word break, nothing at a hard break — which
@@ -51,11 +65,19 @@ func wrapSpans(line string, width int) []span {
 		}
 		seg := s[:cut]
 		brk := strings.LastIndexByte(seg, ' ')
+		// "Is the space in the second half?" — in PS's own units.
+		//
 		// PS compares against [int]($cut / 2), and [int] on a double is
-		// banker's rounding — for an odd cut that is not integer division
-		// (7/2 rounds to 4, not 3). RoundToEven reproduces it, as everywhere
-		// else a PS numeric cast is ported.
-		if brk > int(math.RoundToEven(float64(cut)/2)) {
+		// banker's rounding: an odd cut is not integer division (7/2 rounds to
+		// 4, not 3), hence RoundToEven.
+		//
+		// BOTH operands are UTF-16 code units there — $cut advances by them and
+		// LastIndexOf returns one — so they are here too. Comparing byte
+		// indices inflates a multibyte prefix and flips the break CHOICE on
+		// mixed-width lines ("日本語 abcdefgh" at width 10 word-breaks on bytes
+		// and hard-breaks in PS). Byte offsets stay the span currency; only
+		// this comparison changes unit.
+		if brk >= 0 && utf16Len(seg[:brk]) > int(math.RoundToEven(float64(utf16Len(seg))/2)) {
 			out = append(out, span{base, base + brk})
 			base += brk + 1
 			s = s[brk+1:]

@@ -32,6 +32,20 @@ func TestWrap(t *testing.T) {
 		{"unbreakable wide char", "日本", 1, []string{"日", "本"}},
 		{"wide pair per row", "日本語", 4, []string{"日本", "語"}},
 		{"trailing space kept on last row", "abc def ", 4, []string{"abc", "def "}},
+
+		// §12.6's midpoint test counts UTF-16 units, not bytes. Multibyte text
+		// inflates a byte index and flips the break CHOICE; these three pin the
+		// unit. The first is the reviewer's probe, verified against live pwsh.
+		//
+		// cut=7 units, mid=RoundToEven(3.5)=4, space at unit 3 -> 3>4 false ->
+		// hard break. (On byte indices it would be 9>6, a word break.)
+		{"cjk midpoint counts utf-16 units", "日本語 abcdefgh", 10, []string{"日本語 abc", "defgh"}},
+		// surrogate pairs count as two units each: cut=10, mid=5, space at
+		// unit 4 -> hard break. (On bytes it would be 8>7, a word break.)
+		{"surrogate pair midpoint", "🎉🎉 abcdefg", 10, []string{"🎉🎉 abcde", "fg"}},
+		// and a wide-char line whose space really is past the midpoint still
+		// word-breaks: cut=6 units, mid=3, space at unit 4 -> 4>3 true.
+		{"cjk word break still happens", "日本語日 ab", 10, []string{"日本語日", "ab"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

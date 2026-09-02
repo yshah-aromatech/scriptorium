@@ -57,4 +57,4 @@
 
 
  ⚠ missed run: nightly-report — the scheduled fire never arrived
-1 fleet · 2 run · 3 history · 4 schedules · q quit
+q quit · 1 fleet · 2 run · 3 history · 4 schedules

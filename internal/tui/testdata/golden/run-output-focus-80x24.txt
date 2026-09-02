@@ -13,10 +13,10 @@
                           │uploading backup-2026-09-02.dump to s3://ops-backups 
                           │upload failed once, retrying                         
 ─ details ────────────────│─── ✓ backup-db · success · exit 0 · 42.5s ───────── 
- ● backup-db · powershell…│   cpu avg 33% / peak 66%   mem avg 48.5MB / peak    
- ▸ entry backup-db/backup…│61.2MB                                               
- ⚙ env 0 vars             │   log: /var/log/scriptorium/backup-db-20260902-1429 
- ↻ cron 0 2 * * * · next …│57.log                                               
+ ● backup-db · powershell…│   cpu avg 33% / peak 66%                            
+ ▸ entry backup-db/backup…│   mem avg 48.5MB / peak 61.2MB                      
+ ⚙ env 0 vars             │   log: /var/log/scriptorium/backup-db.log           
+ ↻ cron 0 2 * * * · next …│                                                     
  ✦ last success · 42.5s ·…│                                                     
    cpu 66% peak · mem 61.…│                                                     
    at 2026-09-02 14:27:00 │                                                     

@@ -261,7 +261,7 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 		for _, b := range m.hints() {
 			keys = append(keys, b.Help().Key)
 		}
-		want := append(append([]string{}, tc.want...), "1", "2", "3", "4", "q")
+		want := append(append([]string{}, tc.want...), "q", "1", "2", "3", "4")
 		if strings.Join(keys, ",") != strings.Join(want, ",") {
 			t.Errorf("mode %v focus %v hints = %v, want %v", tc.mode, tc.focus, keys, want)
 		}
@@ -270,6 +270,21 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 			if !strings.Contains(footer, k) {
 				t.Errorf("footer %q is missing %q", footer, k)
 			}
+		}
+	}
+}
+
+// The footer is truncated to the terminal width, and at the 80-column floor the
+// tail falls off. The switcher digits are still in the header; `q` is nowhere
+// else on screen, so it is the hint that has to survive.
+func TestFooterKeepsQuitAtTheFloor(t *testing.T) {
+	for _, w := range []int{80, 100, 120, 200} {
+		m := newFixtureModel(t, truecolorEnv)
+		m.Update(tea.WindowSizeMsg{Width: w, Height: 24})
+		rows := strings.Split(textkit.StripANSI(m.frame()), "\n")
+		footer := rows[len(rows)-1]
+		if !strings.Contains(footer, "q quit") {
+			t.Errorf("width %d truncated quit out of the footer: %q", w, footer)
 		}
 	}
 }
@@ -303,7 +318,7 @@ func TestHeaderKeepsTheSwitcher(t *testing.T) {
 
 // The frame chrome — header, status bar, key hints — at all three sizes.
 func TestChromeGoldens(t *testing.T) {
-	goldenFrames(t, "chrome-history", func(t *testing.T, env []string) *Model {
+	goldenFrames(t, "chrome-history", func(t *testing.T, env []string, w, h int) *Model {
 		m := newFixtureModel(t, env)
 		m.mode = modeHistory
 		m.Update(StatusMsg{Text: "missed run: nightly-report — the scheduled fire never arrived", Kind: StatusWarn})

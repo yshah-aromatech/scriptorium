@@ -241,13 +241,16 @@ func TestFixtureShape(t *testing.T) {
 // gets the COLORTERM-unset frame, which is where the 256-color downsampling
 // shows up. Downsampling is width-independent, so pinning it once is the whole
 // contract rather than three copies of it.
-func goldenFrames(t *testing.T, name string, build func(t *testing.T, env []string) *Model) {
+// The build func is handed the target size so a state that depends on it —
+// anything the app writes into the output buffer, which is width-aware at the
+// moment it is written — is built the way the running app would build it.
+func goldenFrames(t *testing.T, name string, build func(t *testing.T, env []string, w, h int) *Model) {
 	t.Helper()
 	for _, sz := range goldenSizes {
 		w, h := sz[0], sz[1]
 		base := fmt.Sprintf("%s-%dx%d", name, w, h)
 
-		m := build(t, truecolorEnv)
+		m := build(t, truecolorEnv, w, h)
 		m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		frame := m.frame()
 		checkFrameShape(t, base, frame, w, h)
@@ -255,7 +258,7 @@ func goldenFrames(t *testing.T, name string, build func(t *testing.T, env []stri
 		checkGolden(t, base+".ansi", frame)
 
 		if w == 120 {
-			m256 := build(t, ansi256Env)
+			m256 := build(t, ansi256Env, w, h)
 			m256.Update(tea.WindowSizeMsg{Width: w, Height: h})
 			checkGolden(t, base+".ansi256.ansi", m256.frame())
 		}
