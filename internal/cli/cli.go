@@ -25,6 +25,7 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/mcp"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
+	"github.com/yshah-aromatech/scriptorium/internal/tui"
 )
 
 // ResolveAppDir finds the app directory the way scriptorium.ps1 does via
@@ -47,10 +48,10 @@ func ResolveAppDir() string {
 	return cwd
 }
 
-// tuiStubMessage is an honest stand-in for the surface a later phase ships
-// (the TUI front end) — content-equal with the PS app's own messaging
-// pattern, not byte-gated.
-const tuiStubMessage = "the TUI is not yet available in the Go rebuild — use the PowerShell app (arrives in a later phase)"
+// launchTUI is the bare-invocation branch's target, held as a variable so a
+// test can drive the wiring without a terminal — a real Bubble Tea program
+// needs one, and the TUI's own behaviour is covered in internal/tui.
+var launchTUI = tui.Run
 
 // mcpNoTokenMessage is byte-copied from scriptorium.ps1:102 (the $mcpOnly
 // branch's Write-Error text) — the exact string --mcp prints to stderr when
@@ -193,8 +194,13 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	case f.runName != "":
 		return runScript(a, f, stdout, stderr)
 	default:
-		fmt.Fprintln(stderr, tuiStubMessage)
-		return 1
+		// no flags: the TUI, which is what scriptorium.ps1 does too. It owns
+		// the terminal until the user quits.
+		if err := launchTUI(a); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 	}
 }
 

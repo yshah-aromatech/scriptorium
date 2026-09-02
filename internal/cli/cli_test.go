@@ -511,20 +511,3 @@ func TestAddRepoFlow(t *testing.T) {
 		t.Fatalf("duplicate add-repo: exit = %d, want 1; stdout: %s", code, out.String())
 	}
 }
-
-// ---------------------------------------------------------------------
-// 5. Bare invocation (no flags): an honest TUI-not-yet-available stub —
-// exit 1 so a misconfigured cron entry can't report success while doing
-// nothing. Also catches a flag-parsing regression falling through here.
-// ---------------------------------------------------------------------
-
-func TestBareInvocationIsAnHonestStub(t *testing.T) {
-	setupApp(t)
-	var out, errw bytes.Buffer
-	if code := cli.Main(nil, &out, &errw); code != 1 {
-		t.Fatalf("exit = %d, want 1\nstdout: %s\nstderr: %s", code, out.String(), errw.String())
-	}
-	if !strings.Contains(errw.String(), "the TUI is not yet available in the Go rebuild") {
-		t.Errorf("stderr = %q, want the TUI stub message", errw.String())
-	}
-}
