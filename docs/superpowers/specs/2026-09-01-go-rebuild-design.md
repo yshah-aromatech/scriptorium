@@ -167,3 +167,37 @@ research agents rather than burning builder context.
 Runtime plugin interface (third runtime earns it), config hot-reload, Windows
 support (unchanged from today), multi-host anything, general REST API, DAG
 orchestration — all previously flagged as over-engineering and still are.
+
+## API server — 2026-09-02 user addition
+
+§8 flags "general REST API" as deliberately out of scope; this is narrower and
+does not reverse that call. The user asked, at P9 kickoff, for an HTTP API
+alongside the MCP server. What shipped is a **co-hosted** REST surface, not a
+second product: `internal/mcp/api.go` adds `/api/v1/*` routes to the *same*
+`net/http.Handler` the MCP server already serves — same listener, same
+`MCP_AUTH_TOKEN` bearer check, same 1MB body cap, same `internal/mcp/ops.go`
+tool implementations. There is no new port, no new config key, no new
+systemd unit, and no second auth mechanism to operate. The MCP tool set
+already defines the whole surface a caller can reach (list/run/history/logs/
+schedules/deps/update); the REST routes are thin one-to-one mappers onto the
+identical `Ops` methods tools.go's `tools/call` dispatches onto — see
+ops.go's `Ops.Call` and api.go's `serveAPI` for the shared switch each frontend
+routes through. A dedicated test (`TestAPIAndMCPShareTheSameOpsResult`,
+internal/mcp/api_test.go) proves the two frontends return byte-identical JSON
+for the same operation.
+
+Routes, one per MCP tool that has an obvious REST shape (`GET`/`POST` list vs.
+`PUT`/`DELETE` for schedules), are listed in
+`.superpowers/sdd/2026-09-01-go-rebuild-phase9/task-3-brief.md`. Error mapping
+is REST-honest rather than uniform: an ops-layer exception is `500` with a
+redacted message; an unknown script or a missing/malformed log_id is `404`/
+`400` (the smallest new sentinel, `mcp.ToolError.NotFound`, is what both the
+JSON-RPC `isError` content and the REST status code read); a script that ran
+and failed, or a sync/install/update that reports `ok:false`, is always `200`
+— the body's own fields speak, exactly as MCP callers already read them.
+Responses are the `Ops` result's JSON directly, with no JSON-RPC envelope.
+
+Parity-inventory §11 gets one paragraph (not a new numbered subsection, since
+nothing in the PowerShell app diverges here — PS simply has no REST surface
+to diverge from) noting the co-hosted addition and pointing at this section
+for the rationale.

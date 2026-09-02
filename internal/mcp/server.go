@@ -89,14 +89,21 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if path != "" && path != "/mcp" {
-		writeText(w, http.StatusNotFound, `{"error":"not found"}`, "application/json")
-		return
-	}
-	if r.Method != http.MethodPost {
-		// no SSE stream (GET) and no session to delete (DELETE) — stateless
-		writeText(w, http.StatusMethodNotAllowed, `{"error":"method not allowed"}`, "application/json")
-		return
+	// The REST API (api.go, a Go-only addition) is co-hosted: same listener,
+	// same auth, same cap — only the routing and the response shape differ
+	// from the JSON-RPC /mcp endpoint below.
+	isAPI := path == apiPrefix || strings.HasPrefix(path, apiPrefix+"/")
+
+	if !isAPI {
+		if path != "" && path != "/mcp" {
+			writeText(w, http.StatusNotFound, `{"error":"not found"}`, "application/json")
+			return
+		}
+		if r.Method != http.MethodPost {
+			// no SSE stream (GET) and no session to delete (DELETE) — stateless
+			writeText(w, http.StatusMethodNotAllowed, `{"error":"method not allowed"}`, "application/json")
+			return
+		}
 	}
 
 	// Auth BEFORE reading the body — an unauthenticated client must not be
@@ -112,6 +119,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := readBounded(r.Body, maxBodyBytes)
 	if err != nil {
 		writeText(w, http.StatusRequestEntityTooLarge, `{"error":"payload too large"}`, "application/json")
+		return
+	}
+
+	if isAPI {
+		s.serveAPI(w, r, strings.TrimPrefix(path, apiPrefix), body)
 		return
 	}
 
