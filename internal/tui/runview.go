@@ -1,52 +1,480 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/yshah-aromatech/scriptorium/internal/cron"
+	"github.com/yshah-aromatech/scriptorium/internal/envfile"
+	"github.com/yshah-aromatech/scriptorium/internal/format"
+	"github.com/yshah-aromatech/scriptorium/internal/history"
+	"github.com/yshah-aromatech/scriptorium/internal/missed"
+	"github.com/yshah-aromatech/scriptorium/internal/procstat"
+	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
+	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 )
 
-// runModel is the Run view (design §4.2). Phase 10 task 4 fills it in.
+// Run is the working view (design §4.2): pick a script on the left, watch it
+// on the right. The details card under the list answers "what am I about to
+// run" without leaving the screen; the status bar answers "how much longer".
+const (
+	// detailsRows is the card's height including its rule. The PS app hides it
+	// below 14 body rows and so does this: at that size the output pane needs
+	// every row more than the card does (inventory §1.12).
+	detailsRows    = 8
+	detailsMinBody = 14
+
+	listMinWidth = 24
+	listMaxWidth = 44
+
+	// etaBarWidth is the ETA bar in the status line — enough cells to read a
+	// proportion at a glance, cheap enough to sit beside the text.
+	etaBarWidth = 12
+)
+
 type runModel struct {
 	w, h int
-	sel  int
+
+	list list.Model
+	out  outputPane
+	prog progress.Model
+
+	// live run
+	handle     *runner.Handle
+	startedAt  time.Time
+	etaSec     float64
+	doneRow    *history.Row
+	lastSample procstat.Sample
+
+	queue []queued
+
+	// background sync
+	syncing bool
+	syncOK  bool
+	syncCh  chan taskEvent
 }
 
-func (r *runModel) init(*Model)               {}
-func (r *runModel) initCmd() tea.Cmd          { return nil }
-func (r *runModel) reload(*Model)             {}
-func (r *runModel) resize(_ *Model, w, h int) { r.w, r.h = w, h }
+func (r *runModel) init(m *Model) {
+	r.list = newScriptList(m)
+	r.prog = progress.New(
+		progress.WithWidth(etaBarWidth),
+		progress.WithoutPercentage(),
+		progress.WithColors(m.th.C.Info, m.th.C.Accent),
+	)
+	r.out.reset("output", m.app.Cfg.MaxOutputLines)
 
-func (r *runModel) update(*Model, tea.Msg) tea.Cmd { return nil }
+	// An empty pane on first open says nothing, and config.json's complaints
+	// have to land somewhere a user will see — the PS app prints them into this
+	// same panel. Plain lines, so the wrap cache re-derives them correctly once
+	// the real width arrives (the version lives in the header chip).
+	r.out.append("▸ scriptorium")
+	for _, w := range m.app.Warnings {
+		r.out.append("⚠ " + w)
+	}
+	r.out.append("", "  r run · s sync · tab focus · 1-4 views", "")
+}
+
+// initCmd is the root's startup hook for this view. Nothing to schedule yet —
+// the first data load already comes from the root.
+func (r *runModel) initCmd() tea.Cmd { return nil }
+
+func (r *runModel) reload(m *Model) {
+	name := ""
+	if it, ok := r.list.SelectedItem().(scriptItem); ok {
+		name = it.s.Name
+	}
+	r.list.SetItems(scriptItems(m.scripts))
+	if name != "" {
+		r.selectByName(m, name)
+	}
+}
 
 func (r *runModel) selected(m *Model) *scripts.Script {
-	if r.sel < 0 || r.sel >= len(m.scripts) {
+	it, ok := r.list.SelectedItem().(scriptItem)
+	if !ok {
 		return nil
 	}
-	return &m.scripts[r.sel]
+	for i := range m.scripts {
+		if m.scripts[i].Name == it.s.Name {
+			return &m.scripts[i]
+		}
+	}
+	return &it.s
 }
 
 // selectByName is the Fleet deep-link's landing point.
 func (r *runModel) selectByName(m *Model, name string) {
 	for i, s := range m.scripts {
 		if s.Name == name {
-			r.sel = i
+			r.list.Select(i)
 			return
 		}
 	}
 }
 
-func (r *runModel) start(*Model, scripts.Script) tea.Cmd { return nil }
-func (r *runModel) sync(*Model) tea.Cmd                  { return nil }
-func (r *runModel) queueDepth() int                      { return 0 }
-func (r *runModel) active() bool                         { return false }
+func (r *runModel) active() bool    { return r.handle != nil || r.syncing }
+func (r *runModel) queueDepth() int { return len(r.queue) }
 
-// statusLine reports the live run, if any. The bool is what lets the status bar
-// know a run outranks a transient message.
-func (r *runModel) statusLine(*Model, int) (string, bool) { return "", false }
+func (r *runModel) isRunning(n string) bool { return r.handle != nil && r.handle.Name == n }
+
+func (r *runModel) isQueued(name string) bool {
+	for _, q := range r.queue {
+		if q.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// Update
+// ---------------------------------------------------------------------------
+
+func (r *runModel) update(m *Model, msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case RunStartedMsg:
+		return r.onRunStarted(m, msg)
+	case RunQueuedMsg:
+		return r.onRunQueued(msg)
+	case RunEventsMsg:
+		return r.onRunEvents(m, msg)
+	case RunDoneMsg:
+		return r.onRunDone(m, msg)
+	case SyncEventsMsg:
+		return r.onSyncEvents(m, msg)
+	case tea.KeyPressMsg:
+		return r.onKey(m, msg)
+	case tea.MouseClickMsg:
+		return r.onClick(m, msg.Mouse())
+	case tea.MouseWheelMsg:
+		return r.onWheel(m, msg.Mouse())
+	}
+	return nil
+}
+
+// onClick focuses the pane under the pointer and, in the list, selects the row
+// it landed on. The pane rules already say which pane has the keyboard, so a
+// click is just a faster tab.
+func (r *runModel) onClick(m *Model, mouse tea.Mouse) tea.Cmd {
+	row := mouse.Y - headerRows
+	if row < 0 || row >= m.bodyHeight() {
+		return nil
+	}
+	if mouse.X >= runLayoutFor(m.w, m.bodyHeight()).listW {
+		m.focus = focusOutput
+		return nil
+	}
+	m.focus = focusList
+	// row 0 is the title rule; the list windows by page, so the first visible
+	// item is the page offset
+	if idx := r.firstVisible() + row - 1; row > 0 && idx < len(r.list.Items()) {
+		r.list.Select(idx)
+	}
+	return nil
+}
+
+// onWheel scrolls whichever pane the pointer is over, three rows at a time
+// (inventory §1.11).
+func (r *runModel) onWheel(m *Model, mouse tea.Mouse) tea.Cmd {
+	delta := 3
+	if mouse.Button == tea.MouseWheelUp {
+		delta = -3
+	}
+	if mouse.X >= runLayoutFor(m.w, m.bodyHeight()).listW {
+		r.out.scrollBy(delta)
+		return nil
+	}
+	for range 3 {
+		if delta < 0 {
+			r.list.CursorUp()
+		} else {
+			r.list.CursorDown()
+		}
+	}
+	return nil
+}
+
+// firstVisible is the index of the list's topmost rendered item. bubbles/list
+// windows by page rather than by offset, so this is the page origin.
+func (r *runModel) firstVisible() int {
+	return r.list.Paginator.Page * r.list.Paginator.PerPage
+}
+
+func (r *runModel) onKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	k := m.keys
+	switch {
+	case key.Matches(msg, k.Focus):
+		if m.focus == focusList {
+			m.focus = focusOutput
+			return status(StatusInfo, "focus: output — ↑↓ scroll, end follows")
+		}
+		m.focus = focusList
+		return status(StatusInfo, "focus: scripts")
+
+	case key.Matches(msg, k.Start):
+		s := r.selected(m)
+		if s == nil {
+			return status(StatusWarn, "no script selected")
+		}
+		return r.start(m, *s)
+
+	case key.Matches(msg, k.Kill):
+		return r.kill(m)
+
+	case key.Matches(msg, k.ClearQueue):
+		return r.clearQueue()
+
+	case key.Matches(msg, k.Sync):
+		return r.sync(m)
+
+	case key.Matches(msg, k.Follow):
+		r.out.toBottom()
+		return nil
+	}
+
+	// Only the NAV keys belong to the focused pane; every action above stays
+	// live in both, exactly as the PS list mode behaves (inventory §1.4).
+	if m.focus == focusOutput {
+		switch {
+		case key.Matches(msg, k.Up):
+			r.out.scrollBy(-1)
+		case key.Matches(msg, k.Down):
+			r.out.scrollBy(1)
+		case key.Matches(msg, k.PageUp):
+			r.out.scrollBy(-r.out.rows())
+		case key.Matches(msg, k.PageDown):
+			r.out.scrollBy(r.out.rows())
+		case key.Matches(msg, k.Top):
+			r.out.toTop()
+		case key.Matches(msg, k.Bottom):
+			r.out.toBottom()
+		}
+		return nil
+	}
+	var cmd tea.Cmd
+	r.list, cmd = r.list.Update(msg)
+	return cmd
+}
+
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+type runLayout struct {
+	listW, outW  int
+	listH, cardH int
+}
+
+func runLayoutFor(w, h int) runLayout {
+	l := runLayout{listW: min(max(w/3, listMinWidth), listMaxWidth)}
+	l.outW = max(w-l.listW-1, 10)
+	if h >= detailsMinBody {
+		l.cardH = detailsRows
+	}
+	l.listH = max(h-l.cardH, 1)
+	return l
+}
+
+func (r *runModel) resize(m *Model, w, h int) {
+	r.w, r.h = w, h
+	l := runLayoutFor(w, h)
+	r.list.SetWidth(l.listW)
+	r.list.SetHeight(max(l.listH-1, 1)) // the title rule takes one row
+	r.out.resize(l.outW, h)
+	if len(r.list.Items()) != len(m.scripts) {
+		r.reload(m)
+	}
+}
 
 func (r *runModel) view(m *Model, w, h int) []string {
-	return placeholderPane(m.th, w, h, "Run",
-		"script list · live output · details · ETA · queue",
-		"arrives in the next task")
+	r.resize(m, w, h)
+	l := runLayoutFor(w, h)
+	th := m.th
+
+	left := []string{sectionRule(th, r.listTitle(), l.listW, m.focus == focusList)}
+	if len(m.scripts) == 0 {
+		left = append(left, " "+th.S.Muted.Render("no scripts yet — press s to sync"))
+	} else {
+		left = append(left, strings.Split(r.list.View(), "\n")...)
+	}
+	left = fitRows(left, l.listH)
+	if l.cardH > 0 {
+		left = append(left, r.detailsCard(m, l.listW, l.cardH)...)
+	}
+	left = fitRows(left, h)
+
+	right := fitRows(r.out.view(th, r.spinFor(m), m.focus == focusOutput), h)
+
+	sep := th.S.Border.Render("│")
+	rows := make([]string, h)
+	for i := range h {
+		rows[i] = fillTo(left[i], l.listW, nil) + sep + right[i]
+	}
+	return rows
+}
+
+func (r *runModel) listTitle() string {
+	if n := len(r.queue); n > 0 {
+		return "scripts · " + strconv.Itoa(n) + " queued"
+	}
+	return "scripts"
+}
+
+// spinFor is the spinner glyph for the output title, shown only while this
+// view actually has something in flight.
+func (r *runModel) spinFor(m *Model) string {
+	if !r.active() {
+		return ""
+	}
+	return m.spinnerFrame()
+}
+
+// detailsCard is the eight-row answer to "what am I about to run": identity,
+// entry point, environment, schedule, and how the last run went.
+func (r *runModel) detailsCard(m *Model, w, h int) []string {
+	th := m.th
+	rows := []string{sectionRule(th, "details", w, false)}
+	s := r.selected(m)
+	if s == nil {
+		return fitRows(append(rows, " "+th.S.Muted.Render("no script selected")), h)
+	}
+
+	line := func(glyph, label, value string) string {
+		return " " + th.S.Info.Render(glyph) + " " + textkit.Truncate(
+			th.S.Desc.Render(label)+" "+th.S.Muted.Render(value), max(w-3, 4))
+	}
+	repo := ""
+	if s.Repo != "" {
+		repo = " · " + s.Repo
+	}
+	rows = append(rows,
+		" "+th.S.Success.Render("●")+" "+textkit.Truncate(
+			th.S.Base.Render(s.Name)+th.S.Muted.Render(" · "+s.Runtime+repo), max(w-3, 4)),
+		line("▸", "entry", entryLabel(m, *s)),
+		line("⚙", "env", envLabel(*s)),
+		line("↻", "cron", m.cronLabel(s.Name)),
+	)
+	rows = append(rows, r.lastRunLines(m, s.Name, w)...)
+	return fitRows(rows, h)
+}
+
+// entryLabel is the entry file relative to the scripts dir — the part a human
+// recognises, without the machine-specific prefix.
+func entryLabel(m *Model, s scripts.Script) string {
+	if rel, err := filepath.Rel(m.app.Paths.ScriptsDir, s.Entry); err == nil {
+		return rel
+	}
+	return filepath.Base(s.Entry)
+}
+
+// envLabel says how much environment a script carries: how many .env keys are
+// configured, and whether it has a module dir or a venv of its own. Discovery
+// fills in those paths for every script whether or not they exist, so the card
+// checks the disk — a card that claims a venv that was never created is worse
+// than one that says nothing.
+func envLabel(s scripts.Script) string {
+	keys, _ := envfile.Keys(s.EnvFile)
+	parts := []string{strconv.Itoa(len(keys)) + " vars"}
+	if dirExists(s.ModuleDir) {
+		parts = append(parts, "modules")
+	}
+	if dirExists(s.VenvDir) {
+		parts = append(parts, "venv")
+	}
+	return strings.Join(parts, " · ")
+}
+
+func dirExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
+}
+
+// cronLabel is the schedule and when it next fires — or the missed-fire note,
+// which replaces the countdown because it is the more urgent fact.
+func (m *Model) cronLabel(name string) string {
+	expr, ok := m.schedules[name]
+	if !ok {
+		return "not scheduled"
+	}
+	if ms, missing := m.missed[name]; missing {
+		return expr + " · ⚠ missed " + ms.ExpectedAt.Format("Mon 15:04")
+	}
+	now := missed.NaiveNow(m.now())
+	if next, ok := cron.Next(expr, now); ok {
+		return expr + " · next in " + format.RelativeTime(next.Sub(now).Seconds())
+	}
+	return expr
+}
+
+func (r *runModel) lastRunLines(m *Model, name string, w int) []string {
+	th := m.th
+	last, ok := m.statuses[name]
+	if !ok || last.At.IsZero() {
+		return []string{" " + th.S.Info.Render("✦") + " " + th.S.Muted.Render("never run")}
+	}
+	st := th.S.Success
+	if last.Status != "success" {
+		st = th.S.Danger
+	}
+	head := " " + th.S.Info.Render("✦") + " " + th.S.Desc.Render("last") + " " +
+		st.Render(last.Status) + th.S.Muted.Render(" · "+format.Duration(last.DurationSec)+
+		" · "+format.RelativeTime(m.now().Sub(last.At).Seconds())+" ago")
+	out := []string{textkit.Truncate(head, w)}
+	if res := last.Resources; res != nil {
+		out = append(out, textkit.Truncate("   "+th.S.Muted.Render(
+			"cpu "+trim1(res.CPUMaxPercent)+"% peak · mem "+trim1(res.MemMaxMb)+"MB peak"), w))
+	}
+	out = append(out, textkit.Truncate("   "+th.S.Muted.Render("at "+last.At.Format("2006-01-02 15:04:05")), w))
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Status line
+// ---------------------------------------------------------------------------
+
+// statusLine is what the status bar shows while this view has work in flight:
+// what is running, for how long, and — when history knows how long it usually
+// takes — a bar and an estimate. Past the estimate it counts OVER rather than
+// sitting at 100%, which is the honest thing to show.
+func (r *runModel) statusLine(m *Model, w int) (string, bool) {
+	th := m.th
+	if r.handle == nil {
+		if r.syncing {
+			return " " + th.S.Info.Render(m.spinnerFrame()+" syncing scripts repos…"), true
+		}
+		return "", false
+	}
+
+	elapsed := m.now().Sub(r.startedAt)
+	head := " " + th.S.Info.Render(m.spinnerFrame()+" "+r.handle.Name) + " " +
+		th.S.Desc.Render(format.RelativeTime(elapsed.Seconds()))
+
+	tail := ""
+	if r.etaSec > 0 {
+		left := r.etaSec - elapsed.Seconds()
+		note := "~" + format.RelativeTime(left) + " left"
+		if left < 0 {
+			note = "+" + format.RelativeTime(-left) + " over"
+		}
+		tail = "  " + r.prog.ViewAs(min(elapsed.Seconds()/r.etaSec, 1)) + " " + th.S.Muted.Render(note)
+	}
+	if n := len(r.queue); n > 0 {
+		tail += th.S.Border.Render(" · ") + th.S.Info.Render(strconv.Itoa(n)+" queued")
+	}
+	if r.lastSample.CPU > 0 {
+		tail += th.S.Border.Render(" · ") + th.S.Muted.Render("cpu "+trim1(r.lastSample.CPU)+"%")
+	}
+	return textkit.Truncate(head+tail, w), true
 }

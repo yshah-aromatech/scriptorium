@@ -56,7 +56,7 @@ func TestViewSwitcher(t *testing.T) {
 	}{
 		{"3", modeHistory, "filterable forensics table"},
 		{"4", modeSchedules, "agenda by next fire"},
-		{"2", modeRun, "live output"},
+		{"2", modeRun, "details"},
 		{"1", modeFleet, ""},
 	}
 	for _, c := range cases {

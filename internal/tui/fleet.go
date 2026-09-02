@@ -115,6 +115,23 @@ func (f *fleetModel) selected(m *Model) *scripts.Script {
 }
 
 func (f *fleetModel) update(m *Model, msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case tea.MouseClickMsg:
+		// row 0 is the summary strip, row 1 the table rule
+		if row := msg.Mouse().Y - headerRows - 2; row >= 0 {
+			if idx := f.top + row; idx < len(f.rows(m)) {
+				f.sel = idx
+			}
+		}
+		return nil
+	case tea.MouseWheelMsg:
+		if msg.Mouse().Button == tea.MouseWheelUp {
+			f.sel = max(f.sel-1, 0)
+		} else {
+			f.sel = min(f.sel+1, max(len(f.rows(m))-1, 0))
+		}
+		return nil
+	}
 	press, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return nil

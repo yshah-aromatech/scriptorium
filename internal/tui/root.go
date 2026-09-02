@@ -236,7 +236,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.statusText != "" && m.now().Sub(m.statusAt) > statusTTL {
 			m.statusText = ""
 		}
-		return m, tickCmd()
+		// the 1 Hz beat is also the queue's second chance: RunDoneMsg drains it
+		// first, and this catches an entry that was queued while the gate said
+		// no (inventory §4.11 drains one per loop iteration).
+		return m, tea.Batch(tickCmd(), m.run.dequeue(m))
+
+	case RunStartedMsg, RunQueuedMsg, RunEventsMsg, RunDoneMsg, SyncEventsMsg:
+		// run and sync traffic belongs to the Run view wherever the user is
+		// standing: a run started from Fleet must keep draining while they read
+		// the History screen.
+		return m, m.run.update(m, msg)
 
 	case LockPollMsg:
 		return m, tea.Batch(m.scanLocks(), lockPollCmd())
@@ -373,7 +382,9 @@ func (m *Model) frame() string {
 	rows = append(rows, m.header())
 	rows = append(rows, m.body()...)
 	rows = append(rows, m.statusBar())
-	rows = append(rows, m.help.ShortHelpView(m.hints()))
+	// bubbles/help truncates by its own width accounting, which does not always
+	// land on ours; the frame's last row must never be wider than the frame.
+	rows = append(rows, textkit.Truncate(m.help.ShortHelpView(m.hints()), m.w))
 	return strings.Join(rows, "\n")
 }
 

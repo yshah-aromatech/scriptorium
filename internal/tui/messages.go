@@ -139,9 +139,11 @@ type DepsScannedMsg struct {
 // Run lifecycle
 // ---------------------------------------------------------------------------
 
-// RunStartedMsg announces a launched run and the ETA derived from history.
+// RunStartedMsg announces a launched run: the handle to drain and kill it
+// with, and the ETA derived from history at launch (never mid-render).
 type RunStartedMsg struct {
 	Script    scripts.Script
+	Handle    *runner.Handle
 	StartedAt time.Time
 	EtaSec    float64
 }
@@ -166,10 +168,14 @@ type RunQueuedMsg struct {
 // Background tasks (sync now; apt/lint/self-update in phase 11)
 // ---------------------------------------------------------------------------
 
-// SyncEventsMsg is one batched drain of a repo sync's output.
+// SyncEventsMsg is one batched drain of a repo sync's output. Finished marks
+// the batch that carried the sync's terminal event, and OK is only meaningful
+// once it has.
 type SyncEventsMsg struct {
-	Batch  []string
-	Closed bool
+	Batch    []string
+	Closed   bool
+	Finished bool
+	OK       bool
 }
 
 // SyncDoneMsg ends a sync.
