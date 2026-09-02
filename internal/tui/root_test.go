@@ -59,7 +59,7 @@ func TestViewSwitcher(t *testing.T) {
 		body    string
 	}{
 		{"3", modeHistory, "no runs yet"},
-		{"4", modeSchedules, "agenda by next fire"},
+		{"4", modeSchedules, "backup-db"},
 		{"2", modeRun, "details"},
 		{"1", modeFleet, ""},
 	}
@@ -72,18 +72,6 @@ func TestViewSwitcher(t *testing.T) {
 		if c.body != "" && !strings.Contains(plain, c.body) {
 			t.Errorf("after %q the body does not mention %q:\n%s", c.keyName, c.body, plain)
 		}
-	}
-}
-
-// A view that does not exist yet says so, in the frame, rather than showing
-// an empty pane that reads like a bug. History shipped in wave B; Schedules
-// has not yet.
-func TestUnbuiltViewsAreHonest(t *testing.T) {
-	m := newFixtureModel(t, truecolorEnv)
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	press(m, "4")
-	if plain := textkit.StripANSI(m.frame()); !strings.Contains(plain, "arrives in the next phase") {
-		t.Errorf("Schedules does not admit it is unbuilt:\n%s", plain)
 	}
 }
 
@@ -267,6 +255,7 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 			[]string{"e", "i", "l", "v", "c", "h", "X"}},
 		{modeRun, focusOutput, []string{"↑/k", "↓/j", "pgup", "end", "tab", "r", "x"}, nil},
 		{modeHistory, focusList, []string{"↑/k", "↓/j", "↵", "r", "f"}, nil},
+		{modeSchedules, focusList, []string{"↑/k", "↓/j", "e/↵"}, nil},
 	} {
 		m.mode, m.focus = tc.mode, tc.focus
 		var keys []string

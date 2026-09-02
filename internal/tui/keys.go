@@ -57,6 +57,9 @@ type keyMap struct {
 	Copy       key.Binding
 	Scoped     key.Binding
 
+	// schedules
+	ScheduleEdit key.Binding
+
 	// overlays
 	Palette key.Binding
 	Help    key.Binding
@@ -99,6 +102,8 @@ func defaultKeys() keyMap {
 		Copy:       key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy output")),
 		Scoped:     key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "script history")),
 
+		ScheduleEdit: key.NewBinding(key.WithKeys("e", "enter"), key.WithHelp("e/↵", "edit")),
+
 		Palette: key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
 		Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Close:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close")),
@@ -133,6 +138,7 @@ func (k keyMap) groups() []keyGroup {
 		{Title: "run", Keys: []key.Binding{
 			k.Start, k.Args, k.Kill, k.ClearQueue, k.Sync,
 			k.Env, k.Deps, k.Lint, k.Upgrade, k.ViewLog, k.Copy, k.Scoped}},
+		{Title: "schedules", Keys: []key.Binding{k.ScheduleEdit}},
 		{Title: "session", Keys: []key.Binding{k.Palette, k.Help, k.Quit}},
 		{Title: "overlays", Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Save, k.Close}},
 	}
@@ -168,7 +174,7 @@ func (m *Model) hints() []key.Binding {
 	case modeHistory:
 		primary = []key.Binding{k.Up, k.Down, k.Open, k.Start, k.FailFilter}
 	case modeSchedules:
-		// nothing of their own yet — the placeholder pane says so.
+		primary = []key.Binding{k.Up, k.Down, k.ScheduleEdit}
 	}
 	out := append(primary, k.Quit, k.Palette, k.Help)
 	out = append(out, secondary...)

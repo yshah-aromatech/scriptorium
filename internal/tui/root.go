@@ -122,6 +122,12 @@ type Model struct {
 	fleet   fleetModel
 	run     runModel
 	history historyModel
+	sched   schedulesModel
+
+	// aiConvert is a test hook for cronAI (schedules.go): nil in production,
+	// where cronAI builds a real openrouter.Client keyed off
+	// OPENROUTER_API_KEY. Same injection idiom as `now`.
+	aiConvert func(text string) (string, error)
 }
 
 // spinnerFrame is the glyph any view showing "this is running" should use.
@@ -168,6 +174,7 @@ func New(a *app.App, now func() time.Time) *Model {
 	m.fleet.init(m)
 	m.run.init(m)
 	m.history.init(m)
+	m.sched.init(m)
 	m.useTheme(theme.New(name, theme.Profile(a.Cfg.ColorMode, os.Environ())))
 	return m
 }
@@ -347,6 +354,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.history.onLoaded(m, msg)
 		return m, nil
 
+	case CronParsedMsg:
+		return m, m.onCronParsed(msg)
+
+	case ScheduleSavedMsg:
+		return m, m.onScheduleSaved(msg)
+
 	case StatusMsg:
 		m.statusText, m.statusKind, m.statusAt = msg.Text, msg.Kind, m.now()
 		return m, nil
@@ -379,6 +392,8 @@ func (m *Model) forward(msg tea.Msg) tea.Cmd {
 		return m.run.update(m, msg)
 	case modeHistory:
 		return m.history.update(m, msg)
+	case modeSchedules:
+		return m.sched.update(m, msg)
 	}
 	return nil
 }
@@ -475,6 +490,7 @@ func (m *Model) relayout() {
 	m.fleet.resize(m, m.w, m.bodyHeight())
 	m.run.resize(m, m.w, m.bodyHeight())
 	m.history.resize(m, m.w, m.bodyHeight())
+	m.sched.resize(m, m.w, m.bodyHeight())
 }
 
 func (m *Model) bodyHeight() int { return max(m.h-chromeRows, 1) }
@@ -519,9 +535,7 @@ func (m *Model) body() []string {
 	case modeHistory:
 		rows = m.history.view(m, m.w, h)
 	case modeSchedules:
-		rows = placeholderPane(m.th, m.w, h, "Schedules",
-			"agenda by next fire · cron editing · missed-fire status",
-			"arrives in the next phase")
+		rows = m.sched.view(m, m.w, h)
 	}
 	rows = fitRows(rows, h)
 	if m.ov != nil {
@@ -639,25 +653,6 @@ func (m *Model) repoLabels() (long, short string) {
 }
 
 // ---------------------------------------------------------------------------
-
-// placeholderPane is the honest stand-in for a view that has not been built:
-// it names what will live there instead of pretending to be empty.
-func placeholderPane(th theme.Theme, w, h int, title, subtitle, note string) []string {
-	lines := []string{
-		th.S.TitleOn.Render(title),
-		th.S.Desc.Render(subtitle),
-		"",
-		th.S.Muted.Render("· " + note + " ·"),
-	}
-	rows := make([]string, 0, h)
-	for range max((h-len(lines))/2, 0) {
-		rows = append(rows, "")
-	}
-	for _, l := range lines {
-		rows = append(rows, center(l, w))
-	}
-	return rows
-}
 
 // fitRows makes a view's output exactly h rows: short output is padded, long
 // output is cut. A view that miscounts shifts the status bar, so this is the

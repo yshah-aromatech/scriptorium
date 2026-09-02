@@ -132,6 +132,16 @@ type CronParsedMsg struct {
 	Err    error
 }
 
+// ScheduleSavedMsg carries the result of a crontab write (Set on a confirmed
+// edit, Remove on an empty submit) — Set-StoSchedule/Remove-StoSchedule's own
+// outcome, off the update loop.
+type ScheduleSavedMsg struct {
+	Name    string
+	Expr    string
+	Removed bool
+	Err     error
+}
+
 // DepsScannedMsg carries one dependency scan's result, plus what the scan was
 // FOR: a run that has to wait for the answer (Args, InstallOnly false) or a
 // plain `i` check. Degraded/Warning come from the PowerShell scanner's

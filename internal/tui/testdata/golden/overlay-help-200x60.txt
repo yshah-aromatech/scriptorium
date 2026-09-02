@@ -10,19 +10,19 @@
                                             │                                                                                                                                                           
                                             │                                                                                                                                                           
 ─ keys ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- # views                                                                                            # session                                                                                           
-  1       fleet                                                                                      :       commands                                                                                   
-  2       run                                                                                        ?       help                                                                                       
-  3       history                                                                                    q       quit                                                                                       
-  4       schedules                                                                                                                                                                                     
-                                                                                                    # overlays                                                                                          
- # move                                                                                              y/↵     confirm                                                                                    
-  ↑/k     up                                                                                         n       no                                                                                         
-  ↓/j     down                                                                                       ctrl+s  save                                                                                       
-  pgup    page up                                                                                    esc     close                                                                                      
-  pgdn    page down                                                                                                                                                                                     
-  g       top                                                                                                                                                                                           
-  G       bottom                                                                                                                                                                                        
+ # views                                                                                            # schedules                                                                                         
+  1       fleet                                                                                      e/↵     edit                                                                                       
+  2       run                                                                                                                                                                                           
+  3       history                                                                                   # session                                                                                           
+  4       schedules                                                                                  :       commands                                                                                   
+                                                                                                     ?       help                                                                                       
+ # move                                                                                              q       quit                                                                                       
+  ↑/k     up                                                                                                                                                                                            
+  ↓/j     down                                                                                      # overlays                                                                                          
+  pgup    page up                                                                                    y/↵     confirm                                                                                    
+  pgdn    page down                                                                                  n       no                                                                                         
+  g       top                                                                                        ctrl+s  save                                                                                       
+  G       bottom                                                                                     esc     close                                                                                      
   tab     focus                                                                                                                                                                                         
   end     follow                                                                                                                                                                                        
                                                                                                                                                                                                         
