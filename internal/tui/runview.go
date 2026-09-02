@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
 	"github.com/yshah-aromatech/scriptorium/internal/envfile"
@@ -21,6 +22,7 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
+	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
 
 // Run is the working view (design §4.2): pick a script on the left, watch it
@@ -65,11 +67,7 @@ type runModel struct {
 
 func (r *runModel) init(m *Model) {
 	r.list = newScriptList(m)
-	r.prog = progress.New(
-		progress.WithWidth(etaBarWidth),
-		progress.WithoutPercentage(),
-		progress.WithColors(m.th.C.Info, m.th.C.Accent),
-	)
+	r.prog = progress.New(progress.WithWidth(etaBarWidth), progress.WithoutPercentage())
 	r.out.reset("output", m.app.Cfg.MaxOutputLines)
 
 	// An empty pane on first open says nothing, and config.json's complaints
@@ -81,6 +79,42 @@ func (r *runModel) init(m *Model) {
 		r.out.append("⚠ " + w)
 	}
 	r.out.append("", "  r run · s sync · tab focus · 1-4 views", "")
+}
+
+// applyTheme re-derives everything this view keeps a COPY of from the theme.
+// It is called from Model.useTheme, never from init, so the ETA bar follows the
+// injected profile rather than whatever the process environment happened to say
+// when the model was built.
+//
+// The nil check is not defensive padding: under a no-colour profile (NO_COLOR,
+// TERM=dumb, an explicit colorMode) every token resolves to nil — correctly,
+// that is what "no colour" means — and bubbles/progress's blend path then asks
+// lipgloss.Blend1D for a gradient it cannot build from nil stops, gets an empty
+// slice back, and indexes it. Handing it no colours instead selects its solid
+// fill, which has no gradient to index.
+func (r *runModel) applyTheme(th theme.Theme) {
+	r.prog.SetWidth(etaBarWidth)
+
+	if th.C.Info == nil || th.C.Accent == nil {
+		// WithColors() alone would fall back to the component's OWN default
+		// palette — a 24-bit gradient, on a terminal that just said it wants
+		// none. Clearing the fields as well leaves the bar unstyled, which is
+		// what a no-colour profile is asking for.
+		progress.WithColors()(&r.prog)
+		r.prog.FullColor, r.prog.EmptyColor = nil, nil
+		return
+	}
+
+	r.prog.EmptyColor = th.C.Muted
+	if th.Profile >= colorprofile.TrueColor {
+		progress.WithColors(th.C.Info, th.C.Accent)(&r.prog)
+		return
+	}
+	// Below truecolor, a gradient is the wrong shape: the component blends its
+	// two stops and renders every INTERPOLATED step directly, so the colours in
+	// between never pass through the profile and the bar emits 24-bit SGR on a
+	// terminal that cannot name it. One already-downsampled colour, solid.
+	progress.WithColors(th.C.Accent)(&r.prog)
 }
 
 // initCmd is the root's startup hook for this view. Nothing to schedule yet —

@@ -145,9 +145,11 @@ func New(a *app.App, now func() time.Time) *Model {
 		schedules: map[string]string{},
 		missed:    map[string]missed.Miss{},
 	}
-	m.useTheme(theme.New(theme.Default, theme.Profile(a.Cfg.ColorMode, os.Environ())))
+	// Sub-models first, then the theme: useTheme re-derives everything they
+	// keep a copy of, so it has to have something to re-derive it into.
 	m.fleet.init(m)
 	m.run.init(m)
+	m.useTheme(theme.New(theme.Default, theme.Profile(a.Cfg.ColorMode, os.Environ())))
 	return m
 }
 
@@ -161,6 +163,7 @@ func (m *Model) useTheme(th theme.Theme) {
 	m.help.Styles.ShortSeparator = th.S.Border
 	m.help.Styles.Ellipsis = th.S.Muted
 	m.help.ShortSeparator = " · "
+	m.run.applyTheme(th)
 }
 
 // Init starts the three tickers and the first data load. Every command here

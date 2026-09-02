@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/procstat"
@@ -238,6 +239,82 @@ func TestRunStatusLine(t *testing.T) {
 	m.Update(StatusMsg{Text: "something else", Kind: StatusInfo})
 	if strings.Contains(textkit.StripANSI(m.statusBar()), "something else") {
 		t.Error("a transient message displaced the live run line")
+	}
+}
+
+// A frame must render under every colour profile, with a live run in flight.
+//
+// This is the CI-only panic that got through: bubbles/progress builds its fill
+// by asking lipgloss.Blend1D for a gradient, and under a no-colour profile the
+// theme's tokens are correctly nil — Blend1D returns an empty slice, which the
+// component then indexes. Reached in production by `NO_COLOR=1 scriptorium`,
+// and by any TERM-less environment, not just by CI.
+func TestFramesRenderUnderEveryColorProfile(t *testing.T) {
+	profiles := []colorprofile.Profile{
+		colorprofile.TrueColor, colorprofile.ANSI256,
+		colorprofile.ANSI, colorprofile.Ascii, colorprofile.NoTTY,
+	}
+	for _, p := range profiles {
+		t.Run(p.String(), func(t *testing.T) {
+			m := runAt(t, 120, 40)
+			m.useTheme(theme.New(theme.Default, p))
+			m.run.handle = fakeHandle("backup-db")
+			m.run.startedAt = frozen.Add(-20 * time.Second)
+			m.run.etaSec = 42.5 // non-zero: this is what puts the ETA bar on screen
+
+			line, busy := m.run.statusLine(m, 120)
+			if !busy || !strings.Contains(textkit.StripANSI(line), "backup-db") {
+				t.Fatalf("status line = %q busy=%v", line, busy)
+			}
+			for _, sz := range goldenSizes {
+				m.Update(tea.WindowSizeMsg{Width: sz[0], Height: sz[1]})
+				checkFrameShape(t, p.String(), m.frame(), sz[0], sz[1])
+			}
+		})
+	}
+}
+
+// The same hazard by the route it actually arrives on: the process environment.
+// theme.Profile resolves these, and a component that captured its colours at
+// construction time — before the theme was injected — would still be carrying
+// the ambient ones.
+func TestFramesRenderUnderAHostileEnvironment(t *testing.T) {
+	envs := [][]string{
+		{},                                    // no TERM at all (CI)
+		{"TERM=dumb"},                         //
+		{"TERM=xterm-256color", "NO_COLOR=1"}, // the user said no
+		{"TERM=xterm-256color", "COLORTERM=truecolor"},
+	}
+	for _, env := range envs {
+		m := runAt(t, 120, 40)
+		m.useTheme(theme.New(theme.Default, theme.Profile("auto", env)))
+		m.run.handle = fakeHandle("backup-db")
+		m.run.startedAt = frozen.Add(-20 * time.Second)
+		m.run.etaSec = 42.5
+		checkFrameShape(t, fmt.Sprint(env), m.frame(), 120, 40)
+	}
+}
+
+// The ETA bar follows the INJECTED theme, not the one New picked up from the
+// environment — the ordering bug that let the ambient profile leak in.
+func TestProgressBarFollowsTheInjectedTheme(t *testing.T) {
+	m := runAt(t, 120, 40)
+	m.run.handle = fakeHandle("backup-db")
+	m.run.startedAt = frozen.Add(-20 * time.Second)
+	m.run.etaSec = 42.5
+
+	m.useTheme(theme.New(theme.Default, colorprofile.TrueColor))
+	colored, _ := m.run.statusLine(m, 120)
+	if !strings.Contains(colored, "\x1b[") {
+		t.Error("truecolor theme rendered an unstyled status line")
+	}
+	m.useTheme(theme.New(theme.Default, colorprofile.Ascii))
+	plain, _ := m.run.statusLine(m, 120)
+	if strings.Contains(plain, "\x1b[") {
+		t.Errorf("an ascii theme still emitted colour: %q", plain)
+	}
+	if m.run.prog.Width() != etaBarWidth {
+		t.Errorf("bar width = %d, want the layout's %d", m.run.prog.Width(), etaBarWidth)
 	}
 }
 

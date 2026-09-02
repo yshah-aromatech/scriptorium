@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/yshah-aromatech/scriptorium/internal/app"
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
+	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
 
@@ -96,10 +96,17 @@ func TestHeadlessFullRun(t *testing.T) {
 	tm.Send(keyMsg("2")) // Run view
 	tm.Send(keyMsg("r")) // run the selected script
 
-	// one wait, on the last thing the run produces: chaining several WaitFors
+	// One wait, on the last thing the run produces: chaining several WaitFors
 	// over the same output stream races with its own reader.
+	//
+	// Matched against the ESCAPE-STRIPPED stream. The renderer repaints only
+	// the cells that changed and puts a cursor move between runs of them, so
+	// whether a given string lands contiguously in the raw bytes depends on
+	// what the previous frame looked like — and that depends on the colour
+	// profile, i.e. on the environment. Stripping first is what makes this
+	// assertion about the UI rather than about the terminal it was drawn for.
 	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
-		return bytes.Contains(b, []byte("greeter: success"))
+		return strings.Contains(textkit.StripANSI(string(b)), "greeter: success")
 	}, teatest.WithDuration(60*time.Second), teatest.WithCheckInterval(20*time.Millisecond))
 
 	tm.Send(tea.KeyPressMsg{Code: 'q', Text: "q"})
