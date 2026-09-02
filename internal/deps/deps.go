@@ -30,15 +30,17 @@ type Dep struct {
 
 // Param is one PowerShell script parameter, shaped from Get-StoScriptParameters
 // (src/Scripts.psm1). Default is nil when the parameter has no default value
-// expression (distinct from a default that is itself the empty string).
+// expression (distinct from a default that is itself the empty string). JSON
+// tags are the MCP-facing spelling (get_script_details serializes these
+// directly — mirrors envfile.DocEntry's same rationale).
 type Param struct {
-	Name        string
-	Type        string
-	Mandatory   bool
-	Default     *string
-	ValidateSet []string
-	IsSwitch    bool
-	Description string
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Mandatory   bool     `json:"mandatory"`
+	Default     *string  `json:"default"`
+	ValidateSet []string `json:"validateSet"`
+	IsSwitch    bool     `json:"isSwitch"`
+	Description string   `json:"description"`
 }
 
 // PSScanResult is what ScanPS returns: the script's declared PowerShell
