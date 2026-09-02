@@ -263,6 +263,56 @@ func TestWriteFailureIsReported(t *testing.T) {
 	}
 }
 
+// TestSetSingleReadGuardsAgainstWipeOnFlakyFirstRead is the regression test
+// for the double-read wipe hazard (ruling 4 / M-2): Set/Remove used to call
+// c.schedules() (a full read, ok silently discarded) and THEN c.save() (a
+// SECOND, independent read). If the first read failed — treated as an empty
+// map, since schedules() ignores Read's ok — and a LATER read succeeded
+// with sibling schedules present on disk, save's own read would see those
+// siblings, merge them with the (wrongly empty-derived) map, and write back
+// a block containing ONLY the schedule just being set — destroying every
+// sibling that was never folded in. Reproduced here directly: the fake
+// crontab runner fails the FIRST `-l` and would succeed on a second one,
+// with a "sibling" schedule present in that later read. Against the fixed
+// single-read shape, Set must error out immediately (before ever calling
+// `crontab -`) — proven by failing the test from inside the runner if a
+// write is ever attempted.
+func TestSetSingleReadGuardsAgainstWipeOnFlakyFirstRead(t *testing.T) {
+	reads := 0
+	siblingBlock := cron.BlockStart + "\n" +
+		"0 2 * * * cd '/app' && '/bin/scriptorium' --run 'sibling' --cron >> '/logs/cron-sibling.log' 2>&1\n" +
+		cron.BlockEnd + "\n"
+	run := func(stdin string, args ...string) (string, bool) {
+		if len(args) == 1 && args[0] == "-l" {
+			reads++
+			if reads == 1 {
+				return "crontab: temporary failure", false // the flaky first read
+			}
+			return siblingBlock, true // a LATER read would succeed, sibling intact
+		}
+		t.Fatalf("WIPE GUARD BREACHED: crontab write attempted after a failed read (args=%v, stdin=%q)", args, stdin)
+		return "", false
+	}
+	ct := &cron.Crontab{AppDir: "/app", LogsDir: "/logs", BinPath: "/bin/scriptorium", Run: run}
+
+	if err := ct.Set("newjob", "* * * * *"); err == nil {
+		t.Fatal("Set() = nil error, want an error (the crontab read failed)")
+	}
+	if reads != 1 {
+		t.Errorf("Set() read the crontab %d times, want exactly 1", reads)
+	}
+
+	// The real crontab (as a later, successful read would show) still has
+	// its sibling schedule — nothing was ever written.
+	got := ct.Schedules()
+	if got["sibling"] != "0 2 * * *" {
+		t.Errorf("Schedules() = %v, want the untouched sibling schedule still present", got)
+	}
+	if _, ok := got["newjob"]; ok {
+		t.Error("newjob must not have been written")
+	}
+}
+
 // ---------------------------------------------------------------------
 // 4. Empty crontab (exit 1, no output) is a WRITEABLE empty, not a failure.
 // ---------------------------------------------------------------------

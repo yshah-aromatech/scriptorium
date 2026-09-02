@@ -150,6 +150,14 @@ func (c *Crontab) Schedules() map[string]string {
 
 func (c *Crontab) schedules() map[string]string {
 	lines, _ := c.Read()
+	return schedulesFromLines(lines)
+}
+
+// schedulesFromLines is Schedules'/schedules' parser, extracted so Set/Remove
+// can derive the current map from a snapshot they already hold — reading the
+// crontab a second time to do it is exactly the single-read fix below
+// guards against.
+func schedulesFromLines(lines []string) map[string]string {
 	m := map[string]string{}
 	inBlock := false
 	for _, line := range lines {
@@ -190,7 +198,15 @@ func (c *Crontab) save(schedules map[string]string) error {
 	if !ok {
 		return errors.New("crontab read failed — refusing to write (unmanaged entries would be destroyed)")
 	}
+	return c.saveFromLines(lines, schedules)
+}
 
+// saveFromLines writes schedules against an ALREADY-READ lines snapshot —
+// no read happens here. Set/Remove call this directly with the one snapshot
+// they read at the top, so the whole read-mutate-write sequence touches the
+// crontab exactly once (the single-read fix: see Set/Remove below for the
+// wipe scenario a second, independent read used to expose).
+func (c *Crontab) saveFromLines(lines []string, schedules map[string]string) error {
 	var kept []string
 	inBlock := false
 	for _, line := range lines {
@@ -240,23 +256,41 @@ func (c *Crontab) save(schedules map[string]string) error {
 
 // Set adds or replaces one schedule. An unsafe name is refused before
 // anything is read or written.
+//
+// The crontab is read EXACTLY ONCE — into lines, below — and that same
+// snapshot is both parsed for the current schedules and passed to
+// saveFromLines. Reading twice (once to build the map, again inside a
+// naive save) is the wipe hazard this guards against: if the FIRST read
+// failed and was silently treated as empty while a SECOND, later read
+// succeeded with sibling schedules present, the save would write back a
+// block containing only this one schedule — destroying every sibling that
+// existed on disk but was never folded into the map. A single failed read
+// must abort the whole call with nothing written, full stop.
 func (c *Crontab) Set(name, expr string) error {
 	if !safeNameRe.MatchString(name) {
 		return fmt.Errorf("refusing to schedule %q: name must match %s", name, safeNameRe)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := c.schedules()
+	lines, ok := c.Read()
+	if !ok {
+		return errors.New("crontab read failed — refusing to write (unmanaged entries would be destroyed)")
+	}
+	s := schedulesFromLines(lines)
 	s[name] = expr
-	return c.save(s)
+	return c.saveFromLines(lines, s)
 }
 
 // Remove drops one schedule. An absent name still rewrites the block, which
-// is what Remove-StoSchedule does.
+// is what Remove-StoSchedule does. Single-read, same rationale as Set.
 func (c *Crontab) Remove(name string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := c.schedules()
+	lines, ok := c.Read()
+	if !ok {
+		return errors.New("crontab read failed — refusing to write (unmanaged entries would be destroyed)")
+	}
+	s := schedulesFromLines(lines)
 	delete(s, name)
-	return c.save(s)
+	return c.saveFromLines(lines, s)
 }

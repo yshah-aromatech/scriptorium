@@ -9,9 +9,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/format"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
+	"github.com/yshah-aromatech/scriptorium/internal/mcp"
 	"github.com/yshah-aromatech/scriptorium/internal/missed"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
@@ -45,12 +48,15 @@ func ResolveAppDir() string {
 	return cwd
 }
 
-// mcpStubMessage and tuiStubMessage are honest stand-ins for surfaces later
-// phases ship (P9 for the MCP server, the TUI phase for the interactive
-// front end) — content-equal with the PS app's own messaging pattern, not
-// byte-gated.
-const mcpStubMessage = "the MCP server is not yet available in the Go rebuild — use the PowerShell app (arrives in a later phase)"
+// tuiStubMessage is an honest stand-in for the surface a later phase ships
+// (the TUI front end) — content-equal with the PS app's own messaging
+// pattern, not byte-gated.
 const tuiStubMessage = "the TUI is not yet available in the Go rebuild — use the PowerShell app (arrives in a later phase)"
+
+// mcpNoTokenMessage is byte-copied from scriptorium.ps1:102 (the $mcpOnly
+// branch's Write-Error text) — the exact string --mcp prints to stderr when
+// MCP_AUTH_TOKEN is unset, before ever touching a socket.
+const mcpNoTokenMessage = "MCP_AUTH_TOKEN is not set — add it to .env next to this script (see .env.example). Refusing to start an unauthenticated server."
 
 // helpLines mirrors scriptorium.ps1's own header block (its lines 2-16,
 // '#'-stripped) — content-equal with the PS --help output, not byte-gated.
@@ -175,9 +181,10 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return runAddRepo(a, f, stdout)
 	case f.listRepos:
 		return runListRepos(a, stdout)
-	case f.mcpInstall, f.mcpOnly:
-		fmt.Fprintln(stderr, mcpStubMessage)
-		return 1
+	case f.mcpInstall:
+		return runInstallMcpService(a, stdout, stderr)
+	case f.mcpOnly:
+		return runMcp(a, f, stdout, stderr)
 	case f.listOnly:
 		return runList(a, stdout)
 	case f.syncOnly:
@@ -248,6 +255,81 @@ func runSync(a *app.App, stdout io.Writer) int {
 		return 0
 	}
 	return 1
+}
+
+// mcpBindAddr resolves config.mcpBind + the resolved port into a
+// net.Listen address: 'localhost' binds loopback-only; anything else
+// (PS's 'all', and any other value) binds every interface — mirroring
+// Start-StoMcpServer's prefix choice (http://localhost:PORT/ vs
+// http://+:PORT/) without HttpListener's own namespace-reservation quirks.
+func mcpBindAddr(cfgBind string, port int) string {
+	host := ""
+	if cfgBind == "localhost" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// resolveMcpPort is --port's precedence rule: the CLI override wins only
+// when explicitly positive; a zero (or negative) override means "not
+// given" (parseFlags' zero value for an absent --port), and config.mcpPort
+// applies.
+func resolveMcpPort(cfgPort, override int) int {
+	if override > 0 {
+		return override
+	}
+	return cfgPort
+}
+
+// runMcp is --mcp [--port n]: serve the MCP + REST API in the foreground
+// until the listener stops. scriptorium.ps1:102 checks MCP_AUTH_TOKEN and
+// errors before ever calling into the server — ported verbatim, byte-exact
+// message, before any socket is touched.
+func runMcp(a *app.App, f flags, stdout, stderr io.Writer) int {
+	token := os.Getenv("MCP_AUTH_TOKEN")
+	if token == "" {
+		fmt.Fprintln(stderr, mcpNoTokenMessage)
+		return 1
+	}
+	srv, err := mcp.New(&mcp.Ops{App: a}, token)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	port := resolveMcpPort(a.Cfg.McpPort, f.mcpPortOverride)
+	l, err := net.Listen("tcp", mcpBindAddr(a.Cfg.McpBind, port))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "MCP server listening on %s (endpoint POST /mcp, health GET /healthz, API under /api/v1)\n", l.Addr())
+	if err := srv.Serve(l); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// runInstallMcpService is --install-mcp-service: Linux-only (the guard
+// lives here, not in mcp.Installer, so the installer's root/non-root logic
+// stays testable on any host) — writes and activates the systemd unit
+// whose ExecStart is this very binary (ruling 3, the P7-deferred swap).
+func runInstallMcpService(a *app.App, stdout, stderr io.Writer) int {
+	if runtime.GOOS != "linux" {
+		fmt.Fprintln(stderr, "--install-mcp-service needs systemd (Linux only)")
+		return 1
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	in := &mcp.Installer{Out: func(s string) { fmt.Fprintln(stdout, s) }}
+	if err := in.Install(a.Paths.AppDir, exe, os.Getenv("MCP_AUTH_TOKEN")); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }
 
 // runHistory is --history [name]. Rendering matches Get-StoDuration.
