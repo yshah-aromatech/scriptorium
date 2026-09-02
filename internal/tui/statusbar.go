@@ -3,8 +3,6 @@ package tui
 import (
 	"strings"
 
-	"charm.land/lipgloss/v2"
-
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
 	"github.com/yshah-aromatech/scriptorium/internal/format"
 	"github.com/yshah-aromatech/scriptorium/internal/missed"
@@ -78,13 +76,4 @@ func (m *Model) scheduleHint(name string) string {
 		label += " · next in " + format.RelativeTime(next.Sub(missed.NaiveNow(m.now())).Seconds())
 	}
 	return th.S.Info.Render(label)
-}
-
-// pad right-fills a styled row to w cells so a background-carrying style
-// reaches the panel edge.
-func pad(s string, w int) string {
-	if gap := w - lipgloss.Width(s); gap > 0 {
-		return s + strings.Repeat(" ", gap)
-	}
-	return s
 }
