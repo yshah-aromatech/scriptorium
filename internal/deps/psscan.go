@@ -1,7 +1,9 @@
 package deps
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,21 +89,51 @@ func (s *Scanner) store(entry string, size, mtime int64, result PSScanResult) {
 	s.cache[entry] = psCacheEntry{size: size, mtime: mtime, result: result}
 }
 
-// materializedScript writes the embedded scanner.ps1 to a temp file once per
-// Scanner instance and returns its path.
+// Invalidate drops any cached ScanPS result for entry. The (size, mtime)
+// cache key only observes the entry file itself, not moduleDir's contents or
+// the system's installed modules — both of which an install command changes
+// without touching entry at all. A caller that just ran an install for this
+// entry MUST call Invalidate before relying on the next ScanPS to reflect
+// it, or a long-lived Scanner (P9's MCP server, P10's TUI) would keep
+// serving the pre-install Missing list indefinitely. A fresh --run process
+// has nothing to invalidate (its Scanner is new), so this is a no-op there.
+func (s *Scanner) Invalidate(entry string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.cache, entry)
+}
+
+// materializedScript writes the embedded scanner.ps1 to a content-addressed
+// path under os.TempDir() — the same path for every Scanner in every process
+// running this binary — and skips the write if it's already there. A plain
+// os.CreateTemp-per-Scanner (the original approach) never got cleaned up:
+// one file leaked per --run, indefinitely on a system that doesn't sweep
+// /tmp. Content-addressing means at most one file per binary version per
+// machine, ever, with no cleanup required — the identical-name-implies-
+// identical-content invariant is what makes skipping a rewrite safe, and
+// what would let a future scanner.ps1 edit land under a new name instead of
+// silently reusing stale content on disk.
 func (s *Scanner) materializedScript() (string, error) {
 	s.scriptOnce.Do(func() {
-		f, err := os.CreateTemp("", "scriptorium-deps-scanner-*.ps1")
-		if err != nil {
+		sum := sha256.Sum256(scannerPS1)
+		path := filepath.Join(os.TempDir(), "scriptorium-deps-scanner-"+hex.EncodeToString(sum[:])[:12]+".ps1")
+		if _, err := os.Stat(path); err == nil {
+			s.scriptPath = path
+			return
+		}
+		// write-then-rename: a reader can never observe a partially-written
+		// file at the final content-addressed path.
+		tmp := path + fmt.Sprintf(".tmp-%d", os.Getpid())
+		if err := os.WriteFile(tmp, scannerPS1, 0o644); err != nil {
 			s.scriptErr = err
 			return
 		}
-		defer f.Close()
-		if _, err := f.Write(scannerPS1); err != nil {
+		if err := os.Rename(tmp, path); err != nil {
+			_ = os.Remove(tmp)
 			s.scriptErr = err
 			return
 		}
-		s.scriptPath = f.Name()
+		s.scriptPath = path
 	})
 	return s.scriptPath, s.scriptErr
 }

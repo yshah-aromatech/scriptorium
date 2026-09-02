@@ -270,8 +270,16 @@ function Get-StoScriptParams {
 # ---------------------------------------------------------------------------
 
 $allDeps = @(Get-StoScriptDeps -Script $Script)
-$installed = Get-StoInstalledModules -Script $Script -Names @($allDeps | ForEach-Object Name)
-$missingDeps = @($allDeps | Where-Object { -not (Test-StoDepSatisfied -Dep $_ -Installed $installed) })
+# Deps.psm1:210's Get-StoMissingDeps short-circuit: no deps -> skip
+# Get-StoInstalledModules entirely, avoiding its unfiltered (no -Names)
+# Get-Module -ListAvailable walk of the whole PSModulePath on every
+# dep-free script — the exact cost the -Names restriction exists to avoid.
+if ($allDeps.Count -eq 0) {
+    $missingDeps = @()
+} else {
+    $installed = Get-StoInstalledModules -Script $Script -Names @($allDeps | ForEach-Object Name)
+    $missingDeps = @($allDeps | Where-Object { -not (Test-StoDepSatisfied -Dep $_ -Installed $installed) })
+}
 $paramList = @(Get-StoScriptParams -Entry $Entry)
 
 function ConvertTo-DepRecord {

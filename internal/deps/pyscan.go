@@ -149,7 +149,7 @@ func (s *Scanner) ScanPython(dir, venvDir, pythonBin string) ([]Dep, error) {
 	if !hasVenv {
 		names = append(names, scan.Installed...)
 	}
-	sort.Strings(names)
+	sortNamesCI(names)
 
 	deps := make([]Dep, len(names))
 	for i, name := range names {
@@ -197,6 +197,25 @@ func installedPipNames(venvPython string) []string {
 		names[i] = p.Name
 	}
 	return names
+}
+
+// sortNamesCI is Deps.psm1:454's `Sort-Object` (default: case-insensitive)
+// on the AST scanner's third-party import names — sort.Strings is ordinal
+// and would put every uppercase name first (e.g. "Crypto" before "attr"),
+// diverging from PS in both the printed "installing missing modules: ..."
+// line and the generated `pip install @(...)` package list. Same
+// case-insensitive-with-lowercase-first-tiebreak comparator as
+// internal/scripts' sortNamesCI (PS is culture-aware rather than strictly
+// ordinal-case-insensitive; for plain package names the two coincide, the
+// same accepted gap as registry entry 19).
+func sortNamesCI(names []string) {
+	sort.SliceStable(names, func(i, j int) bool {
+		li, lj := strings.ToLower(names[i]), strings.ToLower(names[j])
+		if li != lj {
+			return li < lj
+		}
+		return names[i] > names[j]
+	})
 }
 
 // interpreterAvailable mirrors `Get-Command $py -ErrorAction SilentlyContinue`

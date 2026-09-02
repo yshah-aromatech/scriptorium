@@ -292,10 +292,13 @@ func runHistory(a *app.App, name string, stdout io.Writer) int {
 
 // installMissingDeps is scriptorium.ps1:157-163's dependency auto-install
 // step: scan the target's declared deps, and when any are missing, run the
-// generated install command through cfg.pwshBin — streaming its combined
-// output to stdout — before letting the caller proceed to the run
-// regardless of the install's outcome (PS parity: scriptorium.ps1 never
-// checks the install command's exit code).
+// generated install command through cfg.pwshBin — streaming its output —
+// before letting the caller proceed to the run regardless of the install's
+// outcome (PS parity: scriptorium.ps1 never checks the install command's
+// exit code). Streaming the child's stdout/stderr to the CLI's own
+// stdout/stderr (not merged) is the brief's own wording, not a PS behavior
+// to match: the real `& $cfg.pwshBin ... -Command $cmd` has no redirection
+// at all, so its streams inherit the console's separately.
 //
 // A PowerShell scan that degrades (no usable pwsh) prints its warning to
 // stderr and skips straight to the run — Missing is always empty on that
@@ -340,8 +343,15 @@ func installMissingDeps(a *app.App, target scripts.Script, stdout, stderr io.Wri
 
 	c := exec.Command(a.Cfg.PwshBin, "-NoProfile", "-NonInteractive", "-Command", cmd)
 	c.Stdout = stdout
-	c.Stderr = stdout // combined output, per the streaming contract
-	_ = c.Run()       // proceed to the run regardless of the install's exit code
+	c.Stderr = stderr
+	_ = c.Run() // proceed to the run regardless of the install's exit code
+
+	// The (size, mtime) scan cache only observes the entry file — it has no
+	// way to notice that moduleDir/venvDir just changed. Drop this entry's
+	// cached result so the next ScanPS/ScanPython (if any, on a long-lived
+	// Scanner) reflects what was just installed rather than serving the
+	// pre-install Missing list.
+	a.Scanner.Invalidate(target.Entry)
 }
 
 // runScript is --run <name>: the headless full pipeline.

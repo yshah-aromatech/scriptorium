@@ -2,6 +2,7 @@ package deps
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -40,7 +41,17 @@ func InstallCommand(target InstallTarget, modules []Dep, pythonBin string) strin
 // (verified by the builder oracle test) — including its one quirk: dir
 // itself is NOT quote-escaped when interpolated into the generated `'...'`
 // literals (only each dep Name is), matching the PS source exactly.
+//
+// Creating moduleDir is a side effect of this call, matching
+// Get-StoInstallCommand (Deps.psm1:224-226), which creates it before
+// building the command string — both generated branches below abort on a
+// nonexistent -Path, so skipping this would make every first-time install
+// fail permanently. Best-effort: an error here (e.g. permissions) is left
+// for Save-PSResource/Save-Module's own -Path validation to report, exactly
+// as PS's unchecked `New-Item ... | Out-Null` would surface it.
 func ModuleInstallCommand(moduleDir string, modules []Dep) string {
+	_ = os.MkdirAll(moduleDir, 0o755)
+
 	specs := make([]string, len(modules))
 	for i, m := range modules {
 		specs[i] = fmt.Sprintf("@{ Name='%s'; Rv='%s'; MinV='%s'; MaxV='%s' }",

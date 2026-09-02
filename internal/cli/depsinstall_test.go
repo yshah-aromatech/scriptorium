@@ -37,33 +37,44 @@ func setupAppWithPwshBin(t *testing.T, pwshBin string) (appDir, dataDir string) 
 // relayed to the real pwsh so those keep working correctly; a `-Command`
 // invocation (the install step) is intercepted instead — its full argv is
 // captured to captureFile (one arg per line) and a recognizable marker line
-// is printed, WITHOUT ever touching PSGallery or the network.
-func writeRelayingPwshStub(t *testing.T, dir, realPwsh, captureFile string) string {
+// is printed, WITHOUT ever touching PSGallery or the network. It also
+// witnesses whether moduleDir exists AT THE MOMENT the install command would
+// have run (C1: PS's Get-StoInstallCommand creates it as a side effect
+// before returning the command string — a generated Save-PSResource/
+// Save-Module call aborts on a nonexistent -Path).
+func writeRelayingPwshStub(t *testing.T, path, realPwsh, captureFile, moduleDir string) {
 	t.Helper()
 	script := "#!/bin/sh\n" +
 		"for a in \"$@\"; do\n" +
 		"  if [ \"$a\" = \"-Command\" ]; then\n" +
 		"    : > '" + captureFile + "'\n" +
 		"    for x in \"$@\"; do printf '%s\\n' \"$x\" >> '" + captureFile + "'; done\n" +
+		"    if [ -d '" + moduleDir + "' ]; then echo 'MODULEDIR_EXISTS_AT_INSTALL_TIME'; else echo 'MODULEDIR_MISSING_AT_INSTALL_TIME'; fi\n" +
 		"    echo 'STUB_INSTALL_RAN'\n" +
 		"    exit 0\n" +
 		"  fi\n" +
 		"done\n" +
 		"exec '" + realPwsh + "' \"$@\"\n"
-	path := filepath.Join(dir, "stub-pwsh.sh")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return path
 }
 
 func TestRunAutoInstallsMissingPowerShellModule(t *testing.T) {
 	realPwsh := pwshtest.RequirePwsh(t)
 	stubDir := t.TempDir()
 	captureFile := filepath.Join(stubDir, "capture.txt")
-	stub := writeRelayingPwshStub(t, stubDir, realPwsh, captureFile)
+	stub := filepath.Join(stubDir, "stub-pwsh.sh")
 
+	// dataDir (and so moduleDir) must be known before the stub script is
+	// written, since the stub itself checks moduleDir's existence — but
+	// setupAppWithPwshBin only needs the stub's PATH to write config.json,
+	// not its content, so this ordering is safe: the file exists by the
+	// time cli.Main actually runs it.
 	_, dataDir := setupAppWithPwshBin(t, stub)
+	moduleDir := filepath.Join(dataDir, "modules", "depscript")
+	writeRelayingPwshStub(t, stub, realPwsh, captureFile, moduleDir)
+
 	// Import-Module (not #Requires) so the actual run — after the stub
 	// "installs" nothing for real — doesn't get hard-blocked by pwsh's own
 	// #Requires enforcement; -ErrorAction SilentlyContinue lets it proceed
@@ -71,6 +82,10 @@ func TestRunAutoInstallsMissingPowerShellModule(t *testing.T) {
 	// dep would.
 	writeScript(t, dataDir, "depscript",
 		"Import-Module ThisModuleDoesNotExistAnywhere12345 -ErrorAction SilentlyContinue\nWrite-Host ran\nexit 0\n")
+
+	if _, err := os.Stat(moduleDir); err == nil {
+		t.Fatalf("moduleDir %q must not pre-exist for this test to prove anything", moduleDir)
+	}
 
 	var out, errw bytes.Buffer
 	code := cli.Main([]string{"--run", "depscript"}, &out, &errw)
@@ -83,6 +98,15 @@ func TestRunAutoInstallsMissingPowerShellModule(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "STUB_INSTALL_RAN") {
 		t.Errorf("stdout should carry the install command's streamed output, got:\n%s", out.String())
+	}
+	// C1: Get-StoInstallCommand creates ModuleDir as a side effect before
+	// the command ever runs (Deps.psm1:224-226) — both generated branches
+	// (Save-PSResource/Save-Module) abort on a nonexistent -Path otherwise.
+	if !strings.Contains(out.String(), "MODULEDIR_EXISTS_AT_INSTALL_TIME") {
+		t.Errorf("moduleDir must exist by the time the install command runs, stdout:\n%s", out.String())
+	}
+	if _, err := os.Stat(moduleDir); err != nil {
+		t.Errorf("moduleDir %q should exist after the install flow ran: %v", moduleDir, err)
 	}
 	if !strings.Contains(out.String(), "-- depscript: success (exit 0)") {
 		t.Errorf("the run must still proceed after install, stdout:\n%s", out.String())
@@ -99,7 +123,6 @@ func TestRunAutoInstallsMissingPowerShellModule(t *testing.T) {
 	if !strings.Contains(capturedStr, "Name='ThisModuleDoesNotExistAnywhere12345'") {
 		t.Errorf("captured install command missing the dep spec:\n%s", capturedStr)
 	}
-	moduleDir := filepath.Join(dataDir, "modules", "depscript")
 	if !strings.Contains(capturedStr, moduleDir) {
 		t.Errorf("captured install command missing the script's ModuleDir %q:\n%s", moduleDir, capturedStr)
 	}

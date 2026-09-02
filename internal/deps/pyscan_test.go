@@ -105,6 +105,38 @@ func TestScanPythonASTNoVenvFindsThirdPartyImports(t *testing.T) {
 	}
 }
 
+// I2: Deps.psm1:454's `Sort-Object` is case-insensitive; sort.Strings is
+// ordinal and puts every uppercase name first. Verified live against the
+// real Get-StoMissingPythonDeps with this exact import set: PS orders
+// "attr, Crypto, numpy, PIL"; an ordinal sort would produce
+// "Crypto, PIL, attr, numpy" instead — a byte divergence in both the
+// "installing missing modules: ..." line and the generated
+// `pip install @(...)` package list.
+func TestScanPythonMissingOrderIsCaseInsensitive(t *testing.T) {
+	python3 := pwshtest.RequirePython(t)
+	dir := copyPycorpus(t, "mixed_case_imports.py")
+
+	scanner := &Scanner{}
+	got, err := scanner.ScanPython(dir, filepath.Join(dir, "novenv"), python3)
+	if err != nil {
+		t.Fatalf("ScanPython: %v", err)
+	}
+	names := make([]string, len(got))
+	for i, d := range got {
+		names[i] = d.Name
+	}
+	want := []string{"attr", "Crypto", "numpy", "PIL"}
+	if len(names) != len(want) {
+		t.Fatalf("got %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Errorf("order = %v, want %v (case-insensitive, PS-verified)", names, want)
+			break
+		}
+	}
+}
+
 // Python < 3.10's sys module lacks stdlib_module_names, so scanner.py's
 // stdlib set is effectively empty and a stdlib-only import leaks through as
 // "third party". This assertion is only meaningful on 3.10+.

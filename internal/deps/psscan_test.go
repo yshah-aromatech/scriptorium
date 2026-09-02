@@ -369,3 +369,123 @@ func TestScanPSFallbackWhenPwshMissing(t *testing.T) {
 		t.Errorf("degraded Deps should apply the name map (pester->Pester), got %+v", got.Deps)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// I1: Get-StoMissingDeps' zero-dep short-circuit (Deps.psm1:210) — a dep-free
+// script must never call Get-StoInstalledModules (which, unfiltered, walks
+// the whole PSModulePath and can cost multiple seconds on a real machine).
+// A JSON-output assertion can't distinguish "skipped entirely" from "ran
+// with an empty -Names filter" — both produce empty Missing — so this pins
+// the guard structurally in scanner.ps1's source, on top of the oracle
+// (mixed_no_deps.ps1) continuing to exercise the now-short-circuited path.
+// ---------------------------------------------------------------------------
+
+func TestScannerPSShortCircuitsOnZeroDeps(t *testing.T) {
+	if !strings.Contains(string(scannerPS1), "$allDeps.Count -eq 0") {
+		t.Fatal("scanner.ps1 must skip Get-StoInstalledModules entirely when Get-StoScriptDeps found nothing (Deps.psm1:210 parity)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// I3: the embedded scanner is materialized to a content-addressed temp path
+// once per machine, not once per Scanner/process — no leak, and two
+// different Scanner instances resolve to the identical file.
+// ---------------------------------------------------------------------------
+
+func TestScanPSMaterializedScriptIsContentAddressedNotLeaked(t *testing.T) {
+	pwsh := pwshtest.RequirePwsh(t)
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "main.ps1")
+	if err := os.WriteFile(entry, []byte("Write-Host hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := filepath.Glob(filepath.Join(os.TempDir(), "scriptorium-deps-scanner-*.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s1 := &Scanner{PwshBin: pwsh}
+	s2 := &Scanner{PwshBin: pwsh}
+	if _, err := s1.ScanPS(entry, dir, filepath.Join(dir, "mods"), false); err != nil {
+		t.Fatalf("scan 1: %v", err)
+	}
+	if _, err := s2.ScanPS(entry, dir, filepath.Join(dir, "mods"), false); err != nil {
+		t.Fatalf("scan 2: %v", err)
+	}
+
+	p1, err := s1.materializedScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := s2.materializedScript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1 != p2 {
+		t.Errorf("two Scanner instances embedding identical bytes resolved to different paths: %q vs %q", p1, p2)
+	}
+
+	after, err := filepath.Glob(filepath.Join(os.TempDir(), "scriptorium-deps-scanner-*.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Content-addressed: running two more scans (even from fresh Scanners)
+	// must not grow the count of distinct materialized-scanner files beyond
+	// what a single one already established.
+	if len(after) > len(before)+1 {
+		t.Errorf("materializedScript leaked files: before=%v after=%v", before, after)
+	}
+	if _, err := os.Stat(p1); err != nil {
+		t.Errorf("materialized script should still exist on disk (content-addressed, not a leak): %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// I4: the (size, mtime) cache only observes the entry file, not moduleDir —
+// so an install that satisfies a dep must invalidate the cached entry, or a
+// long-lived Scanner keeps serving the pre-install Missing list forever.
+// ---------------------------------------------------------------------------
+
+func TestScanPSCacheInvalidateAfterInstallReflectsNewlyInstalledModule(t *testing.T) {
+	pwsh := pwshtest.RequirePwsh(t)
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "main.ps1")
+	src := "#Requires -Modules @{ ModuleName = 'ModA'; RequiredVersion = '1.5.0' }\nWrite-Host hi\n"
+	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	moduleDir := filepath.Join(dir, "mods")
+
+	scanner := &Scanner{PwshBin: pwsh}
+	first, err := scanner.ScanPS(entry, dir, moduleDir, false)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if len(first.Missing) != 1 {
+		t.Fatalf("first scan Missing = %+v, want [ModA] before install", first.Missing)
+	}
+
+	// Simulate the install succeeding (the actual side effect an install
+	// command has: a new <ModuleDir>/<Name>/<Version>/ directory).
+	mustMkdir(t, filepath.Join(moduleDir, "ModA", "1.5.0"))
+
+	// Without invalidation, the (size, mtime) cache — keyed only on entry,
+	// which never changed — must still serve the stale pre-install Missing.
+	stale, err := scanner.ScanPS(entry, dir, moduleDir, false)
+	if err != nil {
+		t.Fatalf("stale rescan: %v", err)
+	}
+	if len(stale.Missing) != 1 {
+		t.Fatalf("stale rescan Missing = %+v, want the cache to still report [ModA] (proves the cache is real)", stale.Missing)
+	}
+
+	scanner.Invalidate(entry)
+	fresh, err := scanner.ScanPS(entry, dir, moduleDir, false)
+	if err != nil {
+		t.Fatalf("fresh rescan: %v", err)
+	}
+	if len(fresh.Missing) != 0 {
+		t.Errorf("fresh rescan Missing = %+v, want empty (ModA is now installed, cache was invalidated)", fresh.Missing)
+	}
+}
