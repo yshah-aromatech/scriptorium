@@ -115,6 +115,7 @@ type Config struct {
 	WebhookTimeoutSec  int
 	MissedGraceMinutes float64
 	ColorMode          string
+	Theme              string
 	McpPort            int
 	McpBind            string
 }
@@ -150,7 +151,13 @@ var knownNonNumericKeys = map[string]bool{
 	"openRouterModel": true,
 	"syncOnLaunch":    true,
 	"colorMode":       true,
-	"mcpBind":         true,
+	// theme is a GO-ONLY key (parity divergence 24): it selects one of the
+	// palettes registered in internal/tui/theme. The PS app has no such key
+	// and would warn "unknown key 'theme'" on a config that sets it — which is
+	// why it is documented in the divergence registry rather than quietly
+	// added.
+	"theme":   true,
+	"mcpBind": true,
 }
 
 // numericKeyByLower and nonNumericKeyByLower map a lower-cased key name to
@@ -481,6 +488,11 @@ func assignNonNumeric(cfg *Config, key string, raw json.RawMessage) {
 		var s string
 		if json.Unmarshal(raw, &s) == nil {
 			cfg.ColorMode = s
+		}
+	case "theme":
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			cfg.Theme = s
 		}
 	case "mcpBind":
 		var s string

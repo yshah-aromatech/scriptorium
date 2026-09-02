@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/yshah-aromatech/scriptorium/internal/format"
+	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
@@ -204,6 +205,52 @@ func activityRows(th theme.Theme, live []lockfile.Live, now time.Time, spin stri
 		rows = append(rows, " "+th.S.Muted.Render("idle"))
 	}
 	return rows
+}
+
+// recentRows is the recent-runs card (design D-1): the last few runs across the
+// WHOLE fleet, newest first — what just happened, how it went, how hard it
+// worked. It reads the history rows the Fleet view already loaded, so the card
+// costs a slice rather than a second read of history.jsonl.
+//
+// killed and timeout both read as "stopped": at this size the distinction is
+// noise, and the History view has it in full.
+func recentRows(th theme.Theme, rows []history.Row, now time.Time, w, h int) []string {
+	if h <= 1 {
+		return nil
+	}
+	out := []string{sectionRule(th, "recent", w, false)}
+	if len(rows) == 0 {
+		return append(out, " "+th.S.Muted.Render("no runs yet"))
+	}
+
+	nameW := max(min(w-26, 22), 8)
+	for i := len(rows) - 1; i >= 0 && len(out) < h; i-- {
+		row := rows[i]
+		word, st := row.Status, th.S.Warning
+		switch row.Status {
+		case "success":
+			st = th.S.Success
+		case "failure":
+			st = th.S.Danger
+		case "killed", "timeout":
+			word = "stopped"
+		}
+		age := ""
+		if !row.StartedAt.IsZero() {
+			age = format.RelativeTime(now.Sub(row.StartedAt.Time().Local()).Seconds())
+		}
+		var series []float64
+		if row.Resources != nil {
+			series = row.Resources.CPUSeries
+		}
+		out = append(out, " "+st.Render(statusGlyph(row.Status))+" "+
+			th.S.Base.Render(textkit.Fit(row.Script, nameW))+" "+
+			runtimeTag(th, row.Runtime, nil)+" "+
+			th.S.Muted.Render(textkit.Fit(word, 7))+" "+
+			sparkline(th, series, sparkCells, nil)+" "+
+			th.S.Desc.Render(right(age, 4)))
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

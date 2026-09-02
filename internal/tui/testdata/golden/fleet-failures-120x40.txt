@@ -8,12 +8,12 @@
                                                                                    │─ live now ─────────────────────────
                                                                                    │ ⠋ sync-orders↗    1m ·4242
                                                                                    │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
+                                                                                   │─ recent ───────────────────────────
+                                                                                   │ ✓ heartbeat  py success ▄█▆▅▃▂  41s
+                                                                                   │ ✓ backup-db  ps success ▃▆█▆▅▃   3m
+                                                                                   │ ✗ sync-orde… py failure ▃▆█▅▂▁  12m
+                                                                                   │ ✓ nightly-r… ps success ▂▄▇█▆▃ 5h2m
+                                                                                   │ ✓ backup-db  ps success ······   2d
                                                                                    │
                                                                                    │
                                                                                    │

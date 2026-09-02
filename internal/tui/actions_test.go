@@ -369,6 +369,30 @@ func TestViewLogTailsTheNewestLog(t *testing.T) {
 	}
 }
 
+// The tail keeps the LAST n lines, in order, however many the file has — a run
+// log is unbounded and the pane only ever shows n of them.
+func TestTailLogKeepsTheLastLinesInOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.log")
+	var b strings.Builder
+	for i := range 400 {
+		fmt.Fprintf(&b, "line %d\n", i)
+	}
+	write(t, path, b.String())
+
+	msg, ok := cmdMsg(tailLog(path, 5)).(LogLoadedMsg)
+	if !ok || msg.Err != nil {
+		t.Fatalf("tailLog gave %#v", msg)
+	}
+	if got := strings.Join(msg.Lines, ","); got != "line 395,line 396,line 397,line 398,line 399" {
+		t.Errorf("tail = %q", got)
+	}
+	// a file shorter than the tail comes back whole
+	short, _ := cmdMsg(tailLog(path, 1000)).(LogLoadedMsg)
+	if len(short.Lines) != 400 || short.Lines[0] != "line 0" {
+		t.Errorf("short tail = %d lines starting %q", len(short.Lines), short.Lines[0])
+	}
+}
+
 // h deep-links into History scoped to the selected script (the scope wave B's
 // view reads).
 func TestHistoryDeepLinkCarriesTheScope(t *testing.T) {

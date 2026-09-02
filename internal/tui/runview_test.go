@@ -423,11 +423,15 @@ func TestGoldensRun(t *testing.T) {
 		m.mode = modeRun
 		m.focus = focusOutput
 		m.Update(tea.WindowSizeMsg{Width: w, Height: h})
-		m.run.selectByName(m, "backup-db")
-		m.run.handle = fakeHandle("backup-db")
-		m.run.out.begin("run: backup-db")
-		m.run.out.append("", banner("▶ backup-db · started 14:29:57", m.run.out.contentWidth()),
-			"connecting to postgres://db.internal:5432",
+		// the start banner comes from the REAL onRunStarted, at the width the
+		// running app would write it — a hand-typed banner in a golden pins
+		// what the test author believed, not what the app emits
+		m.run.onRunStarted(m, RunStartedMsg{
+			Script:    m.scripts[0],
+			Handle:    fakeHandle("backup-db"),
+			StartedAt: frozen.Add(-3 * time.Second),
+		})
+		m.run.out.append("connecting to postgres://db.internal:5432",
 			"dumping schema public (18 tables)",
 			"WARNING: table audit_log is 4.2GB, this will take a while",
 			"uploading backup-2026-09-02.dump to s3://ops-backups",
@@ -440,15 +444,15 @@ func TestGoldensRun(t *testing.T) {
 		m := newFixtureModel(t, env)
 		m.mode = modeRun
 		m.Update(tea.WindowSizeMsg{Width: w, Height: h})
-		m.run.selectByName(m, "backup-db")
-		m.run.handle = fakeHandle("backup-db")
-		m.run.startedAt = frozen.Add(-18 * time.Second)
-		m.run.etaSec = 42.5
+		m.run.onRunStarted(m, RunStartedMsg{
+			Script:    m.scripts[0],
+			Handle:    fakeHandle("backup-db"),
+			StartedAt: frozen.Add(-18 * time.Second),
+			EtaSec:    42.5,
+		})
 		m.run.lastSample = procstat.Sample{CPU: 61.5, MemMB: 58.2}
 		m.run.queue = []queued{{Name: "heartbeat"}}
-		m.run.out.begin("run: backup-db")
-		m.run.out.append("", banner("▶ backup-db · started 14:29:42", m.run.out.contentWidth()),
-			"connecting to postgres://db.internal:5432",
+		m.run.out.append("connecting to postgres://db.internal:5432",
 			"dumping schema public (18 tables)")
 		return m
 	})

@@ -86,6 +86,10 @@ type LockPollMsg time.Time
 // MissedTickMsg is the 60 s beat: run app.MissedSweep.
 type MissedTickMsg time.Time
 
+// StatusFadeMsg is the status line's dissolve frame (10 Hz, and only for the
+// last seconds of a message's life).
+type StatusFadeMsg time.Time
+
 // ---------------------------------------------------------------------------
 // Data loads
 // ---------------------------------------------------------------------------

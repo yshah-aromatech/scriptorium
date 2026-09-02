@@ -212,6 +212,28 @@ func New(name string, prof colorprofile.Profile) Theme {
 	}
 }
 
+// Fade returns c blended amount (0..1) of the way into the background — the
+// status line's dissolve. amount 0 is the colour itself; 1 is invisible.
+//
+// The nil guard is the no-colour profile's whole shape: under NO_COLOR or
+// TERM=dumb every token resolves to nil, and lipgloss.Blend1D cannot build a
+// ramp from nil stops (it returns an empty slice, and the caller indexes it —
+// the phase-10 crash class). A profile with no colours has nothing to fade, so
+// it gets the unstyled text it asked for.
+func (t Theme) Fade(c color.Color, amount float64) lipgloss.Style {
+	if c == nil || t.C.Bg == nil {
+		return lipgloss.NewStyle()
+	}
+	amount = min(max(amount, 0), 1)
+	const steps = 17
+	ramp := lipgloss.Blend1D(steps, c, t.C.Bg)
+	if len(ramp) == 0 {
+		return lipgloss.NewStyle().Foreground(c)
+	}
+	i := min(int(amount*float64(len(ramp)-1)+0.5), len(ramp)-1)
+	return lipgloss.NewStyle().Foreground(t.Profile.Convert(ramp[i]))
+}
+
 func conv(prof colorprofile.Profile, hex string) color.Color {
 	return prof.Convert(lipgloss.Color(hex))
 }

@@ -208,17 +208,27 @@ func tailLog(path string, n int) tea.Cmd {
 		}
 		defer f.Close()
 
-		// a ring of the last n lines: a log can be far larger than the pane
-		// will ever show, and reading it whole to throw most of it away is
-		// what makes opening one feel slow
-		ring := make([]string, 0, min(max(n, 1), 4096))
+		// A circular buffer of the last n lines. A run log is unbounded — a
+		// chatty script can leave megabytes — and the pane will only ever show
+		// n of them, so this keeps the cost one assignment per line rather
+		// than shifting a slice down by one for every line past the cap.
+		n = max(n, 1)
+		ring := make([]string, 0, n)
+		at := 0
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for sc.Scan() {
-			if len(ring) == cap(ring) {
-				ring = append(ring[:0], ring[1:]...)
+			if len(ring) < n {
+				ring = append(ring, sc.Text())
+				continue
 			}
-			ring = append(ring, sc.Text())
+			ring[at] = sc.Text()
+			at = (at + 1) % n
+		}
+		if len(ring) == n && at > 0 {
+			// unwrap: the oldest kept line is at `at`
+			out := make([]string, 0, n)
+			ring = append(append(out, ring[at:]...), ring[:at]...)
 		}
 		return LogLoadedMsg{Path: path, Lines: ring, Err: sc.Err()}
 	}

@@ -41,6 +41,10 @@ const (
 	sparkCells  = 6
 	scheduleCol = 13
 
+	// recentCardRows is the recent-runs card at full size: its rule and the
+	// PS card's five rows (Get-TuiRecentHeight).
+	recentCardRows = 6
+
 	// nameColMax caps the script-name column; it otherwise sizes itself to the
 	// longest name on screen. A name column that grows with the terminal just
 	// pushes the numbers to the far edge, and every cell it gives back goes to
@@ -218,17 +222,27 @@ func rowAt(rows []string, i int) string {
 	return ""
 }
 
-// cards is the agenda and the activity card stacked, splitting the height
-// between them: the agenda gets what it needs up to half, activity the rest.
+// cards is the rail: what is about to fire, what is running now, and what just
+// happened. Each takes what it needs and the last one takes what is left — the
+// recent-runs card appears only when the rail is tall enough to hold a useful
+// slice of it, rather than being squeezed to a single row.
 func (f *fleetModel) cards(m *Model, w, h int) []string {
 	items := f.agenda(m)
-	agendaH := min(len(items)+1, max(h/2, 2))
+	agendaH := min(len(items)+1, max(h/3, 2))
 	out := agendaRows(m.th, items, w, agendaH)
 	for len(out) < agendaH {
 		out = append(out, "")
 	}
+
 	out = append(out, "")
-	return append(out, activityRows(m.th, m.live, m.now(), m.spinnerFrame(), m.run.queueDepth(), w, h-len(out))...)
+	actH := min(max(h-len(out)-1, 1), len(m.live)+2)
+	out = append(out, activityRows(m.th, m.live, m.now(), m.spinnerFrame(), m.run.queueDepth(), w, actH)...)
+
+	if rest := min(h-len(out)-1, recentCardRows); rest >= 3 {
+		out = append(out, "")
+		out = append(out, recentRows(m.th, m.recent, m.now(), w, rest)...)
+	}
+	return out
 }
 
 // table renders the script rows. Column budget, widest first: the sparkline and

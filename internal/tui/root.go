@@ -54,9 +54,19 @@ const (
 	minWidth  = 40
 	minHeight = 10
 
-	// How long a transient status line stays up. The PS app fades it out
-	// between 5.2 s and 6.3 s; the fade itself is phase 11 animation work.
-	statusTTL = 6 * time.Second
+	// A transient status line holds for statusFadeAt, then dissolves into the
+	// background over the remaining statusTTL-statusFadeAt (inventory §1.12 and
+	// Get-TuiStatusLine: visible while age < 6s, blending from 5.2s over 0.8s).
+	// The PS main loop keeps redrawing across a slightly wider 5.2-6.3s window
+	// so the last frame of the fade is never the one left on screen; the
+	// equivalent here is statusFadeStep, which keeps ticking to the end.
+	statusFadeAt = 5200 * time.Millisecond
+	statusTTL    = 6 * time.Second
+
+	// statusFadeStep is the fade's frame rate — fast enough to read as a
+	// dissolve, slow enough that a status message costs eight frames, not
+	// eighty. Nothing schedules it until a message is nearly due to fade.
+	statusFadeStep = 100 * time.Millisecond
 )
 
 // Model is the root. It owns the terminal size, the current view, pane focus
@@ -134,10 +144,8 @@ func New(a *app.App, now func() time.Time) *Model {
 	if now == nil {
 		now = time.Now
 	}
-	// config.json has no theme key (the PS config schema is frozen, inventory
-	// §3.8), so the alternates registered in the theme package are selectable
-	// only from code until phase 11's command palette gets a picker.
 	host, _ := os.Hostname()
+	name := themeName(a)
 	m := &Model{
 		app:     a,
 		keys:    defaultKeys(),
@@ -158,8 +166,29 @@ func New(a *app.App, now func() time.Time) *Model {
 	// keep a copy of, so it has to have something to re-derive it into.
 	m.fleet.init(m)
 	m.run.init(m)
-	m.useTheme(theme.New(theme.Default, theme.Profile(a.Cfg.ColorMode, os.Environ())))
+	m.useTheme(theme.New(name, theme.Profile(a.Cfg.ColorMode, os.Environ())))
 	return m
+}
+
+// themeName resolves config.json's `theme` key against the registered
+// palettes. An unknown name falls back to the default WITH a warning rather
+// than silently — a typo that leaves the UI looking identical is a bug report
+// waiting to happen. The warning joins the app's own list, which the Run view
+// prints into the output pane on first open.
+//
+// This is the Go-only config key (parity divergence 24). Its warning string is
+// Go's own; nothing here touches config.json's PS-parity warnings.
+func themeName(a *app.App) string {
+	name := strings.TrimSpace(a.Cfg.Theme)
+	if name == "" {
+		return theme.Default
+	}
+	if _, ok := theme.Get(name); ok {
+		return name
+	}
+	a.Warnings = append(a.Warnings, "config.json: unknown theme '"+name+"' — using "+
+		theme.Default+" (available: "+strings.Join(theme.Names(), ", ")+")")
+	return theme.Default
 }
 
 // useTheme swaps the palette and re-derives every style that was copied out of
@@ -199,6 +228,17 @@ func lockPollCmd() tea.Cmd {
 
 func missedTickCmd() tea.Cmd {
 	return tea.Tick(60*time.Second, func(t time.Time) tea.Msg { return MissedTickMsg(t) })
+}
+
+// fadeCmd schedules the next fade frame, and only while one is due: a status
+// message is repainted at 10 Hz for the last ~2 s of its life and not one frame
+// before that. It is spawned from the 1 Hz beat rather than from the message
+// itself, so posting a status never commits the program to a timer.
+func (m *Model) fadeCmd() tea.Cmd {
+	if m.statusText == "" || m.now().Sub(m.statusAt) < statusFadeAt-time.Second {
+		return nil
+	}
+	return tea.Tick(statusFadeStep, func(t time.Time) tea.Msg { return StatusFadeMsg(t) })
 }
 
 // loadFleet gathers everything the Fleet view reads, off the update loop.
@@ -242,7 +282,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		return m, m.onKey(msg)
+		// the marquee restarts on every selection move, whatever moved it, so
+		// the beat is (re)started after the key rather than inside each handler
+		return m, tea.Batch(m.onKey(msg), m.run.kickMarquee(m))
+
+	case MarqueeTickMsg:
+		return m, m.run.onMarqueeTick(m)
 
 	case TickMsg:
 		if m.statusText != "" && m.now().Sub(m.statusAt) > statusTTL {
@@ -251,7 +296,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the 1 Hz beat is also the queue's second chance: RunDoneMsg drains it
 		// first, and this catches an entry that was queued while the gate said
 		// no (inventory §4.11 drains one per loop iteration).
-		return m, tea.Batch(tickCmd(), m.run.dequeue(m))
+		return m, tea.Batch(tickCmd(), m.run.dequeue(m), m.fadeCmd())
+
+	case StatusFadeMsg:
+		if m.statusText != "" && m.now().Sub(m.statusAt) >= statusTTL {
+			m.statusText = ""
+			return m, nil
+		}
+		return m, m.fadeCmd()
 
 	case RunStartedMsg, RunQueuedMsg, RunEventsMsg, RunDoneMsg, TaskEventsMsg,
 		DepsScannedMsg, LogLoadedMsg, ClipboardMsg:
@@ -287,7 +339,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.schedules, m.recent, m.syncedAt = msg.Schedules, msg.Recent, msg.SyncedAt
 		m.fleet.reload(m)
 		m.run.reload(m)
-		return m, nil
+		return m, m.run.kickMarquee(m)
 
 	case StatusMsg:
 		m.statusText, m.statusKind, m.statusAt = msg.Text, msg.Kind, m.now()

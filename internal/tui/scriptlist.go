@@ -25,9 +25,9 @@ func (i scriptItem) FilterValue() string { return i.s.Name }
 // long ago. Everything the eye needs to pick a script out of a column that is
 // only about a third of the terminal wide.
 //
-// The marquee that scrolls a long selected name is phase 11 animation work
-// (ruling 4); until then a name that does not fit is truncated, which is
-// honest and does not move.
+// A name too long for its column scrolls — but only on the SELECTED row, and
+// only after a pause (marquee, below). Every other row truncates, which is
+// honest and, more importantly, still.
 type scriptDelegate struct{ m *Model }
 
 func (d scriptDelegate) Height() int  { return 1 }
@@ -68,14 +68,18 @@ func (d scriptDelegate) Render(w io.Writer, l list.Model, index int, item list.I
 
 	width := l.Width()
 	gap := tint(th.S.Base, bg).Render(" ")
-	// bar, badge, gaps, runtime tag, schedule glyph, age
-	nameW := max(width-(1+1+1+2+1+2+5), 4)
+	nameW := nameColWidth(width)
+
+	name := it.s.Name
+	if index == l.Index() {
+		name = m.run.marqueeName(m, name, nameW)
+	}
 
 	var b strings.Builder
 	b.WriteString(bar)
 	b.WriteString(badge(th, st, bg))
 	b.WriteString(gap)
-	b.WriteString(tint(th.S.Base, bg).Render(textkit.Fit(it.s.Name, nameW)))
+	b.WriteString(tint(th.S.Base, bg).Render(textkit.Fit(name, nameW)))
 	b.WriteString(gap)
 	b.WriteString(runtimeTag(th, it.s.Runtime, bg))
 	b.WriteString(m.scheduleGlyph(it.s.Name, bg))
@@ -117,6 +121,12 @@ func newScriptList(m *Model) list.Model {
 	}
 	return l
 }
+
+// nameColWidth is the name column inside a list pane w cells wide: the bar,
+// badge, gaps, runtime tag, schedule glyph and age take the rest. Both the row
+// renderer and the marquee measure through this, so they cannot disagree about
+// when a name overflows.
+func nameColWidth(w int) int { return max(w-(1+1+1+2+1+2+5), 4) }
 
 func scriptItems(all []scripts.Script) []list.Item {
 	items := make([]list.Item, len(all))

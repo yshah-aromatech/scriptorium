@@ -18,7 +18,7 @@
    c      copy output  ·  run                                                   
    h      script history  ·  run                                                
 ────────────────────────────────────────────────────────────────────────────────
-
-
+ ✓ nightly-report         ps success ▂▄▇█▆▃ 5h2m
+ ✓ backup-db              ps success ······   2d
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
 ↑/k up · ↓/j down · ↵ run · esc close

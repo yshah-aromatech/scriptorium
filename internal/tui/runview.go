@@ -61,6 +61,11 @@ type runModel struct {
 
 	// the live background task (sync / lint / install / update), if any
 	task *task
+
+	// marquee state for the selected row's name (marquee.go)
+	marqueeSel int
+	marqueeAt  time.Time
+	marqueeOn  bool
 }
 
 func (r *runModel) init(m *Model) {
@@ -420,6 +425,7 @@ func (r *runModel) resize(m *Model, w, h int) {
 
 func (r *runModel) view(m *Model, w, h int) []string {
 	r.resize(m, w, h)
+	r.noteSelection(m)
 	l := runLayoutFor(w, h)
 	th := m.th
 

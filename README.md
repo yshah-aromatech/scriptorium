@@ -281,6 +281,7 @@ Otherwise the TUI prints the exact commands to run manually (and still upgrades 
 | `webhookTimeoutSec` | per-attempt webhook timeout | `15` |
 | `missedGraceMinutes` | how late a scheduled fire may be before it's reported missed | `5` |
 | `colorMode` | `auto` (truecolor if `$COLORTERM` says so, else 256-color), `truecolor`, or `256` | `auto` |
+| `theme` | TUI palette: `night-owl`, `catppuccin-mocha`, `gruvbox-dark`, `tokyo-night`. **Go build only** — the PowerShell app reports it as an unknown key | `night-owl` |
 | `mcpPort` | MCP server port (`--mcp`; `--port` overrides per run) | `8765` |
 | `mcpBind` | `all` (LAN-reachable) or `localhost` | `all` |
 

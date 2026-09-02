@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
 	"github.com/yshah-aromatech/scriptorium/internal/format"
@@ -17,26 +18,35 @@ func (m *Model) statusBar() string {
 	if line, busy := m.run.statusLine(m, m.w); busy {
 		return line
 	}
-	if m.statusText != "" && m.now().Sub(m.statusAt) <= statusTTL {
-		return textkit.Truncate(statusLine(m.th, m.statusKind, m.statusText), m.w)
+	if age := m.now().Sub(m.statusAt); m.statusText != "" && age <= statusTTL {
+		return textkit.Truncate(statusLine(m.th, m.statusKind, m.statusText, fadeAmount(age)), m.w)
 	}
 	return textkit.Truncate(m.contextLine(), m.w)
 }
 
 // statusLine renders one transient message with the glyph and color its kind
-// earns (Set-TuiStatus's four kinds).
-func statusLine(th theme.Theme, kind StatusKind, text string) string {
-	glyph, style := "·", th.S.Info
+// earns (Set-TuiStatus's four kinds), dissolved by fade (0 = fresh, 1 = gone).
+func statusLine(th theme.Theme, kind StatusKind, text string, fade float64) string {
+	glyph, c := "·", th.C.Info
 	switch kind {
 	case StatusOK:
-		glyph, style = "✓", th.S.Success
+		glyph, c = "✓", th.C.Success
 	case StatusWarn:
-		glyph, style = "⚠", th.S.Warning
+		glyph, c = "⚠", th.C.Warning
 	case StatusErr:
-		glyph, style = "✗", th.S.Danger
+		glyph, c = "✗", th.C.Danger
 	case StatusInfo:
 	}
-	return " " + style.Render(glyph+" "+text)
+	return " " + th.Fade(c, fade).Render(glyph+" "+text)
+}
+
+// fadeAmount is how far into the dissolve a message of this age is: nothing
+// until statusFadeAt, then linear to gone at statusTTL.
+func fadeAmount(age time.Duration) float64 {
+	if age <= statusFadeAt {
+		return 0
+	}
+	return min(float64(age-statusFadeAt)/float64(statusTTL-statusFadeAt), 1)
 }
 
 // contextLine is the resting state: whatever is true about the highlighted
