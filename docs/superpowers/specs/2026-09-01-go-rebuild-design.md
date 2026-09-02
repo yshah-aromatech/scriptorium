@@ -197,7 +197,9 @@ and failed, or a sync/install/update that reports `ok:false`, is always `200`
 — the body's own fields speak, exactly as MCP callers already read them.
 Responses are the `Ops` result's JSON directly, with no JSON-RPC envelope.
 
-Parity-inventory §11 gets one paragraph (not a new numbered subsection, since
-nothing in the PowerShell app diverges here — PS simply has no REST surface
-to diverge from) noting the co-hosted addition and pointing at this section
-for the rationale.
+Parity-inventory §11 gets one short new subsection (§11.12) — a single
+paragraph, matching the document's existing §11.x structure — noting the
+co-hosted addition and pointing at this section for the rationale. It sits
+outside the "Deliberate divergences" list at the document's end: nothing in
+the PowerShell app diverges here, since PS simply has no REST surface to
+diverge from.
