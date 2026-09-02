@@ -50,6 +50,7 @@ type keyMap struct {
 	Lint       key.Binding
 	Upgrade    key.Binding
 	ViewLog    key.Binding
+	Copy       key.Binding
 	Scoped     key.Binding
 
 	// overlays
@@ -91,6 +92,7 @@ func defaultKeys() keyMap {
 		Lint:       key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "lint")),
 		Upgrade:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade")),
 		ViewLog:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "last log")),
+		Copy:       key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy output")),
 		Scoped:     key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "script history")),
 
 		Palette: key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
@@ -126,7 +128,7 @@ func (k keyMap) groups() []keyGroup {
 		{Title: "fleet", Keys: []key.Binding{k.Open, k.FailFilter}},
 		{Title: "run", Keys: []key.Binding{
 			k.Start, k.Args, k.Kill, k.ClearQueue, k.Sync,
-			k.Env, k.Deps, k.Lint, k.Upgrade, k.ViewLog, k.Scoped}},
+			k.Env, k.Deps, k.Lint, k.Upgrade, k.ViewLog, k.Copy, k.Scoped}},
 		{Title: "session", Keys: []key.Binding{k.Palette, k.Help, k.Quit}},
 		{Title: "overlays", Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Save, k.Close}},
 	}
@@ -157,7 +159,7 @@ func (m *Model) hints() []key.Binding {
 			primary = []key.Binding{k.Up, k.Down, k.PageUp, k.Follow, k.Focus, k.Start, k.Kill}
 		} else {
 			primary = []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
-			secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Scoped, k.ClearQueue}
+			secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Copy, k.Scoped, k.ClearQueue}
 		}
 	case modeHistory, modeSchedules:
 		// nothing of their own yet — the placeholder pane says so.

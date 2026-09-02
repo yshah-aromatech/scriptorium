@@ -247,10 +247,11 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 	// Keys whose behaviour has not been built yet stay unbound: an advertised
 	// key that does nothing is worse than one that is not advertised. Waves A1
 	// and A2 bound the overlay and action keys WITH their behaviour; what is
-	// left here is the PS floor this wave does not reach — `c` clear output and
-	// `y` copy-all (wave A3 rebinds `c` to copy), the output search (ctrl+f,
-	// n/N), the script filter (/), self-update (U) and the webhook test (t).
-	for _, later := range []string{"U", "t", "c", "/", "ctrl+f", "N"} {
+	// left here is the PS floor this wave does not reach: the output search
+	// (ctrl+f, n/N), the script filter (/), self-update (U) and the webhook
+	// test (t). PS's `y` copy-all and `c` clear-output are not on this list —
+	// `y` is the confirm key here, and `c` copies the visible output.
+	for _, later := range []string{"U", "t", "/", "ctrl+f", "N"} {
 		if bound[later] {
 			t.Errorf("%q is bound but its action does not exist yet", later)
 		}
@@ -264,7 +265,7 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 	}{
 		{modeFleet, focusList, []string{"↑/k", "↓/j", "↵", "f", "r", "s"}, nil},
 		{modeRun, focusList, []string{"↑/k", "↓/j", "tab", "r", "a", "x", "s"},
-			[]string{"e", "i", "l", "v", "h", "X"}},
+			[]string{"e", "i", "l", "v", "c", "h", "X"}},
 		{modeRun, focusOutput, []string{"↑/k", "↓/j", "pgup", "end", "tab", "r", "x"}, nil},
 		{modeHistory, focusList, nil, nil},
 	} {

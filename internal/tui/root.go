@@ -254,7 +254,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(tickCmd(), m.run.dequeue(m))
 
 	case RunStartedMsg, RunQueuedMsg, RunEventsMsg, RunDoneMsg, TaskEventsMsg,
-		DepsScannedMsg, LogLoadedMsg:
+		DepsScannedMsg, LogLoadedMsg, ClipboardMsg:
 		// run and sync traffic belongs to the Run view wherever the user is
 		// standing: a run started from Fleet must keep draining while they read
 		// the History screen.

@@ -15,9 +15,9 @@
    l      lint  ·  run                                                          
    u      upgrade  ·  run                                                       
    v      last log  ·  run                                                      
+   c      copy output  ·  run                                                   
    h      script history  ·  run                                                
 ────────────────────────────────────────────────────────────────────────────────
-
 
 
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h

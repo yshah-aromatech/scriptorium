@@ -25,7 +25,102 @@ type outputPane struct {
 	follow bool // pinned to the tail
 	title  string
 	w, h   int
+
+	// Drag selection (inventory §1.11). Both ends are buffer coordinates —
+	// a WRAPPED row index and a display cell — so a selection survives the
+	// output scrolling underneath it, and rejoining it reads straight through
+	// the buffer's WrapSrc back-pointers to the ORIGINAL source text.
+	anchor *cell
+	extent *cell
 }
+
+// cell is one position in the wrapped buffer.
+type cell struct{ row, col int }
+
+// selecting reports whether a drag has produced a selection worth copying.
+func (o *outputPane) selecting() bool { return o.anchor != nil && o.extent != nil }
+
+// beginDrag records where a press landed and drops any previous selection.
+// A drag pins the view: text that scrolls out from under a selection is a
+// selection of something the user cannot see (PS sets Follow=false here too).
+func (o *outputPane) beginDrag(row, col int) {
+	o.anchor, o.extent = &cell{row, col}, nil
+	o.follow = false
+}
+
+// dragTo extends the live selection.
+func (o *outputPane) dragTo(row, col int) {
+	if o.anchor == nil {
+		return
+	}
+	o.extent = &cell{row, col}
+}
+
+func (o *outputPane) clearSelection() { o.anchor, o.extent = nil, nil }
+
+// selection is the drag normalised to (from <= to) and clamped to the buffer.
+func (o *outputPane) selection() (from, to cell, ok bool) {
+	if !o.selecting() || len(o.buf.Wrapped) == 0 {
+		return from, to, false
+	}
+	from, to = *o.anchor, *o.extent
+	if to.row < from.row || (to.row == from.row && to.col < from.col) {
+		from, to = to, from
+	}
+	last := len(o.buf.Wrapped) - 1
+	from.row, to.row = min(max(from.row, 0), last), min(max(to.row, 0), last)
+	return from, to, true
+}
+
+// selectedText is the dragged text as it was BEFORE wrapping: rows folded out
+// of one source line rejoin with exactly the bytes the wrap consumed, and a
+// real line break stays a newline (textkit.Buffer.Rejoin, the P10 contract).
+func (o *outputPane) selectedText() string {
+	from, to, ok := o.selection()
+	if !ok {
+		return ""
+	}
+	return o.buf.Rejoin(from.row, from.col, to.row, to.col)
+}
+
+// visibleText is everything currently on screen, rejoined the same way — what
+// `c` copies.
+func (o *outputPane) visibleText() string {
+	if len(o.buf.Wrapped) == 0 {
+		return ""
+	}
+	last := min(o.scroll+o.rows()-1, len(o.buf.Wrapped)-1)
+	return o.buf.Rejoin(o.scroll, 0, last, maxCell)
+}
+
+// maxCell is "to the end of the row" as a cell index: past any real line, and
+// small enough that +1 cannot overflow.
+const maxCell = 1 << 20
+
+// wordAt is the click-to-copy probe (§1.11): the whitespace-delimited word
+// under a cell, stripped of trailing punctuation.
+func (o *outputPane) wordAt(row, col int) string {
+	if row < 0 || row >= len(o.buf.Wrapped) {
+		return ""
+	}
+	line := o.buf.Wrapped[row]
+	at := textkit.ByteAtCell(line, col)
+	if at >= len(line) || line[at] == ' ' {
+		return ""
+	}
+	start := strings.LastIndexByte(line[:at], ' ') + 1
+	end := strings.IndexByte(line[at:], ' ')
+	if end < 0 {
+		end = len(line)
+	} else {
+		end += at
+	}
+	return strings.Trim(line[start:end], `.,:;"'()`)
+}
+
+// deviceCodeRE is the shape of the login codes this exists for — Microsoft
+// device-login and friends: 8-10 uppercase letters and digits, nothing else.
+var deviceCodeRE = regexp.MustCompile(`^[A-Z0-9]{8,10}$`)
 
 func (o *outputPane) reset(title string, maxLines int) {
 	o.buf.Reset()
@@ -117,11 +212,27 @@ func (o *outputPane) view(th theme.Theme, spin string, focused bool) []string {
 	n := o.rows()
 	visible := len(o.buf.Wrapped)
 	thumb, thumbAt := scrollbar(o.scroll, n, visible)
+	from, to, selecting := o.selection()
 	for i := range n {
 		idx := o.scroll + i
 		line := ""
 		if idx < visible {
-			line = colorLine(th, o.extend(o.buf.Wrapped[idx]))
+			text := o.extend(o.buf.Wrapped[idx])
+			// a selected row is drawn in reverse video instead of its content
+			// colour: two meanings on one row is one too many, and reverse is
+			// what every terminal selection looks like
+			if selecting && idx >= from.row && idx <= to.row {
+				lo, hi := 0, maxCell
+				if idx == from.row {
+					lo = from.col
+				}
+				if idx == to.row {
+					hi = to.col
+				}
+				line = inverseSpan(text, lo, hi)
+			} else {
+				line = colorLine(th, text)
+			}
 		}
 		bar := th.S.Muted.Render("│")
 		switch {
@@ -149,6 +260,18 @@ func (o *outputPane) extend(line string) string {
 		return line + strings.Repeat("─", gap)
 	}
 	return line
+}
+
+// inverseSpan renders text with cells [lo, hi] in reverse video — the same
+// \e[7m span the PS panel drew, and the reason a selection is legible on every
+// terminal including the ones with no colour at all.
+func inverseSpan(text string, lo, hi int) string {
+	a := textkit.ByteAtCell(text, lo)
+	b := textkit.ByteAtCell(text, hi+1)
+	if b <= a {
+		return text
+	}
+	return text[:a] + "\x1b[7m" + text[a:b] + "\x1b[27m" + text[b:]
 }
 
 // scrollbar returns the thumb's length and position for a viewport of h rows

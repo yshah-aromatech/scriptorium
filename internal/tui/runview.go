@@ -191,15 +191,34 @@ func (r *runModel) update(m *Model, msg tea.Msg) tea.Cmd {
 		return r.onKey(m, msg)
 	case tea.MouseClickMsg:
 		return r.onClick(m, msg.Mouse())
+	case tea.MouseMotionMsg:
+		return r.onDrag(m, msg.Mouse())
+	case tea.MouseReleaseMsg:
+		return r.onRelease(m, msg.Mouse())
 	case tea.MouseWheelMsg:
 		return r.onWheel(m, msg.Mouse())
+	case ClipboardMsg:
+		return m.onClipboard(msg)
 	}
 	return nil
 }
 
+// outputCell maps a mouse position to a position in the output BUFFER, or
+// false when the pointer is not over the output pane's content. Body row 0 is
+// the pane's title rule; the right pane starts one column past the separator.
+func (r *runModel) outputCell(m *Model, mouse tea.Mouse) (row, col int, ok bool) {
+	lay := runLayoutFor(m.w, m.bodyHeight())
+	body := mouse.Y - headerRows
+	if body < 1 || body >= m.bodyHeight() || mouse.X <= lay.listW {
+		return 0, 0, false
+	}
+	return r.out.scroll + body - 1, mouse.X - lay.listW - 1, true
+}
+
 // onClick focuses the pane under the pointer and, in the list, selects the row
-// it landed on. The pane rules already say which pane has the keyboard, so a
-// click is just a faster tab.
+// it landed on. In the output pane it also arms a drag: the press is the
+// anchor, and whether it becomes a selection or a plain click is decided on
+// release.
 func (r *runModel) onClick(m *Model, mouse tea.Mouse) tea.Cmd {
 	row := mouse.Y - headerRows
 	if row < 0 || row >= m.bodyHeight() {
@@ -207,13 +226,54 @@ func (r *runModel) onClick(m *Model, mouse tea.Mouse) tea.Cmd {
 	}
 	if mouse.X >= runLayoutFor(m.w, m.bodyHeight()).listW {
 		m.focus = focusOutput
+		r.out.clearSelection()
+		if br, bc, ok := r.outputCell(m, mouse); ok && mouse.Button == tea.MouseLeft {
+			r.out.beginDrag(br, bc)
+		}
 		return nil
 	}
 	m.focus = focusList
+	r.out.clearSelection()
 	// row 0 is the title rule; the list windows by page, so the first visible
 	// item is the page offset
 	if idx := r.firstVisible() + row - 1; row > 0 && idx < len(r.list.Items()) {
 		r.list.Select(idx)
+	}
+	return nil
+}
+
+// onDrag extends a live selection (inventory §1.11: motion with button 0 held
+// and an anchor recorded).
+func (r *runModel) onDrag(m *Model, mouse tea.Mouse) tea.Cmd {
+	if mouse.Button != tea.MouseLeft || r.out.anchor == nil {
+		return nil
+	}
+	if row, col, ok := r.outputCell(m, mouse); ok {
+		r.out.dragTo(row, col)
+	}
+	return nil
+}
+
+// onRelease ends the gesture: a drag copies its text, a plain click checks the
+// word under the pointer for a device-login code and copies THAT (§1.11's
+// click-to-copy). Anything else just drops the anchor.
+func (r *runModel) onRelease(m *Model, mouse tea.Mouse) tea.Cmd {
+	defer r.out.clearSelection()
+	if r.out.selecting() {
+		if text := r.out.selectedText(); strings.TrimSpace(text) != "" {
+			return m.copyToClipboard(text)
+		}
+		return nil
+	}
+	if r.out.anchor == nil {
+		return nil
+	}
+	row, col, ok := r.outputCell(m, mouse)
+	if !ok {
+		return nil
+	}
+	if word := r.out.wordAt(row, col); deviceCodeRE.MatchString(word) {
+		return m.copyToClipboard(word)
 	}
 	return nil
 }
@@ -280,6 +340,12 @@ func (r *runModel) onKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 
 	case key.Matches(msg, k.ViewLog):
 		return r.viewLog(m)
+
+	case key.Matches(msg, k.Copy):
+		// what is ON SCREEN, and it comes out of the redacted buffer — every
+		// line in there passed the runner's or the task's redaction on the way
+		// in, so a copy cannot leak what the pane never showed
+		return m.copyToClipboard(r.out.visibleText())
 
 	case key.Matches(msg, k.Scoped):
 		return r.openHistory(m)
