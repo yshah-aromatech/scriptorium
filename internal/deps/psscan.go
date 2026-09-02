@@ -248,15 +248,7 @@ func (doc psScanDoc) toResult() PSScanResult {
 		r.Missing[i] = d.toDep()
 	}
 	for i, p := range doc.Params {
-		r.Params[i] = Param{
-			Name:        p.Name,
-			Type:        p.Type,
-			Mandatory:   p.Mandatory,
-			Default:     p.Default,
-			ValidateSet: p.ValidateSet,
-			IsSwitch:    p.IsSwitch,
-			Description: p.Description,
-		}
+		r.Params[i] = Param(p)
 	}
 	return r
 }
