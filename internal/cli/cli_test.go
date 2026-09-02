@@ -210,7 +210,15 @@ func TestDiffOracleListAndHistory(t *testing.T) {
 	// One seeded script is scheduled, in PS spelling, through a fake crontab
 	// both sides read: --list's schedule column has to agree byte-for-byte,
 	// not just be empty on both sides.
-	shimCrontab(t, psManagedBlock("hello", "*/5 * * * *"))
+	//
+	// It must be 'pytool', NOT 'hello': a */5 schedule makes a script
+	// "frequent", and the now-live retention rule drops a frequent script's
+	// success rows older than a day — which would delete the one --history
+	// fixture row carrying the one-decimal cpu/mem and fractional-duration
+	// values before either side renders it. Both sides prune identically, so
+	// that loss would pass silently. pytool's row is a failure, immune to the
+	// rule. The decimal assertion below is the tripwire if this ever moves.
+	shimCrontab(t, psManagedBlock("pytool", "*/5 * * * *"))
 
 	repoRoot := moduleRoot(t)
 	mainCfgPath := filepath.Join(repoRoot, "config.json")
@@ -285,6 +293,17 @@ func TestDiffOracleListAndHistory(t *testing.T) {
 				}
 				if !strings.Contains(string(psOut), "  [*/5 * * * *]") {
 					t.Errorf("PS --list has no schedule column — the crontab shim never reached pwsh:\n%s", psOut)
+				}
+			}
+
+			// The seed row with one-decimal cpu/mem and a fractional duration
+			// is the whole point of the --history half of this oracle. The
+			// startup prune can delete a row on BOTH sides and leave the diff
+			// clean, so its survival is asserted, not assumed.
+			if args[0] == "--history" {
+				want := fmt.Sprintf("%8s  cpu %5v%%  mem %7vMB", "12.3s", "45.6", "128.5")
+				if !strings.Contains(goOut.String(), want) {
+					t.Errorf("the one-decimal fixture row is gone from --history (pruned before rendering?) — want %q in:\n%s", want, goOut.String())
 				}
 			}
 		})
