@@ -295,6 +295,55 @@ func TestStatusAndErrorCodeMatrix(t *testing.T) {
 	}
 }
 
+// TestDispatchExceptionBecomesMinus32603Redacted is the §11.7 -32603 row:
+// a genuine dispatch-level exception (here, a crontab read failure inside
+// set_schedule's Ops.Call — a real `err`, not a tool-reported isErr) rides
+// HTTP 200 with a JSON-RPC error object, distinct from the 500 a PANIC
+// produces (TestPanicInsideDispatchBecomes500). The message passes through
+// the same Sec.Redact chokepoint every tool output does.
+func TestDispatchExceptionBecomesMinus32603Redacted(t *testing.T) {
+	appDir := t.TempDir()
+	dataDir := filepath.Join(t.TempDir(), "data")
+	if err := os.WriteFile(filepath.Join(appDir, "config.json"), []byte(fmt.Sprintf(`{"dataDir":%q}`, dataDir)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	failingCrontab := func(string, ...string) (string, bool) { return "crontab: permission denied", false }
+	a, err := app.OpenWith(appDir, failingCrontab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(a.Paths.ScriptsDir, "hello"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.Paths.ScriptsDir, "hello", "main.ps1"), []byte("exit 0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := mcp.New(&mcp.Ops{App: a}, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"set_schedule","arguments":{"script":"hello","cron":"@daily"}}}`)
+	resp := doRequest(t, srv.Handler(), http.MethodPost, "/mcp", testToken, body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200 (JSON-RPC errors ride 200, not the transport's own 500)", resp.StatusCode)
+	}
+	var env map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		t.Fatal(err)
+	}
+	errObj, ok := env["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no error object (crontab read failure should have raised a dispatch exception): %v", env)
+	}
+	if code, _ := errObj["code"].(float64); int(code) != -32603 {
+		t.Errorf("error.code = %v, want -32603", errObj["code"])
+	}
+	if !strings.Contains(errObj["message"].(string), "crontab read failed") {
+		t.Errorf("message = %q, want it to carry the underlying error", errObj["message"])
+	}
+}
+
 func TestUnknownToolErrorListsAllValidNames(t *testing.T) {
 	srv, _ := newTestServer(t)
 	resp := doRequest(t, srv.Handler(), http.MethodPost, "/mcp", testToken,
