@@ -295,13 +295,25 @@ func TestStatusAndErrorCodeMatrix(t *testing.T) {
 	}
 }
 
-// TestDispatchExceptionBecomesMinus32603Redacted is the §11.7 -32603 row:
-// a genuine dispatch-level exception (here, a crontab read failure inside
-// set_schedule's Ops.Call — a real `err`, not a tool-reported isErr) rides
-// HTTP 200 with a JSON-RPC error object, distinct from the 500 a PANIC
-// produces (TestPanicInsideDispatchBecomes500). The message passes through
-// the same Sec.Redact chokepoint every tool output does.
-func TestDispatchExceptionBecomesMinus32603Redacted(t *testing.T) {
+// plantedLeakMarker is registered as a fake "secret" whose VALUE is a
+// substring of a real, fixed internal error message (cron.Crontab's
+// read-failure text) — not an attacker-controlled string (none of ops.go's
+// three `err`-producing paths carry one; see I-2 for why). Registering a
+// chunk of the ACTUAL text that Sec.Redact must scrub is what makes the
+// leak tests below traverse the real redaction call sites
+// (rpc.go's -32603 branch, api.go's 500 branch) instead of re-testing
+// internal/secret.Redact directly: if either call site's `Sec.Redact(...)`
+// were ever deleted, this exact substring would survive verbatim on the
+// wire and the assertion would fail.
+const plantedLeakMarker = "unmanaged entries would be destroyed"
+
+// newFailingCrontabApp is a real *app.App wired to a crontab runner whose
+// reads always fail — every schedule tool's Cron.Set/Remove call returns
+// cron's fixed "crontab read failed — refusing to write (unmanaged entries
+// would be destroyed)" error, the one dispatch-level exception this suite
+// can reliably trigger without touching a real crontab.
+func newFailingCrontabApp(t *testing.T) *app.App {
+	t.Helper()
 	appDir := t.TempDir()
 	dataDir := filepath.Join(t.TempDir(), "data")
 	if err := os.WriteFile(filepath.Join(appDir, "config.json"), []byte(fmt.Sprintf(`{"dataDir":%q}`, dataDir)), 0o644); err != nil {
@@ -318,7 +330,19 @@ func TestDispatchExceptionBecomesMinus32603Redacted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(a.Paths.ScriptsDir, "hello", "main.ps1"), []byte("exit 0"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	a.Sec.Add("PLANTED_TOKEN", plantedLeakMarker, true)
+	return a
+}
 
+// TestDispatchExceptionBecomesMinus32603Redacted is the §11.7 -32603 row:
+// a genuine dispatch-level exception (here, a crontab read failure inside
+// set_schedule's Ops.Call — a real `err`, not a tool-reported isErr) rides
+// HTTP 200 with a JSON-RPC error object, distinct from the 500 a PANIC
+// produces (TestPanicInsideDispatchBecomes500). The message passes through
+// the same Sec.Redact chokepoint every tool output does — proven by the
+// planted marker (see plantedLeakMarker) never surviving verbatim.
+func TestDispatchExceptionBecomesMinus32603Redacted(t *testing.T) {
+	a := newFailingCrontabApp(t)
 	srv, err := mcp.New(&mcp.Ops{App: a}, testToken)
 	if err != nil {
 		t.Fatal(err)
@@ -339,8 +363,15 @@ func TestDispatchExceptionBecomesMinus32603Redacted(t *testing.T) {
 	if code, _ := errObj["code"].(float64); int(code) != -32603 {
 		t.Errorf("error.code = %v, want -32603", errObj["code"])
 	}
-	if !strings.Contains(errObj["message"].(string), "crontab read failed") {
-		t.Errorf("message = %q, want it to carry the underlying error", errObj["message"])
+	msg := errObj["message"].(string)
+	if !strings.Contains(msg, "crontab read failed") {
+		t.Errorf("message = %q, want it to carry the underlying error", msg)
+	}
+	if strings.Contains(msg, plantedLeakMarker) {
+		t.Fatalf("planted marker leaked verbatim through the -32603 path (Sec.Redact was not applied): %q", msg)
+	}
+	if !strings.Contains(msg, "***") {
+		t.Errorf("message = %q, want a redaction marker in place of the planted text", msg)
 	}
 }
 
@@ -383,7 +414,10 @@ type fixtureResponse struct {
 //     fact of the machine that recorded the fixture, not a byte the Go
 //     rebuild can or should reproduce. The Go equivalent (appVersion) reads
 //     the same way from ITS OWN app dir, which in this test is a fresh temp
-//     dir with no git history at all.
+//     dir with no git history at all. Named explicitly in the fixtures'
+//     README under "Volatile files" (it changes on every PS commit, not
+//     just on a regeneration — a different axis of volatility than the
+//     rest of that list).
 //   - the get_history row's startedAt/logFile/logId/durationSec (pair 08):
 //     the fixtures' own README lists this exact file under "Volatile
 //     files" ("echoes the real-run row back") — regenerating the PS

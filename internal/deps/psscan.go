@@ -202,9 +202,12 @@ func lastNonEmptyLine(out []byte) string {
 // psScanDoc is the JSON shape scanner.ps1 emits; field names match its
 // ConvertTo-Json output verbatim.
 type psScanDoc struct {
-	Deps    []psDepDoc   `json:"deps"`
-	Missing []psDepDoc   `json:"missing"`
-	Params  []psParamDoc `json:"params"`
+	Deps          []psDepDoc   `json:"deps"`
+	Missing       []psDepDoc   `json:"missing"`
+	Params        []psParamDoc `json:"params"`
+	Synopsis      string       `json:"synopsis"`
+	Help          string       `json:"help"`
+	ParseWarnings int          `json:"parseWarnings"`
 }
 
 type psDepDoc struct {
@@ -237,9 +240,12 @@ func (d psDepDoc) toDep() Dep {
 
 func (doc psScanDoc) toResult() PSScanResult {
 	r := PSScanResult{
-		Deps:    make([]Dep, len(doc.Deps)),
-		Missing: make([]Dep, len(doc.Missing)),
-		Params:  make([]Param, len(doc.Params)),
+		Deps:          make([]Dep, len(doc.Deps)),
+		Missing:       make([]Dep, len(doc.Missing)),
+		Params:        make([]Param, len(doc.Params)),
+		Synopsis:      doc.Synopsis,
+		Help:          doc.Help,
+		ParseWarnings: doc.ParseWarnings,
 	}
 	for i, d := range doc.Deps {
 		r.Deps[i] = d.toDep()

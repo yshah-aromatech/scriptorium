@@ -41,6 +41,8 @@ var pscorpus = []corpusCase{
 	{file: "builtin_exclusion.ps1"},
 	{file: "namemap.ps1"},
 	{file: "param_block.ps1"},
+	{file: "comment_help.ps1"},
+	{file: "parse_warning.ps1"},
 	{file: "mixed_no_deps.ps1"},
 	{file: "union_versioned_first.ps1"},
 	{file: "union_bare_first.ps1"},
@@ -107,6 +109,15 @@ func TestScanPSMatchesRealDepsAndScriptsPsm1(t *testing.T) {
 				if !reflect.DeepEqual(got.Params, want.Params) {
 					t.Errorf("Params mismatch:\n go=%+v\n ps=%+v", got.Params, want.Params)
 				}
+				if got.Synopsis != want.Synopsis {
+					t.Errorf("Synopsis mismatch: go=%q ps=%q", got.Synopsis, want.Synopsis)
+				}
+				if got.Help != want.Help {
+					t.Errorf("Help mismatch: go=%q ps=%q", got.Help, want.Help)
+				}
+				if got.ParseWarnings != want.ParseWarnings {
+					t.Errorf("ParseWarnings mismatch: go=%d ps=%d", got.ParseWarnings, want.ParseWarnings)
+				}
 			})
 		}
 	}
@@ -124,7 +135,8 @@ Import-Module '` + filepath.ToSlash(repoRoot) + `/src/Deps.psm1','` + filepath.T
 $Script = [pscustomobject]@{ Dir = $Dir; Entry = $Entry; ModuleDir = $ModuleDir; Loose = ($Loose -eq 'true') }
 $deps = @(Get-StoScriptDeps -Script $Script)
 $missing = @(Get-StoMissingDeps -Script $Script)
-$params = @((Get-StoScriptParameters -Entry $Entry).Parameters)
+$paramScan = Get-StoScriptParameters -Entry $Entry
+$params = @($paramScan.Parameters)
 function ConvertTo-DepRecord {
     param($D)
     [ordered]@{ name = $D.Name; requiredVersion = $D.RequiredVersion; minimumVersion = $D.MinimumVersion; maximumVersion = $D.MaximumVersion; display = $D.Display }
@@ -135,6 +147,9 @@ $result = [ordered]@{
     params  = @($params | ForEach-Object {
             [ordered]@{ name = $_.Name; type = $_.Type; mandatory = [bool]$_.Mandatory; default = $_.Default; validateSet = @($_.ValidateSet); isSwitch = [bool]$_.IsSwitch; description = $_.Description }
         })
+    synopsis      = $paramScan.Synopsis
+    help          = $paramScan.Help
+    parseWarnings = $paramScan.ParseWarnings
 }
 $result | ConvertTo-Json -Depth 8 -Compress
 `

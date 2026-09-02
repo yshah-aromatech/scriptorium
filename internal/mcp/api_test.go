@@ -190,10 +190,12 @@ func TestAPISyncFailureIs200WithOkFalse(t *testing.T) {
 	}
 }
 
-func TestAPIOpsExceptionIs500Redacted(t *testing.T) {
-	// A nil App inside Ops makes any real call panic before ever reaching
-	// apiReply — proving the SAME top-level recover (server.go) that
-	// backs /mcp's 500 also covers /api/v1.
+// TestAPIPanicIs500ViaTopLevelRecover: a nil App inside Ops makes any real
+// call panic before ever reaching apiReply — proving the SAME top-level
+// recover (server.go) that backs /mcp's 500 also covers /api/v1. This is
+// deliberately distinct from apiReply's own `err != nil` branch (see
+// TestAPIOpsExceptionIs500Redacted below), which this test never reaches.
+func TestAPIPanicIs500ViaTopLevelRecover(t *testing.T) {
 	srv, err := mcp.New(&mcp.Ops{}, testToken)
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +203,35 @@ func TestAPIOpsExceptionIs500Redacted(t *testing.T) {
 	resp := doAPI(t, srv.Handler(), http.MethodGet, "/api/v1/scripts", testToken, nil)
 	if resp.StatusCode != 500 {
 		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+}
+
+// TestAPIOpsExceptionIs500Redacted is I-2's fix: reaches apiReply's own
+// `err != nil` branch (api.go) — a real dispatch-level Ops error, not a
+// panic — via a failing crontab runner behind PUT /api/v1/schedules/hello,
+// and requires the planted marker (see plantedLeakMarker,
+// server_test.go) to come back scrubbed, proving api.go's own
+// `Sec.Redact(err.Error())` call actually runs.
+func TestAPIOpsExceptionIs500Redacted(t *testing.T) {
+	a := newFailingCrontabApp(t)
+	srv, err := mcp.New(&mcp.Ops{App: a}, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := doAPI(t, srv.Handler(), http.MethodPut, "/api/v1/schedules/hello", testToken, []byte(`{"cron":"@daily"}`))
+	if resp.StatusCode != 500 {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+	body := decodeAPIBody(t, resp)
+	msg, _ := body["error"].(string)
+	if !strings.Contains(msg, "crontab read failed") {
+		t.Errorf("error = %q, want it to carry the underlying error", msg)
+	}
+	if strings.Contains(msg, plantedLeakMarker) {
+		t.Fatalf("planted marker leaked verbatim through the API 500 path (Sec.Redact was not applied): %q", msg)
+	}
+	if !strings.Contains(msg, "***") {
+		t.Errorf("error = %q, want a redaction marker in place of the planted text", msg)
 	}
 }
 

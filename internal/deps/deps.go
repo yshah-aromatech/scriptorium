@@ -44,14 +44,23 @@ type Param struct {
 }
 
 // PSScanResult is what ScanPS returns: the script's declared PowerShell
-// module deps, the subset currently unsatisfied, and its param() block.
+// module deps, the subset currently unsatisfied, its param() block, and the
+// same comment-based-help fields Get-StoScriptParameters returns alongside
+// Parameters (Synopsis/Help/ParseWarnings) — get_script_details (P9) composes
+// its optional help{synopsis,description} and parseWarnings fields from
+// these, never a second AST scan. Synopsis/Help are "" and ParseWarnings is
+// 0 when the scanner degraded (no AST parse happened at all) or the script
+// simply has neither comment-based help nor a parse error.
 // Degraded is true only on the regex-fallback path (pwsh unavailable), in
 // which case Missing is always empty and Warning explains why (install
 // checks require a real pwsh to inspect installed modules and [version]s).
 type PSScanResult struct {
-	Deps     []Dep
-	Missing  []Dep
-	Params   []Param
-	Degraded bool
-	Warning  string
+	Deps          []Dep
+	Missing       []Dep
+	Params        []Param
+	Synopsis      string
+	Help          string
+	ParseWarnings int
+	Degraded      bool
+	Warning       string
 }

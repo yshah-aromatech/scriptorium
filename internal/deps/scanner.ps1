@@ -213,8 +213,9 @@ function Test-StoDepSatisfied {
 }
 
 # ---------------------------------------------------------------------------
-# Verbatim from src/Scripts.psm1's Get-StoScriptParameters (Parameters list
-# only — Synopsis/Help/ParseWarnings aren't part of this scan's contract).
+# Verbatim from src/Scripts.psm1's Get-StoScriptParameters, full return shape
+# (Parameters + Synopsis + Help + ParseWarnings) — get_script_details (P9)
+# composes all four from this single scan, never a second AST parse.
 # ---------------------------------------------------------------------------
 
 function Get-StoScriptParams {
@@ -262,7 +263,12 @@ function Get-StoScriptParams {
                 })
         }
     }
-    $params
+    [pscustomobject]@{
+        Parameters    = $params
+        Synopsis      = $(if ($help -and $help.Synopsis) { "$($help.Synopsis)".Trim() } else { '' })
+        Help          = $(if ($help -and $help.Description) { "$($help.Description)".Trim() } else { '' })
+        ParseWarnings = @($errors).Count
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -280,7 +286,8 @@ if ($allDeps.Count -eq 0) {
     $installed = Get-StoInstalledModules -Script $Script -Names @($allDeps | ForEach-Object Name)
     $missingDeps = @($allDeps | Where-Object { -not (Test-StoDepSatisfied -Dep $_ -Installed $installed) })
 }
-$paramList = @(Get-StoScriptParams -Entry $Entry)
+$paramScan = Get-StoScriptParams -Entry $Entry
+$paramList = @($paramScan.Parameters)
 
 function ConvertTo-DepRecord {
     param($D)
@@ -307,5 +314,8 @@ $result = [ordered]@{
                 description = $_.Description
             }
         })
+    synopsis      = $paramScan.Synopsis
+    help          = $paramScan.Help
+    parseWarnings = $paramScan.ParseWarnings
 }
 $result | ConvertTo-Json -Depth 8 -Compress

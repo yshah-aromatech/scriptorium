@@ -249,16 +249,25 @@ func (o *Ops) GetScriptDetails(args map[string]any) (any, bool, error) {
 		return out, false, nil
 	}
 	// composed from P8's Scanner output — never a second AST scan (ruling 2)
-	var params []deps.Param
-	if res, err := o.App.Scanner.ScanPS(s.Entry, s.Dir, s.ModuleDir, s.Loose); err == nil {
-		params = res.Params
-	}
-	if params == nil {
+	res, scanErr := o.App.Scanner.ScanPS(s.Entry, s.Dir, s.ModuleDir, s.Loose)
+	params := res.Params
+	if scanErr != nil || params == nil {
 		params = []deps.Param{}
 	}
 	out["parameters"] = params
 	out["parameterSource"] = "param() block (PowerShell AST)"
 	out["argsHint"] = "PowerShell: -ParamName value, switches as bare -SwitchName; quote values with spaces"
+	// §11.9 tool 2: help/parseWarnings are conditional-on-data, not optional
+	// to implement (Scripts.psm1:374-377) — present only when the scan
+	// actually found comment-based help or a parse error.
+	if scanErr == nil {
+		if res.Synopsis != "" || res.Help != "" {
+			out["help"] = map[string]any{"synopsis": res.Synopsis, "description": res.Help}
+		}
+		if res.ParseWarnings > 0 {
+			out["parseWarnings"] = res.ParseWarnings
+		}
+	}
 	return out, false, nil
 }
 

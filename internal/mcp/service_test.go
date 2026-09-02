@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -138,11 +139,14 @@ func TestInstallUserPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// M-4: linger runs BEFORE the systemctl --user triple — it's the one
+	// call that still works with no session D-Bus, exactly the realistic
+	// first-install failure mode linger exists to fix.
 	wantCalls := []string{
+		"loginctl enable-linger sto",
 		"systemctl --user daemon-reload",
 		"systemctl --user enable scriptorium-mcp",
 		"systemctl --user restart scriptorium-mcp",
-		"loginctl enable-linger sto",
 	}
 	if len(calls) != len(wantCalls) {
 		t.Fatalf("calls = %v, want %v", calls, wantCalls)
@@ -160,6 +164,39 @@ func TestInstallUserPath(t *testing.T) {
 	}
 	if string(got) != mcp.ServiceUnit("/opt/scriptorium", "/usr/local/bin/scriptorium") {
 		t.Errorf("unit file content mismatch:\n%s", got)
+	}
+}
+
+// TestInstallUserPathLingerSurvivesNoSessionBus is the M-4 regression test:
+// the realistic first-install failure — no session D-Bus (e.g. installing
+// over SSH), where every "systemctl --user ..." call fails — must still
+// leave linger enabled, since that's precisely what fixes it for the next
+// boot. Failure is still propagated (Install returns an error), but only
+// AFTER loginctl already ran.
+func TestInstallUserPathLingerSurvivesNoSessionBus(t *testing.T) {
+	root := t.TempDir()
+	var calls []string
+	in := &mcp.Installer{
+		Root:     root,
+		IsRoot:   func() bool { return false },
+		HomeDir:  func() (string, error) { return "/home/sto", nil },
+		Username: func() string { return "sto" },
+		Run: func(bin string, args ...string) error {
+			call := bin + " " + strings.Join(args, " ")
+			calls = append(calls, call)
+			if bin == "systemctl" {
+				return errors.New("Failed to connect to bus: No such file or directory")
+			}
+			return nil
+		},
+		Out: func(string) {},
+	}
+	err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "tok")
+	if err == nil {
+		t.Fatal("Install() = nil error, want the propagated systemctl failure")
+	}
+	if len(calls) == 0 || calls[0] != "loginctl enable-linger sto" {
+		t.Fatalf("calls = %v, want loginctl enable-linger to run FIRST, before any failing systemctl --user call", calls)
 	}
 }
 

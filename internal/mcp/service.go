@@ -167,6 +167,18 @@ func (in *Installer) installUser(unit string) error {
 	if err := os.WriteFile(unitFile, []byte(unit), 0o644); err != nil {
 		return err
 	}
+	// Linger BEFORE the systemctl --user triple (M-4/judgment-call 5): the
+	// realistic first-install failure is installing over SSH with no
+	// session D-Bus, where every "systemctl --user ..." call below fails
+	// with "Failed to connect to bus" — exactly what enable-linger exists
+	// to fix. loginctl talks to logind over the SYSTEM bus, not the missing
+	// session one, so it works even when the calls below would not; running
+	// it first means linger is set (and the next boot recovers, PS parity
+	// for the persistent outcome) even if this invocation's daemon-reload/
+	// enable/restart still fail here and now.
+	if err := in.run("loginctl", "enable-linger", in.usernameFn()); err != nil {
+		return err
+	}
 	if err := in.run("systemctl", "--user", "daemon-reload"); err != nil {
 		return err
 	}
@@ -174,10 +186,6 @@ func (in *Installer) installUser(unit string) error {
 		return err
 	}
 	if err := in.run("systemctl", "--user", "restart", "scriptorium-mcp"); err != nil {
-		return err
-	}
-	// keep the user manager (and the service) alive with no session open
-	if err := in.run("loginctl", "enable-linger", in.usernameFn()); err != nil {
 		return err
 	}
 

@@ -160,6 +160,72 @@ func TestGetScriptDetailsParsesPowerShellParameters(t *testing.T) {
 	if !strings.Contains(string(b), `"name":"DryRun"`) || !strings.Contains(string(b), `"isSwitch":true`) {
 		t.Errorf("parameters missing DryRun/isSwitch: %s", b)
 	}
+	if _, ok := out["help"]; ok {
+		t.Errorf("help = %v, want absent (no comment-based help block on this script)", out["help"])
+	}
+	if _, ok := out["parseWarnings"]; ok {
+		t.Errorf("parseWarnings = %v, want absent (no parse errors)", out["parseWarnings"])
+	}
+}
+
+// TestGetScriptDetailsSurfacesHelpAndParseWarnings closes I-1: §11.9 tool 2
+// promises help{synopsis,description} and parseWarnings, conditional on the
+// scan actually finding them — composed from the SAME Scanner.ScanPS call
+// as `parameters`, never a second AST parse.
+func TestGetScriptDetailsSurfacesHelpAndParseWarnings(t *testing.T) {
+	pwshtest.RequirePwsh(t)
+	a := newTestApp(t)
+	writePS(t, a.Paths.DataDir, "documented", `<#
+.SYNOPSIS
+Does the thing.
+.DESCRIPTION
+A longer description of the thing.
+.PARAMETER Who
+Who to greet.
+#>
+param([Parameter(Mandatory)][string]$Who)
+Write-Output hi
+`)
+
+	ops := &mcp.Ops{App: a}
+	result, isErr, err := ops.GetScriptDetails(opsArgs("script", "documented"))
+	if err != nil || isErr {
+		t.Fatalf("GetScriptDetails() = %v, %v, %v", result, isErr, err)
+	}
+	out := asMap(t, result)
+	help := asMap(t, out["help"])
+	if help["synopsis"] != "Does the thing." {
+		t.Errorf("help.synopsis = %v", help["synopsis"])
+	}
+	if help["description"] != "A longer description of the thing." {
+		t.Errorf("help.description = %v", help["description"])
+	}
+	if _, ok := out["parseWarnings"]; ok {
+		t.Errorf("parseWarnings = %v, want absent (this script parses cleanly)", out["parseWarnings"])
+	}
+}
+
+// TestGetScriptDetailsSurfacesParseWarnings covers the other half: a script
+// with a real parse error (an unclosed param list) reports parseWarnings > 0
+// so an agent isn't handed a partial parameters list with no signal of that.
+func TestGetScriptDetailsSurfacesParseWarnings(t *testing.T) {
+	pwshtest.RequirePwsh(t)
+	a := newTestApp(t)
+	writePS(t, a.Paths.DataDir, "malformed", "param(\n    [string]$Name\nWrite-Output hi\n")
+
+	ops := &mcp.Ops{App: a}
+	result, isErr, err := ops.GetScriptDetails(opsArgs("script", "malformed"))
+	if err != nil || isErr {
+		t.Fatalf("GetScriptDetails() = %v, %v, %v", result, isErr, err)
+	}
+	out := asMap(t, result)
+	pw, ok := out["parseWarnings"]
+	if !ok {
+		t.Fatal("parseWarnings absent, want it present (the script has a real parse error)")
+	}
+	if n, ok := pw.(int); !ok || n < 1 {
+		t.Errorf("parseWarnings = %v, want >= 1", pw)
+	}
 }
 
 func TestGetScriptDetailsPythonReportsNoParameters(t *testing.T) {
@@ -695,15 +761,10 @@ func TestRegisteredSecretNeverLeaksInToolOutput(t *testing.T) {
 	if !strings.Contains(string(b), "***") {
 		t.Errorf("expected a redaction marker in: %s", b)
 	}
-
-	// The same registry backs run_script's -32603 path (rpc.go): a
-	// dispatch-level exception message must be redacted too. Exercised
-	// directly since forcing a real panic/exception here would need an
-	// invalid *app.App; the redaction call itself is what's under test.
-	msg := a.Sec.Redact("internal error running tool 'x': token=" + planted)
-	if strings.Contains(msg, planted) {
-		t.Fatalf("Redact did not scrub the planted secret: %q", msg)
-	}
+	// The -32603 (rpc.go) and API-500 (api.go) dispatch-exception paths are
+	// covered end to end, through the real code (not a direct Sec.Redact
+	// call), by TestDispatchExceptionBecomesMinus32603Redacted
+	// (server_test.go) and TestAPIOpsExceptionIs500Redacted (api_test.go).
 }
 
 func ops(a *app.App) *mcp.Ops { return &mcp.Ops{App: a} }

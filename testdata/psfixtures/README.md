@@ -45,6 +45,16 @@ Everything else in this directory is expected to be byte-identical across
 regenerations; a diff outside the list above means a PS behavior actually
 changed and should be reviewed as such.
 
+One more field is volatile on a *different* axis than the list above: it
+doesn't change on a same-commit regeneration, but it isn't a fixed value
+either. `mcp/01-initialize.response.json` and
+`mcp/12-initialize-alt-version.response.json` carry `result.serverInfo.version`
+(`"dc3117e"` as recorded) — `Get-StoAppVersion` is `git -C <AppDir> rev-parse
+--short HEAD` on the *PS checkout that recorded the fixture*, so this value
+changes on every commit to this repo, not on every fixture regeneration. A
+consumer (the Go rebuild's replay suite included) must normalize/ignore this
+field rather than expect either the recorded value or a stable one.
+
 ## display-width.csv is informational
 
 `display-width.csv` documents the PS app's `Get-StoDisplayWidth` function.
