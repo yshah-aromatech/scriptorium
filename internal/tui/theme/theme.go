@@ -70,7 +70,7 @@ type Colors struct {
 
 // Styles are the prebuilt lipgloss styles every view renders through.
 type Styles struct {
-	Base      lipgloss.Style // body text on the window ground
+	Base      lipgloss.Style // body text (the ground comes from the View)
 	Muted     lipgloss.Style
 	Accent    lipgloss.Style
 	Success   lipgloss.Style
@@ -89,7 +89,16 @@ type Styles struct {
 	Desc      lipgloss.Style // a key hint's description
 	RuntimePS lipgloss.Style
 	RuntimePy lipgloss.Style
+
+	// Heat is the eight-level sparkline ramp, cool to hot: Success through
+	// Warning to Danger (inventory §1.12's green→bright-yellow→red). Built
+	// once per theme so a row of sparklines is not blending colors per cell.
+	Heat [heatLevels]lipgloss.Style
 }
+
+// heatLevels is the number of block glyphs a sparkline can draw, and so the
+// number of stops the ramp needs.
+const heatLevels = 8
 
 // Theme is a palette bound to a profile: the tokens, the resolved colors and
 // the styles, built once at startup and again only on a theme change.
@@ -172,10 +181,14 @@ func New(name string, prof colorprofile.Profile) Theme {
 		RuntimePS: conv(prof, p.RuntimePS), RuntimePy: conv(prof, p.RuntimePy),
 	}
 	fg := func(x color.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(x) }
+	var heat [heatLevels]lipgloss.Style
+	for i, step := range lipgloss.Blend1D(heatLevels, c.Success, c.Warning, c.Danger) {
+		heat[i] = fg(prof.Convert(step))
+	}
 	return Theme{
 		Name: name, P: p, C: c, Profile: prof,
 		S: Styles{
-			Base:      lipgloss.NewStyle().Foreground(c.Fg).Background(c.Bg),
+			Base:      fg(c.Fg),
 			Muted:     fg(c.Muted),
 			Accent:    fg(c.Accent),
 			Success:   fg(c.Success),
@@ -194,6 +207,7 @@ func New(name string, prof colorprofile.Profile) Theme {
 			Desc:      fg(c.Muted),
 			RuntimePS: fg(c.RuntimePS),
 			RuntimePy: fg(c.RuntimePy),
+			Heat:      heat,
 		},
 	}
 }

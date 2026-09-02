@@ -26,6 +26,21 @@ func (r *runModel) selected(m *Model) *scripts.Script {
 	return &m.scripts[r.sel]
 }
 
+// selectByName is the Fleet deep-link's landing point.
+func (r *runModel) selectByName(m *Model, name string) {
+	for i, s := range m.scripts {
+		if s.Name == name {
+			r.sel = i
+			return
+		}
+	}
+}
+
+func (r *runModel) start(*Model, scripts.Script) tea.Cmd { return nil }
+func (r *runModel) sync(*Model) tea.Cmd                  { return nil }
+func (r *runModel) queueDepth() int                      { return 0 }
+func (r *runModel) active() bool                         { return false }
+
 // statusLine reports the live run, if any. The bool is what lets the status bar
 // know a run outranks a transient message.
 func (r *runModel) statusLine(*Model, int) (string, bool) { return "", false }

@@ -8,6 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -93,8 +94,30 @@ type Model struct {
 	missed    map[string]missed.Miss
 	syncedAt  time.Time
 
+	// spin is the shared run spinner. It only ticks while something is
+	// actually running (§12.10's budget rule: an idle TUI should cost nothing),
+	// so an idle session is genuinely idle.
+	spin   spinner.Model
+	spinOn bool
+
 	fleet fleetModel
 	run   runModel
+}
+
+// spinnerFrame is the glyph any view showing "this is running" should use.
+func (m *Model) spinnerFrame() string { return m.spin.View() }
+
+// animating is true while there is something worth animating for.
+func (m *Model) animating() bool { return len(m.live) > 0 || m.run.active() }
+
+// kickSpinner starts the spinner ticking if something just became live, and
+// lets it stop otherwise.
+func (m *Model) kickSpinner() tea.Cmd {
+	if !m.animating() || m.spinOn {
+		return nil
+	}
+	m.spinOn = true
+	return m.spin.Tick
 }
 
 // New builds the root model. now is injectable for determinism; pass time.Now.
@@ -107,12 +130,17 @@ func New(a *app.App, now func() time.Time) *Model {
 	// only from code until phase 11's command palette gets a picker.
 	host, _ := os.Hostname()
 	m := &Model{
-		app:       a,
-		keys:      defaultKeys(),
-		help:      help.New(),
-		now:       now,
-		host:      host,
-		version:   buildinfo.Version,
+		app:     a,
+		keys:    defaultKeys(),
+		help:    help.New(),
+		now:     now,
+		host:    host,
+		version: buildinfo.Version,
+		spin: spinner.New(spinner.WithSpinner(spinner.Spinner{
+			// the PS app's braille spinner, verbatim (inventory §1.12)
+			Frames: []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
+			FPS:    time.Second / 10,
+		})),
 		statuses:  map[string]history.Last{},
 		schedules: map[string]string{},
 		missed:    map[string]missed.Miss{},
@@ -218,7 +246,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case LiveRunsMsg:
 		m.live = msg
-		return m, nil
+		return m, m.kickSpinner()
+
+	case spinner.TickMsg:
+		if !m.animating() {
+			m.spinOn = false // nothing is running: stop burning frames
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
 
 	case MissedMsg:
 		return m, m.onMissed(msg)

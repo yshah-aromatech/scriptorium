@@ -122,6 +122,34 @@ func TestUnknownPaletteFallsBack(t *testing.T) {
 	}
 }
 
+// The sparkline ramp runs cool to hot and ends where the status colors do, so
+// a busy bar reads as "hot" without a legend.
+func TestHeatRamp(t *testing.T) {
+	th := theme.New(theme.Default, colorprofile.TrueColor)
+	first, last := th.S.Heat[0].Render("x"), th.S.Heat[7].Render("x")
+	if want := th.S.Success.Render("x"); first != want {
+		t.Errorf("heat[0] = %q, want the Success color %q", first, want)
+	}
+	if want := th.S.Danger.Render("x"); last != want {
+		t.Errorf("heat[7] = %q, want the Danger color %q", last, want)
+	}
+	seen := map[string]bool{}
+	warned := false
+	for _, s := range th.S.Heat {
+		r := s.Render("x")
+		seen[r] = true
+		if r == th.S.Warning.Render("x") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("the ramp never passes through the Warning color")
+	}
+	if len(seen) < 6 {
+		t.Errorf("the ramp has %d distinct stops, want a readable spread", len(seen))
+	}
+}
+
 func TestRegisterAndColors(t *testing.T) {
 	theme.Register("test-only", theme.Palette{
 		Bg: "#000000", Fg: "#ffffff", Muted: "#808080", Border: "#404040",
