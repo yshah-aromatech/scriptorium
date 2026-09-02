@@ -11,8 +11,8 @@
                                             │                                                                                                                                                           
 ─ keys ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  # views                                                                                            # tools                                                                                             
-  1       fleet                                                                                      /       filter                                                                                     
-  2       run                                                                                        ctrl+f  search                                                                                     
+  1       fleet                                                                                      /       filter list                                                                                
+  2       run                                                                                        ctrl+f  search output · n/N next/prev                                                              
   3       history                                                                                    U       self-update                                                                                
   4       schedules                                                                                  t       webhook test                                                                               
                                                                                                                                                                                                         
@@ -28,10 +28,10 @@
                                                                                                      y/↵     confirm                                                                                    
  # fleet                                                                                             n       no                                                                                         
   ↵       open                                                                                       ctrl+s  save                                                                                       
-  f       filter                                                                                     esc     close                                                                                      
+  f       failures / scope                                                                           esc     close                                                                                      
                                                                                                                                                                                                         
  # run                                                                                                                                                                                                  
-  r       run                                                                                                                                                                                           
+  r       run script                                                                                                                                                                                    
   a       args                                                                                                                                                                                          
   x       kill                                                                                                                                                                                          
   X       clear queue                                                                                                                                                                                   
@@ -41,11 +41,11 @@
   l       lint                                                                                                                                                                                          
   u       upgrade                                                                                                                                                                                       
   v       last log                                                                                                                                                                                      
-  c       copy output                                                                                                                                                                                   
+  y       copy all output                                                                                                                                                                               
+  c       clear output                                                                                                                                                                                  
   h       script history                                                                                                                                                                                
                                                                                                                                                                                                         
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                            │                                                                                                                                                           
                                             │                                                                                                                                                           
                                             │                                                                                                                                                           
 ─ details ──────────────────────────────────│                                                                                                                                                           
@@ -57,4 +57,4 @@
    cpu 66% peak · mem 61.2MB peak           │                                                                                                                                                           
    at 2026-09-02 14:27:00                   │                                                                                                                                                           
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-any key close
+↑/k up · ↓/j down · any other key close

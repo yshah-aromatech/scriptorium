@@ -250,9 +250,9 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 		want  []string // the pane's primary keys, ahead of q/:/?
 		tail  []string // the rest of the pane's keys, after them
 	}{
-		{modeFleet, focusList, []string{"↑/k", "↓/j", "↵", "f", "r", "s"}, nil},
+		{modeFleet, focusList, []string{"↑/k", "↓/j", "↵", "f", "r"}, []string{"s"}},
 		{modeRun, focusList, []string{"↑/k", "↓/j", "tab", "r", "a", "x", "s"},
-			[]string{"e", "i", "l", "v", "c", "h", "X", "/", "ctrl+f", "U", "t"}},
+			[]string{"e", "i", "l", "v", "y", "c", "h", "X", "/", "ctrl+f", "U", "t"}},
 		{modeRun, focusOutput, []string{"↑/k", "↓/j", "pgup", "end", "tab", "r", "x"}, nil},
 		{modeHistory, focusList, []string{"↑/k", "↓/j", "↵", "r", "f"}, nil},
 		{modeSchedules, focusList, []string{"↑/k", "↓/j", "e/↵"}, nil},

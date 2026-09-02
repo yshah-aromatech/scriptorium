@@ -91,14 +91,18 @@ func (o *outputPane) selectedText() string {
 	return o.buf.Rejoin(from.row, from.col, to.row, to.col)
 }
 
-// visibleText is everything currently on screen, rejoined the same way — what
-// `c` copies.
-func (o *outputPane) visibleText() string {
-	if len(o.buf.Wrapped) == 0 {
-		return ""
-	}
-	last := min(o.scroll+o.rows()-1, len(o.buf.Wrapped)-1)
-	return o.buf.Rejoin(o.scroll, 0, last, maxCell)
+// allText is the whole retained buffer — what `y` copies, and exactly what
+// Invoke-TuiCopy copies (`$S.Lines -join "\n"`, src/Tui.psm1:913). The SOURCE
+// lines, not the wrapped rows: a copy must not carry the pane's line breaks
+// into someone's paste buffer. Redaction already happened on the way in.
+func (o *outputPane) allText() string { return strings.Join(o.buf.Lines, "\n") }
+
+// clear empties the panel — Clear-TuiOutput (src/Tui.psm1:597): the buffer,
+// the scroll, the selection, and back to following.
+func (o *outputPane) clear() {
+	o.buf.Reset()
+	o.scroll, o.follow = 0, true
+	o.clearSelection()
 }
 
 // maxCell is "to the end of the row" as a cell index: past any real line, and
@@ -140,8 +144,8 @@ func (o *outputPane) reset(title string, maxLines int) {
 // begin retitles the pane for a new run and jumps back to the tail WITHOUT
 // clearing it. One continuous scrollback across runs is the PS behaviour and
 // the more useful one — you can still see what the previous run said, and the
-// retention cap keeps it bounded. Clearing is an explicit action (phase 11's
-// `c`), never a side effect of starting something.
+// retention cap keeps it bounded. Clearing is an explicit action (`c` → clear
+// above), never a side effect of starting something.
 func (o *outputPane) begin(title string) {
 	o.title = title
 	o.follow = true

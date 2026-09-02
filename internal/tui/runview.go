@@ -380,10 +380,16 @@ func (r *runModel) onKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		return r.viewLog(m)
 
 	case key.Matches(msg, k.Copy):
-		// what is ON SCREEN, and it comes out of the redacted buffer — every
-		// line in there passed the runner's or the task's redaction on the way
-		// in, so a copy cannot leak what the pane never showed
-		return m.copyToClipboard(r.out.visibleText())
+		// the WHOLE retained buffer (Invoke-TuiCopy), out of the redacted
+		// store — every line in there passed the runner's or the task's
+		// redaction on the way in, so a copy cannot leak what the pane never
+		// showed. The 72 KB OSC 52 cap in the clipboard stack exists for
+		// exactly this case.
+		return m.copyToClipboard(r.out.allText())
+
+	case key.Matches(msg, k.ClearOut):
+		r.out.clear()
+		return status(StatusInfo, "output cleared")
 
 	case key.Matches(msg, k.Scoped):
 		return r.openHistory(m)

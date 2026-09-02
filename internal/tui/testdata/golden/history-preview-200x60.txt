@@ -57,4 +57,4 @@ dumping schema public (18 tables)
 
 
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-↑/k up · ↓/j down · ↵ open · r run · f filter · q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules
+↑/k up · ↓/j down · ↵ open · r run script · f failures / scope · q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules

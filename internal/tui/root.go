@@ -31,6 +31,10 @@ const (
 	modeRun
 	modeHistory
 	modeSchedules
+
+	// modeAny is not a view: it marks a key group whose keys work in every one
+	// of them (keys.go, and the palette's view switch).
+	modeAny mode = -1
 )
 
 // Which pane of a two-pane view has the keyboard.

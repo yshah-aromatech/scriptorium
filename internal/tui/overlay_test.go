@@ -73,23 +73,111 @@ func TestPaletteListsEveryLiveBinding(t *testing.T) {
 	m := newFixtureModel(t, truecolorEnv)
 	p := newPalette(m)
 
-	listed := map[string]bool{}
+	// keyed by KEY-STRING, not by description: two bindings that happen to
+	// share a description would otherwise mask each other's absence.
+	listed := map[string]paletteItem{}
 	for _, it := range p.items {
-		listed[it.b.Help().Desc] = true
+		listed[strings.Join(it.b.Keys(), ",")] = it
 	}
 	for _, g := range m.keys.groups() {
 		for _, b := range g.Keys {
-			desc := b.Help().Desc
+			id := strings.Join(b.Keys(), ",")
+			it, ok := listed[id]
 			switch {
-			case g.Modal && listed[desc]:
-				t.Errorf("the palette lists %q, a key that only exists inside an overlay", desc)
-			case !g.Modal && !listed[desc]:
-				t.Errorf("the palette is missing %q (group %q)", desc, g.Title)
+			case g.Modal && ok:
+				t.Errorf("the palette lists %q, a key that only exists inside an overlay", id)
+			case !g.Modal && !ok:
+				t.Errorf("the palette is missing %q (%q, group %q)", id, b.Help().Desc, g.Title)
+			case !g.Modal && it.owner != g.Owner:
+				t.Errorf("palette entry %q owns mode %v, want its group's %v", id, it.owner, g.Owner)
 			}
 		}
 	}
 	if len(p.shown) != len(p.items) {
 		t.Errorf("an unfiltered palette shows %d of %d items", len(p.shown), len(p.items))
+	}
+}
+
+// Every description in the key set is distinct: the help overlay and the
+// palette render descriptions, so two bindings reading the same thing are two
+// commands a user cannot tell apart.
+func TestBindingDescriptionsAreDistinct(t *testing.T) {
+	seen := map[string]string{}
+	for _, g := range defaultKeys().groups() {
+		for _, b := range g.Keys {
+			desc := b.Help().Desc
+			if other, dup := seen[desc]; dup {
+				t.Errorf("%q and %q both describe themselves as %q",
+					other, strings.Join(b.Keys(), ","), desc)
+			}
+			seen[desc] = strings.Join(b.Keys(), ",")
+		}
+	}
+}
+
+// The palette stands in the view a command belongs to before replaying its
+// key. Without this a Run-only command picked from Fleet is a silent no-op,
+// and the two `e` bindings run each other's action.
+func TestPaletteExecutesInTheOwningView(t *testing.T) {
+	// selects the palette entry for a KEY-STRING (not by typing a query — the
+	// fuzzy matcher has its own test; this one is about what Enter does)
+	pick := func(t *testing.T, from mode, keys string) *Model {
+		t.Helper()
+		m := newFixtureModel(t, truecolorEnv)
+		m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+		m.mode = from
+		m.run.selectByName(m, "backup-db")
+		press(m, ":")
+		p, ok := m.ov.(*paletteOverlay)
+		if !ok {
+			t.Fatal(": did not open the palette")
+		}
+		p.sel = -1
+		for i, si := range p.shown {
+			if strings.Join(p.items[si].b.Keys(), ",") == keys {
+				p.sel = i
+				break
+			}
+		}
+		if p.sel < 0 {
+			t.Fatalf("the palette has no entry for %q", keys)
+		}
+		cmd := press(m, "enter")
+		if msg := cmdMsg(cmd); msg != nil {
+			send(m, msg)
+		}
+		return m
+	}
+
+	// a Run-view command picked from Fleet lands in Run and actually runs
+	m := pick(t, modeFleet, "e") // run · e .env
+	if m.mode != modeRun {
+		t.Errorf(".env from Fleet left the mode at %v", m.mode)
+	}
+	if m.ov == nil || m.ov.kind() != overlayEnv {
+		t.Errorf(".env from Fleet opened %T, want the env editor", m.ov)
+	}
+
+	// and the mirror image: the schedules `e` from the Run view must edit a
+	// SCHEDULE, not open the .env editor (both bindings' first key is "e")
+	m = pick(t, modeRun, "e,enter") // schedules · e/↵ edit
+	if m.mode != modeSchedules {
+		t.Errorf("edit-schedule from Run left the mode at %v", m.mode)
+	}
+	if m.ov == nil || m.ov.kind() != overlayInput {
+		t.Fatalf("edit-schedule from Run opened %T, want the schedule prompt", m.ov)
+	}
+	if in, _ := m.ov.(*inputOverlay); in != nil && in.kindOf != inputSchedule {
+		t.Errorf("the prompt is a %v prompt, want a schedule one", in.kindOf)
+	}
+
+	// a global command still works from anywhere without moving the view
+	m = pick(t, modeHistory, "?") // session · ? help
+	if m.mode != modeHistory {
+		t.Errorf("a global command switched the view to %v", m.mode)
+	}
+	if m.ov == nil || m.ov.kind() != overlayHelp {
+		t.Errorf("help from the palette opened %T", m.ov)
 	}
 }
 
@@ -306,12 +394,61 @@ func TestHelpOverlayShowsTheWholeKeySet(t *testing.T) {
 		}
 	}
 	// the footer follows the overlay, not the view behind it
-	if !strings.Contains(frame, "any key") {
+	if !strings.Contains(frame, "any other key") {
 		t.Errorf("the footer still shows the view's keys under the help overlay:\n%s", frame)
 	}
 	press(m, "z")
 	if m.ov != nil {
 		t.Error("a key did not close the help overlay")
+	}
+}
+
+// AT THE 80x24 CONTRACT FLOOR the whole key set does not fit, so the card has
+// to say so and scrolling has to reach the rest. A help screen that silently
+// hides half of itself is worse than one that is honestly too small.
+func TestHelpOverlayScrollsAtTheFloor(t *testing.T) {
+	m := runAt(t, 80, 24)
+	press(m, "?")
+	first := plainFrame(m)
+
+	if !strings.Contains(first, "▼ ") || !strings.Contains(first, "more — ↑↓ scrolls") {
+		t.Errorf("nothing on screen says the key set continues below:\n%s", first)
+	}
+	// and the footer must not claim any key closes, when ↑↓ do not
+	if !strings.Contains(first, "↑/k up") || !strings.Contains(first, "any other key close") {
+		t.Errorf("the footer is not honest about scrolling:\n%s", first)
+	}
+
+	// scrolling down reaches everything the 120x40 card shows at once
+	seen := first
+	for range 60 {
+		press(m, "down")
+		seen += plainFrame(m)
+	}
+	for _, g := range m.keys.groups() {
+		if !strings.Contains(seen, "# "+g.Title) {
+			t.Errorf("scrolling never reached the %q group", g.Title)
+		}
+		for _, b := range g.Keys {
+			if !strings.Contains(seen, b.Help().Desc) {
+				t.Errorf("scrolling never reached %q", b.Help().Desc)
+			}
+		}
+	}
+	// at the bottom the marker is gone rather than promising more
+	if last := plainFrame(m); strings.Contains(last, "more — ↑↓ scrolls") {
+		t.Errorf("the bottom of the help still advertises more below:\n%s", last)
+	}
+	// scrolling back up restores it, and any other key still closes
+	for range 60 {
+		press(m, "up")
+	}
+	if !strings.Contains(plainFrame(m), "more — ↑↓ scrolls") {
+		t.Error("scrolling back to the top lost the marker")
+	}
+	press(m, "z")
+	if m.ov != nil {
+		t.Error("a key other than the scroll keys did not close the overlay")
 	}
 }
 

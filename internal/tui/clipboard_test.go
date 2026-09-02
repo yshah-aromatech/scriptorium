@@ -304,8 +304,16 @@ func TestClickToCopyDeviceCode(t *testing.T) {
 	}
 }
 
-// `c` copies what is on screen, rejoined out of the REDACTED buffer.
-func TestCopyVisibleOutput(t *testing.T) {
+// `y` copies the WHOLE retained buffer out of the REDACTED store — every line,
+// not the screenful the pane happens to be showing (Invoke-TuiCopy,
+// src/Tui.psm1:913).
+//
+// DELIBERATE REPLACEMENT of the phase-11 wave-A test that asserted the
+// opposite ("the copy is not the VISIBLE window" — it required `line 0` to be
+// ABSENT). That assertion locked in a floor cut: PS copies the scrollback, and
+// a one-screen copy is a strict subset of it, not a substitute. The visible-
+// window copy no longer exists; drag-copy is what bounds a copy to a region.
+func TestCopyCopiesTheWholeBuffer(t *testing.T) {
 	m := runAt(t, 120, 40)
 	noTools(t)
 	m.run.out.reset("output", 5000)
@@ -314,17 +322,59 @@ func TestCopyVisibleOutput(t *testing.T) {
 		m.run.out.append(fmt.Sprintf("line %d", i))
 	}
 
-	rep := findMsg[ClipboardMsg](t, press(m, "c"))
-	text := m.run.out.visibleText()
+	rep := findMsg[ClipboardMsg](t, press(m, "y"))
+	text := m.run.out.allText()
 	if rep.Chars != len([]rune(text)) {
 		t.Errorf("the toast reported %d chars for %q", rep.Chars, text)
 	}
-	if !strings.Contains(text, "line 19") || strings.Contains(text, "line 0\n") {
-		t.Errorf("the copy is not the VISIBLE window:\n%q", text)
+	// every line, including the ones scrolled off the top of a 6-row pane
+	for _, want := range []string{"line 0\n", "line 9\n", "line 19"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the copy is missing %q — it is not the whole buffer:\n%q", want, text)
+		}
+	}
+	// SOURCE lines, not wrapped rows: the pane's own line breaks must not end
+	// up in someone's paste buffer
+	if got := strings.Count(text, "\n"); got != 19 {
+		t.Errorf("the copy has %d newlines for 20 source lines: %q", got, text)
 	}
 	send(m, ClipboardMsg{How: "OSC 52", Chars: rep.Chars})
 	if !strings.Contains(textkit.StripANSI(m.statusBar()), "copied") {
 		t.Errorf("no copy toast: %q", m.statusText)
+	}
+}
+
+// `c` empties the panel (Clear-TuiOutput, src/Tui.psm1:597): the buffer, the
+// scroll, the selection, and back to following the tail.
+func TestClearOutputPanel(t *testing.T) {
+	m := runAt(t, 120, 40)
+	m.run.out.reset("output", 5000)
+	m.run.out.resize(runLayoutFor(120, m.bodyHeight()).outW, 6)
+	for i := range 20 {
+		m.run.out.append(fmt.Sprintf("line %d", i))
+	}
+	m.run.out.scrollBy(-5)
+	m.run.out.beginDrag(0, 0)
+	m.run.out.dragTo(1, 4)
+
+	send(m, keyMsg("c"))
+	if got := len(m.run.out.buf.Lines); got != 0 {
+		t.Errorf("`c` left %d lines in the buffer", got)
+	}
+	if len(m.run.out.buf.Wrapped) != 0 || len(m.run.out.buf.WrapSrc) != 0 {
+		t.Error("`c` left the wrap cache behind")
+	}
+	if m.run.out.scroll != 0 || !m.run.out.follow {
+		t.Errorf("`c` left scroll=%d follow=%v", m.run.out.scroll, m.run.out.follow)
+	}
+	if m.run.out.selecting() {
+		t.Error("`c` left a selection pointing into a buffer that is gone")
+	}
+	if !strings.Contains(m.statusText, "output cleared") {
+		t.Errorf("status = %q", m.statusText)
+	}
+	if !strings.Contains(plainFrame(m), "─ output") {
+		t.Errorf("the pane vanished instead of emptying:\n%s", plainFrame(m))
 	}
 }
 

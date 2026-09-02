@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -60,16 +61,36 @@ func (h *helpOverlay) layout(m *Model, w int) []string {
 // being two readable columns.
 const twoColumnWidth = 76
 
+// height takes the whole body when the key set needs it. The card is the one
+// overlay whose content is fixed and large, so leaving decorative rows of the
+// view showing above and below it costs real content: at 120x40 those two rows
+// are the difference between the whole key set and a scroll.
 func (h *helpOverlay) height(m *Model, w, bodyH int) int {
-	return min(len(h.layout(m, w)), max(bodyH-4, 3))
+	return min(len(h.layout(m, w)), max(bodyH-2, 3))
 }
 
+// hints has to be true: ↑/↓ scroll here rather than closing, and at the 80x24
+// floor the card cannot show the whole key set at once, so saying "any key
+// close" alone would be an instruction that loses you half the help.
 func (h *helpOverlay) hints(m *Model) []key.Binding {
-	return []key.Binding{key.NewBinding(key.WithKeys("esc"), key.WithHelp("any key", "close"))}
+	return []key.Binding{
+		m.keys.Up, m.keys.Down,
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("any other key", "close")),
+	}
 }
 
+// rows windows the layout and, when anything is below the fold, spends the last
+// visible row saying so. A help screen that silently hides half of itself is
+// worse than one that is honestly too small — which is exactly what the 80x24
+// contract size is.
 func (h *helpOverlay) rows(m *Model, w, hgt int) []string {
-	return h.window(h.layout(m, w), hgt)
+	all := h.layout(m, w)
+	rows := h.window(all, hgt)
+	if below := len(all) - h.scroll - len(rows); below > 0 && len(rows) > 0 {
+		rows[len(rows)-1] = m.th.S.Warning.Render(
+			" ▼ " + strconv.Itoa(below) + " more — ↑↓ scrolls")
+	}
+	return rows
 }
 
 // splitAt moves a column split to the next blank line at or after want, so a

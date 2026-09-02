@@ -1,9 +1,8 @@
  ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2 
-─ scripts ────────────────│─ output ────────────────────────────────────────────
 ─ keys ─────────────────────────────────────────────────────────────────────────
  # views                                # tools                                 
-  1       fleet                          /       filter                         
-  2       run                            ctrl+f  search                         
+  1       fleet                          /       filter list                    
+  2       run                            ctrl+f  search output · n/N next/prev  
   3       history                        U       self-update                    
   4       schedules                      t       webhook test                   
                                                                                 
@@ -18,7 +17,8 @@
   end     follow                        # overlays                              
                                          y/↵     confirm                        
  # fleet                                 n       no                             
+  ↵       open                           ctrl+s  save                           
+  ▼ 16 more — ↑↓ scrolls                                                        
 ────────────────────────────────────────────────────────────────────────────────
-   at 2026-09-02 14:27:00 │                                                     
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-any key close
+↑/k up · ↓/j down · any other key close

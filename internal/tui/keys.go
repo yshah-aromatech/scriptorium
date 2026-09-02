@@ -55,6 +55,7 @@ type keyMap struct {
 	Upgrade      key.Binding
 	ViewLog      key.Binding
 	Copy         key.Binding
+	ClearOut     key.Binding
 	Scoped       key.Binding
 	Filter       key.Binding
 	SearchOutput key.Binding
@@ -96,24 +97,34 @@ func defaultKeys() keyMap {
 		Bottom:   key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
 
 		Open:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "open")),
-		FailFilter: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter")),
+		FailFilter: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "failures / scope")),
 
-		Focus:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
-		Start:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "run")),
-		Args:         key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "args")),
-		Kill:         key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")),
-		ClearQueue:   key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "clear queue")),
-		Sync:         key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sync")),
-		Follow:       key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "follow")),
-		Env:          key.NewBinding(key.WithKeys("e"), key.WithHelp("e", ".env")),
-		Deps:         key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "deps")),
-		Lint:         key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "lint")),
-		Upgrade:      key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade")),
-		ViewLog:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "last log")),
-		Copy:         key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy output")),
-		Scoped:       key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "script history")),
-		Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		SearchOutput: key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "search")),
+		Focus:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
+		Start:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "run script")),
+		Args:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "args")),
+		Kill:       key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")),
+		ClearQueue: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "clear queue")),
+		Sync:       key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sync")),
+		Follow:     key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "follow")),
+		Env:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", ".env")),
+		Deps:       key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "deps")),
+		Lint:       key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "lint")),
+		Upgrade:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade")),
+		ViewLog:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "last log")),
+		// PS's own pair (Tui.psm1:1133-1134, advertised together in its help as
+		// "y / c — copy output to clipboard / clear the output panel"): y copies
+		// the WHOLE retained buffer, c empties the panel. y does not collide
+		// with the confirm overlay's Accept ("y","enter") — an overlay takes
+		// every key before a view sees it, exactly as PS's modal modes do.
+		Copy:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy all output")),
+		ClearOut: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clear output")),
+		Scoped:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "script history")),
+		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter list")),
+		// n/N are documented INSIDE this description, exactly as PS does it
+		// (Tui.psm1:2203) — they are real keys with no binding of their own
+		// (see the note on the field), and the help overlay is where a user
+		// looks for them.
+		SearchOutput: key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "search output · n/N next/prev")),
 		SelfUpdate:   key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "self-update")),
 		WebhookTest:  key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "webhook test")),
 
@@ -137,6 +148,13 @@ type keyGroup struct {
 	Title string
 	Keys  []key.Binding
 
+	// Owner is the view these keys belong to, or modeAny for the ones that
+	// work everywhere. The command palette switches to Owner before replaying
+	// a key: without it a Run-only command picked from the Fleet view is a
+	// silent no-op, and the two `e` bindings (.env / edit schedule) execute
+	// each other's action depending on where you happened to be standing.
+	Owner mode
+
 	// Modal marks a group whose keys exist only while an overlay is open.
 	// Help lists them (they are real keys a user needs to know); the palette
 	// does not, because "run y confirm" from the palette is a no-op by
@@ -146,22 +164,22 @@ type keyGroup struct {
 
 func (k keyMap) groups() []keyGroup {
 	return []keyGroup{
-		{Title: "views", Keys: []key.Binding{k.Fleet, k.Run, k.History, k.Schedules}},
-		{Title: "move", Keys: []key.Binding{
+		{Title: "views", Owner: modeAny, Keys: []key.Binding{k.Fleet, k.Run, k.History, k.Schedules}},
+		{Title: "move", Owner: modeAny, Keys: []key.Binding{
 			k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom, k.Focus, k.Follow}},
-		{Title: "fleet", Keys: []key.Binding{k.Open, k.FailFilter}},
-		{Title: "run", Keys: []key.Binding{
+		{Title: "fleet", Owner: modeFleet, Keys: []key.Binding{k.Open, k.FailFilter}},
+		{Title: "run", Owner: modeRun, Keys: []key.Binding{
 			k.Start, k.Args, k.Kill, k.ClearQueue, k.Sync,
-			k.Env, k.Deps, k.Lint, k.Upgrade, k.ViewLog, k.Copy, k.Scoped}},
+			k.Env, k.Deps, k.Lint, k.Upgrade, k.ViewLog, k.Copy, k.ClearOut, k.Scoped}},
 		// its own group rather than folded into "run" above: the help
 		// overlay's two-column split balances on a group boundary, and
 		// tacking four more entries onto an already-long group pushed the
 		// balance point INSIDE it, clipping the tail off the visible window
 		// at 120x40 (TestHelpOverlayShowsTheWholeKeySet caught it).
-		{Title: "tools", Keys: []key.Binding{k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}},
-		{Title: "schedules", Keys: []key.Binding{k.ScheduleEdit}},
-		{Title: "session", Keys: []key.Binding{k.Palette, k.Help, k.Quit}},
-		{Title: "overlays", Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Save, k.Close}},
+		{Title: "tools", Owner: modeRun, Keys: []key.Binding{k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}},
+		{Title: "schedules", Owner: modeSchedules, Keys: []key.Binding{k.ScheduleEdit}},
+		{Title: "session", Owner: modeAny, Keys: []key.Binding{k.Palette, k.Help, k.Quit}},
+		{Title: "overlays", Owner: modeAny, Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Save, k.Close}},
 	}
 }
 
@@ -184,14 +202,18 @@ func (m *Model) hints() []key.Binding {
 	var primary, secondary []key.Binding
 	switch m.mode {
 	case modeFleet:
-		primary = []key.Binding{k.Up, k.Down, k.Open, k.FailFilter, k.Start, k.Sync}
+		// Sync is secondary here purely for the 80-column cut: the four ahead
+		// of it plus `q` is exactly what fits, and `q` is the one written
+		// nowhere else on screen.
+		primary = []key.Binding{k.Up, k.Down, k.Open, k.FailFilter, k.Start}
+		secondary = []key.Binding{k.Sync}
 	case modeRun:
 		if m.focus == focusOutput {
 			primary = []key.Binding{k.Up, k.Down, k.PageUp, k.Follow, k.Focus, k.Start, k.Kill}
 		} else {
 			primary = []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
-			secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Copy, k.Scoped, k.ClearQueue,
-				k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}
+			secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Copy, k.ClearOut,
+				k.Scoped, k.ClearQueue, k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}
 		}
 	case modeHistory:
 		primary = []key.Binding{k.Up, k.Down, k.Open, k.Start, k.FailFilter}

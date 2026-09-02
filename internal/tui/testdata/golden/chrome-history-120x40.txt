@@ -37,4 +37,4 @@
 
 
  ⚠ missed run: nightly-report — the scheduled fire never arrived
-↑/k up · ↓/j down · ↵ open · r run · f filter · q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules
+↑/k up · ↓/j down · ↵ open · r run script · f failures / scope · q quit · : commands · ? help · 1 fleet · 2 run …

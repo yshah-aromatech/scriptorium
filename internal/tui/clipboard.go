@@ -10,17 +10,23 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // The clipboard stack.
 //
 // EMPIRICAL FINDING (bubbletea v2.0.9, x/ansi v0.11.8): tea.SetClipboard emits
-// a bare `ESC ] 52 ; c ; <base64> BEL` and NOTHING in either package wraps it
-// for tmux or screen — there is no DCS pass-through anywhere in the runtime.
-// The architecture note assumed v2 might do it; it does not. So the
-// hand-rolled wrapper is not a fallback here, it is the only path that works
-// under a multiplexer, and it is gated on $TMUX/$STY exactly as the PS app
-// gates its own (Copy-StoClipboard, src/Core.psm1:702).
+// a bare `ESC ] 52 ; c ; <base64> BEL` (tea.go:821 -> ansi.SetSystemClipboard)
+// and the RUNTIME never wraps it for tmux or screen — no code path in
+// bubbletea passes a clipboard write through a DCS sequence. The architecture
+// note assumed v2 might do it; it does not, so the app has to wrap it itself.
+//
+// x/ansi DOES ship the wrapper for that — TmuxPassthrough (passthrough.go),
+// tested upstream on this exact OSC 52 case — so this uses it rather than
+// keeping a second copy of a sequence that is only correct if it is
+// byte-identical. The gate on $TMUX/$STY is the PS app's own
+// (Copy-StoClipboard, src/Core.psm1:702), and TestOSC52Bytes pins the emitted
+// bytes against PS's literal construction either way.
 //
 // Order of mechanisms, and why it is not the PS order:
 //
@@ -62,10 +68,10 @@ func osc52(text string) string {
 
 // tmuxWrap wraps a sequence in tmux's DCS pass-through, doubling every inner
 // ESC. tmux and screen swallow OSC 52 without it (and tmux additionally needs
-// `allow-passthrough on`).
-func tmuxWrap(seq string) string {
-	return "\x1bPtmux;" + strings.ReplaceAll(seq, "\x1b", "\x1b\x1b") + "\x1b\\"
-}
+// `allow-passthrough on`). One-line delegation to x/ansi, kept as a named
+// function because the tests read better against the name and because it is
+// where the "why" lives.
+func tmuxWrap(seq string) string { return ansi.TmuxPassthrough(seq) }
 
 // underMultiplexer reports whether the OSC 52 write has to survive a tmux or
 // screen session. env is passed in so a test never depends on the process's own.

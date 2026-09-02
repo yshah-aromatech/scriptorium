@@ -8,11 +8,10 @@
  ▶ sync-orders    pull orders from the ERP into po… py ▃▆█▅▂▁                   12m│─ live now ─────────────────────────
                                                                                    │ ⠋ sync-orders↗    1m ·4242
                                                                                    │
-                                                                                   │─ recent ───────────────────────────
 ─ commands ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ❯ ru                                                                                                                   
  ▎ 2      run  ·  views                                                                                                 
-   r      run  ·  run                                                                                                   
+   r      run script  ·  run                                                                                            
    a      args  ·  run                                                                                                  
    x      kill  ·  run                                                                                                  
    X      clear queue  ·  run                                                                                           
@@ -22,10 +21,11 @@
    l      lint  ·  run                                                                                                  
    u      upgrade  ·  run                                                                                               
    v      last log  ·  run                                                                                              
-   c      copy output  ·  run                                                                                           
+   y      copy all output  ·  run                                                                                       
+   c      clear output  ·  run                                                                                          
    h      script history  ·  run                                                                                        
+   ctrl+f search output · n/N next/prev  ·  tools                                                                       
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                                                                   │
                                                                                    │
                                                                                    │
                                                                                    │

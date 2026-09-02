@@ -15,9 +15,10 @@ import (
 //
 // It executes a command by REPLAYING its key, not by calling a handler of its
 // own: the entry list comes from keyMap.groups() and Enter synthesises that
-// binding's first key as a KeyPressMsg. So the palette has no table of actions
-// to keep in step with the keys — it cannot list a command that does not exist,
-// and it cannot miss one that does.
+// binding's first key as a KeyPressMsg, after switching to the view that owns
+// it. So the palette has no table of actions to keep in step with the keys —
+// it cannot list a command that does not exist, it cannot miss one that does,
+// and it cannot run a different one than the entry you picked.
 type paletteOverlay struct {
 	ti    textinput.Model
 	items []paletteItem
@@ -28,6 +29,7 @@ type paletteOverlay struct {
 
 type paletteItem struct {
 	group string
+	owner mode
 	b     key.Binding
 }
 
@@ -41,7 +43,7 @@ func paletteItems(k keyMap) []paletteItem {
 			continue
 		}
 		for _, b := range g.Keys {
-			out = append(out, paletteItem{group: g.Title, b: b})
+			out = append(out, paletteItem{group: g.Title, owner: g.Owner, b: b})
 		}
 	}
 	return out
@@ -144,7 +146,16 @@ func (p *paletteOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		if len(p.shown) == 0 {
 			return nil, true
 		}
-		return replay(p.items[p.shown[p.sel]].b), true
+		it := p.items[p.shown[p.sel]]
+		// Stand where the command lives before replaying its key. Without this
+		// a Run-only command picked from Fleet is a silent no-op, and the two
+		// `e` bindings (.env / edit schedule) run each other's action depending
+		// on which view happened to be open. This runs inside Update, so the
+		// switch has already happened when the replayed key arrives.
+		if it.owner != modeAny {
+			m.switchTo(it.owner)
+		}
+		return replay(it.b), true
 	}
 	var cmd tea.Cmd
 	p.ti, cmd = p.ti.Update(msg)
