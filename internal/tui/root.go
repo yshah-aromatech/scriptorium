@@ -290,7 +290,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
-		m.help.SetWidth(m.w)
 		m.relayout()
 		return m, nil
 
@@ -522,10 +521,32 @@ func (m *Model) frame() string {
 	rows = append(rows, m.header())
 	rows = append(rows, m.body()...)
 	rows = append(rows, m.statusBar())
-	// bubbles/help truncates by its own width accounting, which does not always
-	// land on ours; the frame's last row must never be wider than the frame.
-	rows = append(rows, textkit.Truncate(m.help.ShortHelpView(m.hints()), m.w))
+	rows = append(rows, m.footer())
 	return strings.Join(rows, "\n")
+}
+
+// footer renders the key hints, dropping WHOLE hints off the end until the row
+// fits. bubbles/help does its own dropping, but when there is no room left even
+// for its ellipsis it adds the overflowing hint anyway (shouldAddItem's `<`);
+// the frame then had to cut the row mid-hint, which is how "q quit" became
+// "q qui…" at 80 columns. Its width is left at zero — unlimited — so there is
+// one place that decides what fits, and it is this one.
+//
+// Nothing here has to protect any particular hint: hints() puts `q quit` FIRST
+// precisely so that dropping from the end can never reach it (keys.go).
+func (m *Model) footer() string {
+	hints := m.hints()
+	if line := m.help.ShortHelpView(hints); textkit.VisibleWidth(line) <= m.w {
+		return line
+	}
+	for n := len(hints) - 1; n > 0; n-- {
+		line := m.help.ShortHelpView(hints[:n]) + m.th.S.Muted.Render(" "+textkit.Ellipsis)
+		if textkit.VisibleWidth(line) <= m.w {
+			return line
+		}
+	}
+	// one hint too wide for the whole terminal: the last-resort cut
+	return textkit.Truncate(m.help.ShortHelpView(hints), m.w)
 }
 
 func (m *Model) body() []string {

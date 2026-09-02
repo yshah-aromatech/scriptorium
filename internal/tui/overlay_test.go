@@ -125,7 +125,13 @@ func TestPaletteExecutesInTheOwningView(t *testing.T) {
 		t.Helper()
 		m := newFixtureModel(t, truecolorEnv)
 		m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-		m.mode = from
+		// switch through the real path so a view that loads on entry (History)
+		// has its rows before the palette runs a key against them
+		if cmd := press(m, string(rune('1'+from))); cmd != nil {
+			if msg := cmdMsg(cmd); msg != nil {
+				m.Update(msg)
+			}
+		}
 		m.run.selectByName(m, "backup-db")
 		press(m, ":")
 		p, ok := m.ov.(*paletteOverlay)
@@ -169,6 +175,32 @@ func TestPaletteExecutesInTheOwningView(t *testing.T) {
 	}
 	if in, _ := m.ov.(*inputOverlay); in != nil && in.kindOf != inputSchedule {
 		t.Errorf("the prompt is a %v prompt, want a schedule one", in.kindOf)
+	}
+
+	// A SHARED key acts where you are standing. `f` is one binding with one
+	// owning group (Fleet's failures filter) but two meanings — History's
+	// scope toggle is the other — so a fixed owner would drag a History user
+	// to Fleet and run the wrong one of the two.
+	m = pick(t, modeHistory, "f")
+	if m.mode != modeHistory {
+		t.Errorf("`f` from History switched to %v — it binds f itself", m.mode)
+	}
+	if m.historyScope == "" {
+		t.Error("`f` from History did not toggle the scope")
+	}
+	if m.fleet.failOnly {
+		t.Error("`f` from History ran Fleet's failures filter instead")
+	}
+
+	// from a view that does NOT bind it, the same entry switches as designed
+	for _, from := range []mode{modeFleet, modeRun, modeSchedules} {
+		m = pick(t, from, "f")
+		if m.mode != modeFleet {
+			t.Errorf("`f` from %v landed in %v, want Fleet", from, m.mode)
+		}
+		if !m.fleet.failOnly {
+			t.Errorf("`f` from %v did not turn on the failures filter", from)
+		}
 	}
 
 	// a global command still works from anywhere without moving the view

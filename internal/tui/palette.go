@@ -152,7 +152,13 @@ func (p *paletteOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		// `e` bindings (.env / edit schedule) run each other's action depending
 		// on which view happened to be open. This runs inside Update, so the
 		// switch has already happened when the replayed key arrives.
-		if it.owner != modeAny {
+		//
+		// Unless the current view binds that key ITSELF: `f` is Fleet's
+		// failures filter and History's scope toggle, one binding with one
+		// owning group, and switching a History user to Fleet to run the other
+		// meaning of the key they picked is the same wrong-command bug in a
+		// different direction.
+		if it.owner != modeAny && !m.bindsInView(it.b, m.mode) {
 			m.switchTo(it.owner)
 		}
 		return replay(it.b), true

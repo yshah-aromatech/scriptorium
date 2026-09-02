@@ -188,27 +188,32 @@ func (k keyMap) groups() []keyGroup {
 // showing list keys under a modal would advertise bindings that do nothing
 // there (the PS footer follows its mode for the same reason).
 //
-// The order is a truncation strategy. The footer is cut to the terminal width,
-// so it runs: this pane's PRIMARY keys, then the three that are written nowhere
-// else on screen (q, and the two that lead to everything else), then the rest
-// of the pane's keys, then the view digits — which are the only ones the header
-// still shows after the cut. At 80 columns the tail falls off; what survives is
-// what a user cannot find any other way.
+// The order is a truncation strategy, and it is STRUCTURAL rather than
+// arithmetic: `q quit` comes first, so no description anywhere can ever grow
+// long enough to push it off the row (which is exactly what happened twice —
+// once to "run script", once to "failures / scope"). After it come this pane's
+// primary keys, the two that lead to everything else, the rest of the pane's
+// keys, and the view digits — which the header still shows after the cut.
+// Model.footer drops whole hints off the END until the row fits, so what falls
+// away is always the least important thing on it.
 func (m *Model) hints() []key.Binding {
 	if m.ov != nil {
 		return m.ov.hints(m)
 	}
+	return m.viewHints(m.mode, m.focus)
+}
+
+// viewHints is hints() for a named view, ignoring any open overlay — the
+// palette needs it to ask what a view binds while the palette itself is what is
+// on screen.
+func (m *Model) viewHints(md mode, fc focus) []key.Binding {
 	k := m.keys
 	var primary, secondary []key.Binding
-	switch m.mode {
+	switch md {
 	case modeFleet:
-		// Sync is secondary here purely for the 80-column cut: the four ahead
-		// of it plus `q` is exactly what fits, and `q` is the one written
-		// nowhere else on screen.
-		primary = []key.Binding{k.Up, k.Down, k.Open, k.FailFilter, k.Start}
-		secondary = []key.Binding{k.Sync}
+		primary = []key.Binding{k.Up, k.Down, k.Open, k.FailFilter, k.Start, k.Sync}
 	case modeRun:
-		if m.focus == focusOutput {
+		if fc == focusOutput {
 			primary = []key.Binding{k.Up, k.Down, k.PageUp, k.Follow, k.Focus, k.Start, k.Kill}
 		} else {
 			primary = []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
@@ -220,9 +225,31 @@ func (m *Model) hints() []key.Binding {
 	case modeSchedules:
 		primary = []key.Binding{k.Up, k.Down, k.ScheduleEdit}
 	}
-	out := append(primary, k.Quit, k.Palette, k.Help)
+	out := append([]key.Binding{k.Quit}, primary...)
+	out = append(out, k.Palette, k.Help)
 	out = append(out, secondary...)
 	return append(out, k.Fleet, k.Run, k.History, k.Schedules)
+}
+
+// bindsInView reports whether a view answers this key itself. A binding shared
+// by two views — `f` is Fleet's failures filter AND History's scope toggle, `↵`
+// is Fleet's deep-link AND History's log preview — has ONE owning group, so
+// without this the palette would drag a user out of the view where the key
+// already does something and run the other meaning of it.
+//
+// The per-view hint lists are the answer to "what is live here": they are
+// maintained beside each view's key handler, and a key a view answers but never
+// advertises would be a bug in its own right.
+func (m *Model) bindsInView(b key.Binding, md mode) bool {
+	id := strings.Join(b.Keys(), ",")
+	for _, fc := range []focus{focusList, focusOutput} {
+		for _, h := range m.viewHints(md, fc) {
+			if strings.Join(h.Keys(), ",") == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parseKey turns a binding's key name back into the keypress that produces it

@@ -57,4 +57,4 @@
 
 
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-↑/k up · ↓/j down · e/↵ edit · q quit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules
+q quit · ↑/k up · ↓/j down · e/↵ edit · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules

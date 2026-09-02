@@ -247,10 +247,10 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 	for _, tc := range []struct {
 		mode  mode
 		focus focus
-		want  []string // the pane's primary keys, ahead of q/:/?
+		want  []string // the pane's primary keys, between q and :/?
 		tail  []string // the rest of the pane's keys, after them
 	}{
-		{modeFleet, focusList, []string{"↑/k", "↓/j", "↵", "f", "r"}, []string{"s"}},
+		{modeFleet, focusList, []string{"↑/k", "↓/j", "↵", "f", "r", "s"}, nil},
 		{modeRun, focusList, []string{"↑/k", "↓/j", "tab", "r", "a", "x", "s"},
 			[]string{"e", "i", "l", "v", "y", "c", "h", "X", "/", "ctrl+f", "U", "t"}},
 		{modeRun, focusOutput, []string{"↑/k", "↓/j", "pgup", "end", "tab", "r", "x"}, nil},
@@ -262,7 +262,10 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 		for _, b := range m.hints() {
 			keys = append(keys, b.Help().Key)
 		}
-		want := append(append([]string{}, tc.want...), "q", ":", "?")
+		// `q` leads, structurally: no description can grow long enough to push
+		// it off the row (root.go's footer drops whole hints off the END).
+		want := append([]string{"q"}, tc.want...)
+		want = append(want, ":", "?")
 		want = append(want, tc.tail...)
 		want = append(want, "1", "2", "3", "4")
 		if strings.Join(keys, ",") != strings.Join(want, ",") {
@@ -277,17 +280,45 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 	}
 }
 
-// The footer is truncated to the terminal width, and at the 80-column floor the
-// tail falls off. The switcher digits are still in the header; `q` is nowhere
-// else on screen, so it is the hint that has to survive.
+// The footer is cut to the terminal width, and at the 80-column floor the tail
+// falls off. The switcher digits are still in the header; `q` is nowhere else
+// on screen, so it is the hint that has to survive — in EVERY view, at every
+// width, whatever any description grows to.
+//
+// This ran on the Fleet fixture alone until a widened description ("r run
+// script") truncated `q quit` to "q qui…" on the Run view, which nothing
+// caught. It now walks every mode and both focuses, so the class is closed
+// rather than the instance.
 func TestFooterKeepsQuitAtTheFloor(t *testing.T) {
-	for _, w := range []int{80, 100, 120, 200} {
-		m := newFixtureModel(t, truecolorEnv)
-		m.Update(tea.WindowSizeMsg{Width: w, Height: 24})
-		rows := strings.Split(textkit.StripANSI(m.frame()), "\n")
-		footer := rows[len(rows)-1]
-		if !strings.Contains(footer, "q quit") {
-			t.Errorf("width %d truncated quit out of the footer: %q", w, footer)
+	for _, view := range []struct {
+		name  string
+		mode  mode
+		focus focus
+	}{
+		{"fleet", modeFleet, focusList},
+		{"run/list", modeRun, focusList},
+		{"run/output", modeRun, focusOutput},
+		{"history", modeHistory, focusList},
+		{"schedules", modeSchedules, focusList},
+	} {
+		for _, w := range []int{minWidth, 60, 80, 100, 120, 200} {
+			m := newFixtureModel(t, truecolorEnv)
+			m.mode, m.focus = view.mode, view.focus
+			m.Update(tea.WindowSizeMsg{Width: w, Height: 24})
+			rows := strings.Split(textkit.StripANSI(m.frame()), "\n")
+			footer := rows[len(rows)-1]
+
+			if !strings.Contains(footer, "q quit") {
+				t.Errorf("%s at width %d lost quit from the footer: %q", view.name, w, footer)
+			}
+			// and no hint is ever cut in half: the row ends either with a whole
+			// hint or with the ellipsis that says the rest was dropped
+			if strings.Contains(footer, "q qui…") || strings.Contains(footer, "quit…") {
+				t.Errorf("%s at width %d cut a hint mid-word: %q", view.name, w, footer)
+			}
+			if got := textkit.Width(footer); got > w {
+				t.Errorf("%s at width %d rendered a %d-cell footer: %q", view.name, w, got, footer)
+			}
 		}
 	}
 }
