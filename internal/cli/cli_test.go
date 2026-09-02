@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -15,9 +16,12 @@ import (
 )
 
 // setupApp writes a minimal config.json (dataDir only) and points
-// SCRIPTORIUM_APP_DIR at it, so cli.Main's ResolveAppDir picks it up.
+// SCRIPTORIUM_APP_DIR at it, so cli.Main's ResolveAppDir picks it up. It
+// also blanks N8N_WEBHOOK_URL: app.Open lets the env override config, and
+// no test may send real webhooks at an ambient production endpoint.
 func setupApp(t *testing.T) (appDir, dataDir string) {
 	t.Helper()
+	t.Setenv("N8N_WEBHOOK_URL", "")
 	appDir = t.TempDir()
 	dataDir = filepath.Join(t.TempDir(), "data")
 	cfgJSON := fmt.Sprintf(`{"dataDir":%q}`, dataDir)
@@ -56,6 +60,11 @@ func TestExitCodeMatrix(t *testing.T) {
 		var out, errw bytes.Buffer
 		if code := cli.Main([]string{"--run", "ok"}, &out, &errw); code != 0 {
 			t.Fatalf("exit = %d, want 0\nstdout: %s\nstderr: %s", code, out.String(), errw.String())
+		}
+		// the summary line's byte shape is a binding global constraint
+		re := regexp.MustCompile(`(?m)^-- ok: success \(exit 0\) in \d+(\.\d+)?s \| cpu avg \d+(\.\d+)?% peak \d+(\.\d+)?% \| mem avg \d+(\.\d+)?MB peak \d+(\.\d+)?MB$`)
+		if !re.MatchString(out.String()) {
+			t.Errorf("stdout has no PS-shaped summary line:\n%s", out.String())
 		}
 	})
 
@@ -103,12 +112,34 @@ func TestExitCodeMatrix(t *testing.T) {
 // scriptorium.ps1 over identical seed data.
 // ---------------------------------------------------------------------
 
-const mainRepoRoot = "/Users/y.shah/development/work/scriptorium"
+// moduleRoot walks up from the test's cwd to the go.mod directory. This
+// worktree ships the PowerShell app itself (scriptorium.ps1 + src/*.psm1),
+// so the oracle runs against its own checkout on any machine, CI included.
+// Same pattern as internal/importlint's moduleRoot.
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found above test dir")
+		}
+		dir = parent
+	}
+}
 
 func TestDiffOracleListAndHistory(t *testing.T) {
 	pwshtest.RequirePwsh(t)
+	t.Setenv("N8N_WEBHOOK_URL", "")
 
-	mainCfgPath := filepath.Join(mainRepoRoot, "config.json")
+	repoRoot := moduleRoot(t)
+	mainCfgPath := filepath.Join(repoRoot, "config.json")
 	if _, err := os.Stat(mainCfgPath); err == nil {
 		t.Fatalf("refusing to run: %s already exists — remove it manually before running this test", mainCfgPath)
 	} else if !os.IsNotExist(err) {
@@ -156,7 +187,7 @@ func TestDiffOracleListAndHistory(t *testing.T) {
 				t.Fatalf("cli.Main exit = %d, stderr: %s", code, goErr.String())
 			}
 
-			psArgs := append([]string{filepath.Join(mainRepoRoot, "scriptorium.ps1")}, args...)
+			psArgs := append([]string{filepath.Join(repoRoot, "scriptorium.ps1")}, args...)
 			cmd := exec.Command("pwsh", append([]string{"-NoProfile"}, psArgs...)...)
 			psOut, err := cmd.Output()
 			if err != nil {
@@ -199,6 +230,7 @@ func TestRunMissedSweepDoesNotBreakTheRun(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestWarningsGoToStderr(t *testing.T) {
+	t.Setenv("N8N_WEBHOOK_URL", "")
 	appDir := t.TempDir()
 	dataDir := filepath.Join(appDir, "data")
 	cfgJSON := fmt.Sprintf(`{"dataDir":%q,"bogusKey":true}`, dataDir)
@@ -218,6 +250,7 @@ func TestWarningsGoToStderr(t *testing.T) {
 }
 
 func TestReposFlow(t *testing.T) {
+	t.Setenv("N8N_WEBHOOK_URL", "")
 	appDir := t.TempDir()
 	dataDir := filepath.Join(appDir, "data")
 	cfgJSON := fmt.Sprintf(`{"dataDir":%q,"repos":[{"name":"a","url":"https://example.invalid/a.git","branch":"main"},{"name":"b","url":""}]}`, dataDir)
@@ -237,6 +270,7 @@ func TestReposFlow(t *testing.T) {
 }
 
 func TestAddRepoFlow(t *testing.T) {
+	t.Setenv("N8N_WEBHOOK_URL", "")
 	appDir := t.TempDir()
 	dataDir := filepath.Join(appDir, "data")
 	cfgJSON := fmt.Sprintf(`{"dataDir":%q}`, dataDir)
@@ -262,5 +296,22 @@ func TestAddRepoFlow(t *testing.T) {
 	code = cli.Main([]string{"--add-repo", "https://example.invalid/foo.git"}, &out, &errw)
 	if code != 1 {
 		t.Fatalf("duplicate add-repo: exit = %d, want 1; stdout: %s", code, out.String())
+	}
+}
+
+// ---------------------------------------------------------------------
+// 5. Bare invocation (no flags): an honest TUI-not-yet-available stub —
+// exit 1 so a misconfigured cron entry can't report success while doing
+// nothing. Also catches a flag-parsing regression falling through here.
+// ---------------------------------------------------------------------
+
+func TestBareInvocationIsAnHonestStub(t *testing.T) {
+	setupApp(t)
+	var out, errw bytes.Buffer
+	if code := cli.Main(nil, &out, &errw); code != 1 {
+		t.Fatalf("exit = %d, want 1\nstdout: %s\nstderr: %s", code, out.String(), errw.String())
+	}
+	if !strings.Contains(errw.String(), "the TUI is not yet available in the Go rebuild") {
+		t.Errorf("stderr = %q, want the TUI stub message", errw.String())
 	}
 }

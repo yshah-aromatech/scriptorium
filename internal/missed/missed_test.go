@@ -2,10 +2,12 @@ package missed_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -185,7 +187,9 @@ func TestCheckStampsThenFlagsThenDedupesWebhook(t *testing.T) {
 		t.Fatalf("webhook sent %d times, want exactly 1", got)
 	}
 
-	// wire timestamps are valid RFC3339 Z.
+	// wire timestamps are valid RFC3339 Z AND real UTC instants — an
+	// identity wireTime (the naive value passed through unconverted) is off
+	// by the local UTC offset and must fail here.
 	if len(payloads) != 1 {
 		t.Fatalf("got %d payloads, want 1", len(payloads))
 	}
@@ -200,6 +204,83 @@ func TestCheckStampsThenFlagsThenDedupesWebhook(t *testing.T) {
 		if _, err := time.Parse(time.RFC3339, s); err != nil {
 			t.Errorf("timestamp %q is not valid RFC3339: %v", s, err)
 		}
+	}
+	if at, err := time.Parse(time.RFC3339, p.ExpectedAt); err == nil {
+		// the last */5 fire, swept at grace 0: within the past ~6 minutes
+		if d := time.Since(at); d < 0 || d > 6*time.Minute {
+			t.Errorf("expectedAt %q is %v from now — wireTime must convert naive→real UTC", p.ExpectedAt, d)
+		}
+	}
+	if at, err := time.Parse(time.RFC3339, p.DetectedAt); err == nil {
+		if d := time.Since(at); d < -time.Minute || d > time.Minute {
+			t.Errorf("detectedAt %q is %v from now — wireTime must convert naive→real UTC", p.DetectedAt, d)
+		}
+	}
+}
+
+// TestStateRoundTripsPSOFormatTimestamps pins both interop directions of
+// missed-state.json under a fixed zone (NaiveNow/wireTime pivot on
+// time.Local, so the zone is forced for determinism): a PS-written 'o'
+// timestamp WITH a real offset must land as naive-local fields (misreading
+// it as a zoned instant shifts firstSeen by the UTC offset and suppresses
+// this flag), and what Go writes back must be 'o'-shaped and re-read
+// identically (the dedup across sweep 2 proves lastAlerted round-trips).
+func TestStateRoundTripsPSOFormatTimestamps(t *testing.T) {
+	oldLocal := time.Local
+	time.Local = time.FixedZone("FIX", -7*3600)
+	t.Cleanup(func() { time.Local = oldLocal })
+
+	dataDir := t.TempDir()
+	now := time.Date(2026, 3, 10, 12, 2, 30, 0, time.Local)
+	first := now.Add(-2 * time.Hour).Format("2006-01-02T15:04:05.0000000Z07:00") // PS 'o': ...T10:02:30.0000000-07:00
+	state := fmt.Sprintf(`{"job":{"expr":"*/5 * * * *","firstSeen":%q,"lastAlerted":null}}`, first)
+	stateFile := filepath.Join(dataDir, "missed-state.json")
+	if err := os.WriteFile(stateFile, []byte(state), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var sendCount atomic.Int32
+	var payloads []missedWebhookPayload
+	srv := newCheckServer(t, &sendCount, &payloads)
+	opts := missed.Options{
+		DataDir:      dataDir,
+		Schedules:    map[string]string{"job": "*/5 * * * *"},
+		GraceMinutes: 0,
+		Locks:        newLocks(t),
+		Hist:         newHist(t),
+		Hook:         webhook.NewClient(srv.URL, 2*time.Second, filepath.Join(dataDir, "webhook-queue.jsonl")),
+		Now:          func() time.Time { return now },
+	}
+
+	misses, err := missed.Check(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(misses) != 1 {
+		t.Fatalf("got %d misses, want 1 — a PS 'o' offset firstSeen must be read as naive-local", len(misses))
+	}
+	if want := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC); !misses[0].ExpectedAt.Equal(want) {
+		t.Fatalf("ExpectedAt = %v, want naive %v", misses[0].ExpectedAt, want)
+	}
+
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"lastAlerted": "2026-03-10T12:00:00.0000000Z"`) {
+		t.Fatalf("state written back is not 'o'-shaped: %s", data)
+	}
+
+	// sweep 2 re-reads Go's own file: still missed for the UI, no second send.
+	misses, err = missed.Check(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(misses) != 1 {
+		t.Fatalf("sweep 2: got %d misses, want 1", len(misses))
+	}
+	if got := sendCount.Load(); got != 1 {
+		t.Fatalf("webhook sent %d times, want exactly 1 — lastAlerted must survive the 'o' round trip", got)
 	}
 }
 
@@ -217,7 +298,9 @@ func backdateFirstSeen(t *testing.T, stateFile, name string, at time.Time) {
 	if !ok {
 		t.Fatalf("state file has no entry for %q: %s", name, data)
 	}
-	entry["firstSeen"] = missed.NaiveNow(at).Format(time.RFC3339)
+	// PS-'o'-shaped, real local offset — exactly what Invoke-StoMissedRunCheck
+	// writes, so the main flow test also covers reading a PS-written stamp.
+	entry["firstSeen"] = at.In(time.Local).Format("2006-01-02T15:04:05.0000000Z07:00")
 	out, err := json.Marshal(state)
 	if err != nil {
 		t.Fatal(err)

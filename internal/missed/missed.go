@@ -128,13 +128,39 @@ type stateEntry struct {
 	LastAlerted time.Time // zero == never alerted
 }
 
-// jsonEntry is stateEntry's on-disk shape: timestamps are RFC3339 text,
-// tolerantly parsed (a corrupt or unrecognized value just leaves the field
-// zero, which Detect treats the same as "unseen").
+// jsonEntry is stateEntry's on-disk shape: timestamps are 'o'-format text
+// (what PS's .ToString('o') writes), tolerantly parsed (a corrupt or
+// unrecognized value just leaves the field zero, which Detect treats the
+// same as "unseen").
 type jsonEntry struct {
 	Expr        string  `json:"expr"`
 	FirstSeen   string  `json:"firstSeen"`
 	LastAlerted *string `json:"lastAlerted"`
+}
+
+// oLayout is .NET's round-trip ('o') format: seven fractional digits, then
+// Z or a real offset. The values this package writes are naive (UTC-labeled
+// local fields), so they render with Z.
+const oLayout = "2006-01-02T15:04:05.0000000Z07:00"
+
+// parseStateTime reads one state timestamp into naive-local labeling. PS
+// writes 'o' from a Kind=Local value — a real offset suffix — so a zoned
+// value converts to its local wall-clock fields (NaiveNow). A Z/zero-offset
+// value (what this package writes) is already naive: its fields are kept
+// as-is. A suffix-free value (PS Kind=Unspecified) is naive too. Anything
+// unparseable is zero.
+func parseStateTime(s string) time.Time {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		if _, off := t.Zone(); off != 0 {
+			return NaiveNow(t)
+		}
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.UTC)
+	}
+	// no zone suffix; Parse accepts fractional seconds the layout omits
+	if t, err := time.Parse("2006-01-02T15:04:05", s); err == nil {
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.UTC)
+	}
+	return time.Time{}
 }
 
 func loadState(data []byte) map[string]*stateEntry {
@@ -147,14 +173,9 @@ func loadState(data []byte) map[string]*stateEntry {
 		return out // corrupt JSON — fresh start, same as PS's try/catch
 	}
 	for name, je := range raw {
-		e := &stateEntry{Expr: je.Expr}
-		if t, err := time.Parse(time.RFC3339, je.FirstSeen); err == nil {
-			e.FirstSeen = t
-		}
+		e := &stateEntry{Expr: je.Expr, FirstSeen: parseStateTime(je.FirstSeen)}
 		if je.LastAlerted != nil {
-			if t, err := time.Parse(time.RFC3339, *je.LastAlerted); err == nil {
-				e.LastAlerted = t
-			}
+			e.LastAlerted = parseStateTime(*je.LastAlerted)
 		}
 		out[name] = e
 	}
@@ -164,9 +185,9 @@ func loadState(data []byte) map[string]*stateEntry {
 func marshalState(state map[string]*stateEntry) ([]byte, error) {
 	raw := make(map[string]jsonEntry, len(state))
 	for name, e := range state {
-		je := jsonEntry{Expr: e.Expr, FirstSeen: e.FirstSeen.Format(time.RFC3339)}
+		je := jsonEntry{Expr: e.Expr, FirstSeen: e.FirstSeen.Format(oLayout)}
 		if !e.LastAlerted.IsZero() {
-			s := e.LastAlerted.Format(time.RFC3339)
+			s := e.LastAlerted.Format(oLayout)
 			je.LastAlerted = &s
 		}
 		raw[name] = je
