@@ -11,6 +11,7 @@ import (
 
 	"github.com/yshah-aromatech/scriptorium/internal/config"
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
+	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
 	"github.com/yshah-aromatech/scriptorium/internal/retention"
@@ -30,6 +31,7 @@ type App struct {
 	Hook     *webhook.Client
 	Runner   *runner.Runner
 	Cron     *cron.Crontab
+	Scanner  *deps.Scanner
 }
 
 // Open loads config.json and the app .env, wires the stores and the webhook
@@ -114,5 +116,6 @@ func OpenWith(appDir string, crontabRun cron.CrontabRunner) (*App, error) {
 		Hook:     hook,
 		Runner:   r,
 		Cron:     ct,
+		Scanner:  &deps.Scanner{PwshBin: cfg.PwshBin},
 	}, nil
 }

@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/yshah-aromatech/scriptorium/internal/app"
+	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/format"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/missed"
@@ -288,6 +290,60 @@ func runHistory(a *app.App, name string, stdout io.Writer) int {
 	return 0
 }
 
+// installMissingDeps is scriptorium.ps1:157-163's dependency auto-install
+// step: scan the target's declared deps, and when any are missing, run the
+// generated install command through cfg.pwshBin — streaming its combined
+// output to stdout — before letting the caller proceed to the run
+// regardless of the install's outcome (PS parity: scriptorium.ps1 never
+// checks the install command's exit code).
+//
+// A PowerShell scan that degrades (no usable pwsh) prints its warning to
+// stderr and skips straight to the run — Missing is always empty on that
+// path, so there is nothing to install anyway. A scan error is swallowed
+// exactly like PS's own Get-StoMissingDeps-failure-yields-empty-missing
+// behavior: the caller sees no missing deps and just proceeds to run.
+func installMissingDeps(a *app.App, target scripts.Script, stdout, stderr io.Writer) {
+	var missing []deps.Dep
+	if target.Runtime == "python" {
+		result, err := a.Scanner.ScanPython(target.Dir, target.VenvDir, a.Cfg.PythonBin)
+		if err != nil {
+			return
+		}
+		missing = result
+	} else {
+		result, err := a.Scanner.ScanPS(target.Entry, target.Dir, target.ModuleDir, target.Loose)
+		if err != nil {
+			return
+		}
+		if result.Degraded {
+			fmt.Fprintln(stderr, "WARNING: "+result.Warning)
+			return
+		}
+		missing = result.Missing
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	displays := make([]string, len(missing))
+	for i, d := range missing {
+		displays[i] = d.Display
+	}
+	fmt.Fprintln(stdout, "installing missing modules: "+strings.Join(displays, ", "))
+
+	cmd := deps.InstallCommand(deps.InstallTarget{
+		Runtime:   target.Runtime,
+		Dir:       target.Dir,
+		ModuleDir: target.ModuleDir,
+		VenvDir:   target.VenvDir,
+	}, missing, a.Cfg.PythonBin)
+
+	c := exec.Command(a.Cfg.PwshBin, "-NoProfile", "-NonInteractive", "-Command", cmd)
+	c.Stdout = stdout
+	c.Stderr = stdout // combined output, per the streaming contract
+	_ = c.Run()       // proceed to the run regardless of the install's exit code
+}
+
 // runScript is --run <name>: the headless full pipeline.
 func runScript(a *app.App, f flags, stdout, stderr io.Writer) int {
 	// missed-run sweep piggybacks on every headless boot — best-effort,
@@ -314,6 +370,8 @@ func runScript(a *app.App, f flags, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "script '%s' not found — run 'scriptorium --list' (or sync first)\n", f.runName)
 		return 2
 	}
+
+	installMissingDeps(a, *target, stdout, stderr)
 
 	// timeout: script.json's TimeoutMinutes when set and positive, else the
 	// config default (caller-resolved per the runner's P5 contract).
