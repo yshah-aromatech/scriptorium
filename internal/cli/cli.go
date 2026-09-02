@@ -255,7 +255,7 @@ func runList(a *app.App, stdout io.Writer) int {
 }
 
 func runSync(a *app.App, stdout io.Writer) int {
-	ok := scripts.Sync(a.Cfg, a.Paths, a.Sec, func(line string) { fmt.Fprintln(stdout, line) })
+	ok := scripts.Sync(context.Background(), a.Cfg, a.Paths, a.Sec, func(line string) { fmt.Fprintln(stdout, line) })
 	if ok {
 		return 0
 	}

@@ -31,18 +31,19 @@ type queued struct {
 // Starting
 // ---------------------------------------------------------------------------
 
-// start is Start-TuiRunFlow: run it, or queue it behind the live one. The
-// dependency check that opens the deps modal is phase 11 — it needs the
-// overlay — so phase 10 goes straight to the run.
+// start is Start-TuiRunFlow: queue it behind whatever is running, else check
+// its dependencies and either ask about the missing ones or go straight to the
+// run. The dependency scan is a command (it shells out), so a slow scan costs
+// no frames.
 func (r *runModel) start(m *Model, s scripts.Script, args ...string) tea.Cmd {
-	// a sync owns the output pane exactly as a run does, so a run asked for
-	// mid-sync queues rather than interleaving into the same buffer
-	if r.handle != nil || r.syncing {
+	// a background task owns the output pane exactly as a run does, so a run
+	// asked for mid-task queues rather than interleaving into the same buffer
+	if r.handle != nil || r.task != nil {
 		r.queue = append(r.queue, queued{Name: s.Name, Args: args})
 		pos := len(r.queue)
 		return func() tea.Msg { return RunQueuedMsg{Name: s.Name, Position: pos} }
 	}
-	return r.launch(m, s, args)
+	return r.scanDeps(m, s, args, false)
 }
 
 // launch starts the run off the update loop and hands the handle back in a
@@ -238,7 +239,7 @@ func trim1(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 // scripts.Script value, and an entry whose script is gone is reported, not
 // silently dropped.
 func (r *runModel) dequeue(m *Model) tea.Cmd {
-	if r.handle != nil || r.syncing || len(r.queue) == 0 || !m.queueUnblocked() {
+	if r.handle != nil || r.task != nil || len(r.queue) == 0 || !m.queueUnblocked() {
 		return nil
 	}
 	next := r.queue[0]
@@ -261,93 +262,21 @@ func (r *runModel) clearQueue() tea.Cmd {
 }
 
 // ---------------------------------------------------------------------------
-// Killing
-// ---------------------------------------------------------------------------
-
-// kill wraps Handle.Kill in a command. Kill blocks for up to the 3s kill grace
-// (SIGTERM, wait, SIGKILL to the group and to every sampled pid), which is
-// exactly why it may not run inside Update.
-func (r *runModel) kill(_ *Model) tea.Cmd {
-	h := r.handle
-	if h == nil {
-		return status(StatusWarn, "nothing is running")
-	}
-	return func() tea.Msg {
-		h.Kill("killed")
-		return StatusMsg{Text: "killed " + h.Name, Kind: StatusWarn}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Sync
 // ---------------------------------------------------------------------------
 
-// taskEvent is one line of a background task's output, plus the terminal event
-// carrying its exit status.
-type taskEvent struct {
-	Line string
-	Done bool
-	OK   bool
-}
-
-// sync streams a repo sync into the output pane through the same batched drain
-// the runner uses. The producer goroutine only ever writes to its channel —
-// it never touches the model and never calls Program.Send.
+// sync streams a repo sync into the output pane as a background task, so the
+// spinner, the scroll keys and `x` all keep working through a slow clone.
 func (r *runModel) sync(m *Model) tea.Cmd {
-	if r.handle != nil {
-		return status(StatusWarn, "something is already running — x to kill it first")
-	}
-	if r.syncing {
-		return status(StatusWarn, "a sync is already running")
-	}
-	r.syncing = true
-	r.out.begin("sync")
-	r.out.append("", banner("▶ sync scripts repos", r.out.contentWidth()))
-
 	a := m.app
-	ch := make(chan taskEvent, 256)
-	go func() {
-		defer close(ch)
-		ok := scripts.Sync(a.Cfg, a.Paths, a.Sec, func(line string) {
-			ch <- taskEvent{Line: line}
-		})
-		ch <- taskEvent{Done: true, OK: ok}
-	}()
-	r.syncCh = ch
-	return tea.Batch(drainSync(ch), m.kickSpinner())
-}
-
-func drainSync(ch <-chan taskEvent) tea.Cmd {
-	return DrainCmd(ch, func(batch []taskEvent, closed bool) tea.Msg {
-		msg := SyncEventsMsg{Closed: closed}
-		for _, e := range batch {
-			if e.Done {
-				msg.Finished, msg.OK = true, e.OK
-				continue
+	return r.startTask(m, "sync scripts repos",
+		func(ctx context.Context, emit func(string)) bool {
+			return scripts.Sync(ctx, a.Cfg, a.Paths, a.Sec, emit)
+		},
+		func(m *Model, ok bool) tea.Cmd {
+			if ok {
+				return tea.Batch(m.loadFleet(), status(StatusOK, "scripts synced"))
 			}
-			msg.Batch = append(msg.Batch, e.Line)
-		}
-		return msg
-	})
-}
-
-func (r *runModel) onSyncEvents(m *Model, msg SyncEventsMsg) tea.Cmd {
-	if len(msg.Batch) > 0 {
-		r.out.append(msg.Batch...)
-	}
-	if msg.Finished {
-		r.syncOK = msg.OK
-	}
-	if !msg.Closed {
-		return drainSync(r.syncCh)
-	}
-	r.syncCh = nil
-	r.syncing = false
-	w := r.out.contentWidth()
-	if r.syncOK {
-		r.out.append(banner("✓ sync · done", w))
-		return tea.Batch(m.loadFleet(), status(StatusOK, "scripts synced"), r.dequeue(m))
-	}
-	r.out.append(banner("✗ sync · failed", w))
-	return tea.Batch(m.loadFleet(), status(StatusErr, "sync failed — see the output pane"), r.dequeue(m))
+			return tea.Batch(m.loadFleet(), status(StatusErr, "sync failed — see the output pane"))
+		})
 }

@@ -5,20 +5,20 @@
  ✓ heartbeat     py ↻  40s│  r run · s sync · tab focus · 1-4 views             
  ✓ nightly-repo… ps ⚠   5h│                                                     
  ▶ sync-orders   py    12m│                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-─ details ────────────────│                                                     
+─ editing .env — backup-db ─────────────────────────────────────────────────────
+ # where the dump goes                                                          
+ S3_BUCKET=ops-backups                                                          
+                                                                                
+ # rotate weekly                                                                
+ RETENTION_DAYS=7                                                               
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
  ● backup-db · powershell…│                                                     
  ▸ entry backup-db/backup…│                                                     
- ⚙ env 0 vars             │                                                     
+ ⚙ env 2 vars             │                                                     
  ↻ cron 0 2 * * * · next …│                                                     
  ✦ last success · 42.5s ·…│                                                     
    cpu 66% peak · mem 61.…│                                                     
    at 2026-09-02 14:27:00 │                                                     
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-↑/k up · ↓/j down · tab focus · r run · a args · x kill · s sync · q quit …
+ctrl+s save · esc close

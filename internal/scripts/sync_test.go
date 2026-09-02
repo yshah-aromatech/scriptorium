@@ -83,7 +83,7 @@ func TestSyncCloneResetEnvSurvivalAndFailure(t *testing.T) {
 
 	// --- clone ---
 	var lines []string
-	ok := scripts.Sync(cfg, paths, reg, func(l string) { lines = append(lines, l) })
+	ok := scripts.Sync(t.Context(), cfg, paths, reg, func(l string) { lines = append(lines, l) })
 	if !ok {
 		t.Fatalf("clone sync failed: %v", lines)
 	}
@@ -109,7 +109,7 @@ func TestSyncCloneResetEnvSurvivalAndFailure(t *testing.T) {
 	writeFile(t, filepath.Join(root, "junk.txt"), "should be cleaned")
 
 	lines = nil
-	ok = scripts.Sync(cfg, paths, reg, func(l string) { lines = append(lines, l) })
+	ok = scripts.Sync(t.Context(), cfg, paths, reg, func(l string) { lines = append(lines, l) })
 	if !ok {
 		t.Fatalf("re-sync failed: %v", lines)
 	}
@@ -141,7 +141,7 @@ func TestSyncCloneResetEnvSurvivalAndFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines = nil
-	ok = scripts.Sync(badCfg, badPaths, reg, func(l string) { lines = append(lines, l) })
+	ok = scripts.Sync(t.Context(), badCfg, badPaths, reg, func(l string) { lines = append(lines, l) })
 	if ok {
 		t.Fatalf("expected sync to fail against a broken remote: %v", lines)
 	}
@@ -157,7 +157,7 @@ func TestSyncNoRepoConfigured(t *testing.T) {
 	cfg, paths := loadWithDataDir(t, "")
 	reg := secret.NewRegistry()
 	var lines []string
-	ok := scripts.Sync(cfg, paths, reg, func(l string) { lines = append(lines, l) })
+	ok := scripts.Sync(t.Context(), cfg, paths, reg, func(l string) { lines = append(lines, l) })
 	if ok {
 		t.Fatal("expected false with no url configured")
 	}
@@ -179,7 +179,7 @@ func TestSyncRedactsInjectedTokenURL(t *testing.T) {
 	reg := secret.NewRegistry()
 	repos := scripts.Repos(cfg, paths)
 	var lines []string
-	ok := scripts.SyncOne(repos[0], reg, func(l string) { lines = append(lines, l) })
+	ok := scripts.SyncOne(t.Context(), repos[0], reg, func(l string) { lines = append(lines, l) })
 	if ok {
 		t.Fatal("expected the clone against an unreachable host to fail")
 	}
@@ -293,7 +293,7 @@ func TestSyncCleanSurvivesRootEnvAndPycacheStrayFileCleaned(t *testing.T) {
 	cfg, paths := loadWithDataDir(t, `,"repos":[{"name":"myrepo","url":"`+remote+`"}]`)
 	reg := secret.NewRegistry()
 
-	if ok := scripts.Sync(cfg, paths, reg, func(string) {}); !ok {
+	if ok := scripts.Sync(t.Context(), cfg, paths, reg, func(string) {}); !ok {
 		t.Fatal("clone sync failed")
 	}
 	root := scripts.Repos(cfg, paths)[0].Root
@@ -302,7 +302,7 @@ func TestSyncCleanSurvivesRootEnvAndPycacheStrayFileCleaned(t *testing.T) {
 	writeFile(t, filepath.Join(root, "__pycache__", "x.pyc"), "bytecode")
 	writeFile(t, filepath.Join(root, "junk.txt"), "should be cleaned")
 
-	if ok := scripts.Sync(cfg, paths, reg, func(string) {}); !ok {
+	if ok := scripts.Sync(t.Context(), cfg, paths, reg, func(string) {}); !ok {
 		t.Fatal("re-sync failed")
 	}
 

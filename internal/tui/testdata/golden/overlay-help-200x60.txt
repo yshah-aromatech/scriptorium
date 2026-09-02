@@ -10,41 +10,41 @@
                                             │                                                                                                                                                           
                                             │                                                                                                                                                           
                                             │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
 ─ keys ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- # views                                                                                            # run                                                                                               
-  1       fleet                                                                                      r       run                                                                                        
-  2       run                                                                                        x       kill                                                                                       
-  3       history                                                                                    X       clear queue                                                                                
-  4       schedules                                                                                  s       sync                                                                                       
-                                                                                                                                                                                                        
- # move                                                                                             # session                                                                                           
-  ↑/k     up                                                                                         :       commands                                                                                   
-  ↓/j     down                                                                                       ?       help                                                                                       
-  pgup    page up                                                                                    q       quit                                                                                       
+ # views                                                                                            # session                                                                                           
+  1       fleet                                                                                      :       commands                                                                                   
+  2       run                                                                                        ?       help                                                                                       
+  3       history                                                                                    q       quit                                                                                       
+  4       schedules                                                                                                                                                                                     
+                                                                                                    # overlays                                                                                          
+ # move                                                                                              y/↵     confirm                                                                                    
+  ↑/k     up                                                                                         n       no                                                                                         
+  ↓/j     down                                                                                       ctrl+s  save                                                                                       
+  pgup    page up                                                                                    esc     close                                                                                      
   pgdn    page down                                                                                                                                                                                     
-  g       top                                                                                       # overlays                                                                                          
-  G       bottom                                                                                     y/↵     confirm                                                                                    
-  tab     focus                                                                                      n       no                                                                                         
-  end     follow                                                                                     esc     close                                                                                      
+  g       top                                                                                                                                                                                           
+  G       bottom                                                                                                                                                                                        
+  tab     focus                                                                                                                                                                                         
+  end     follow                                                                                                                                                                                        
                                                                                                                                                                                                         
  # fleet                                                                                                                                                                                                
   ↵       open in run                                                                                                                                                                                   
   f       failures                                                                                                                                                                                      
                                                                                                                                                                                                         
+ # run                                                                                                                                                                                                  
+  r       run                                                                                                                                                                                           
+  a       args                                                                                                                                                                                          
+  x       kill                                                                                                                                                                                          
+  X       clear queue                                                                                                                                                                                   
+  s       sync                                                                                                                                                                                          
+  e       .env                                                                                                                                                                                          
+  i       deps                                                                                                                                                                                          
+  l       lint                                                                                                                                                                                          
+  u       upgrade                                                                                                                                                                                       
+  v       last log                                                                                                                                                                                      
+  h       script history                                                                                                                                                                                
+                                                                                                                                                                                                        
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
-                                            │                                                                                                                                                           
                                             │                                                                                                                                                           
                                             │                                                                                                                                                           
                                             │                                                                                                                                                           

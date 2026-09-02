@@ -100,6 +100,11 @@ type Model struct {
 	spin   spinner.Model
 	spinOn bool
 
+	// historyScope is the script the History view is scoped to, "" for all of
+	// them. It lives here because two things set it: the Run view's `h`
+	// deep-link and the History view's own scope toggle.
+	historyScope string
+
 	// ov is the modal layer: exactly one overlay at a time, over whichever
 	// view is behind it (overlay.go).
 	ov overlay
@@ -248,7 +253,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// no (inventory §4.11 drains one per loop iteration).
 		return m, tea.Batch(tickCmd(), m.run.dequeue(m))
 
-	case RunStartedMsg, RunQueuedMsg, RunEventsMsg, RunDoneMsg, SyncEventsMsg:
+	case RunStartedMsg, RunQueuedMsg, RunEventsMsg, RunDoneMsg, TaskEventsMsg,
+		DepsScannedMsg, LogLoadedMsg:
 		// run and sync traffic belongs to the Run view wherever the user is
 		// standing: a run started from Fleet must keep draining while they read
 		// the History screen.

@@ -598,34 +598,33 @@ func TestRunDoneDrainsTheQueue(t *testing.T) {
 func TestSyncStreamsIntoTheOutputPane(t *testing.T) {
 	m := runAt(t, 120, 40)
 	ch := make(chan taskEvent, 8)
-	m.run.syncCh = ch
-	m.run.syncing = true
-	m.run.out.begin("sync")
+	m.run.task = &task{name: "sync scripts repos", ch: ch, cancel: func() {}}
+	m.run.out.begin("sync scripts repos")
 
 	ch <- taskEvent{Line: "Fetching origin"}
 	ch <- taskEvent{Line: "Already up to date."}
 	ch <- taskEvent{Done: true, OK: true}
 	close(ch)
 
-	cmd := drainSync(ch)
+	cmd := drainTask("sync scripts repos", ch)
 	for cmd != nil {
-		msg, ok := cmd().(SyncEventsMsg)
+		msg, ok := cmd().(TaskEventsMsg)
 		if !ok {
 			t.Fatal("the sync drain produced the wrong message")
 		}
-		cmd = m.run.onSyncEvents(m, msg)
+		cmd = m.run.onTaskEvents(m, msg)
 		if msg.Closed {
 			break
 		}
 	}
 	out := strings.Join(m.run.out.buf.Lines, "\n")
-	for _, want := range []string{"Fetching origin", "Already up to date.", "✓ sync · done"} {
+	for _, want := range []string{"Fetching origin", "Already up to date.", "✓ sync scripts repos · done"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the sync output is missing %q:\n%s", want, out)
 		}
 	}
-	if m.run.syncing {
-		t.Error("the sync never released its flag")
+	if m.run.task != nil {
+		t.Error("the sync never released the task slot")
 	}
 	// and it refuses to stack on a live run
 	m.run.handle = fakeHandle("backup-db")

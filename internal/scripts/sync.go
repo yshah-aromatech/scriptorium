@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,9 +18,11 @@ import (
 var cleanExcludes = []string{"-e", ".env", "-e", "**/.env", "-e", "__pycache__", "-e", "*.pyc"}
 
 // SyncOne is the port of Sync-StoOneRepo: clones repo if its Root has no
-// .git yet, else hard-resets it to origin/<branch>. Every emitted line is
+// .git yet, else hard-resets it to origin/<branch>. Cancelling ctx kills the
+// git child (a clone can run for minutes, and the TUI's `x` has to be able to
+// stop one). Every emitted line is
 // redacted through reg.
-func SyncOne(repo Repo, reg *secret.Registry, onLine func(string)) bool {
+func SyncOne(ctx context.Context, repo Repo, reg *secret.Registry, onLine func(string)) bool {
 	emit := func(l string) { onLine(reg.Redact(l)) }
 
 	url := repo.URL
@@ -37,12 +40,12 @@ func SyncOne(repo Repo, reg *secret.Registry, onLine func(string)) bool {
 
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		emit(fmt.Sprintf("[%s] cloning %s (branch %s)...", repo.Name, repo.URL, branch))
-		out, cerr := exec.Command("git", "clone", "--branch", branch, url, dir).CombinedOutput()
+		out, cerr := exec.CommandContext(ctx, "git", "clone", "--branch", branch, url, dir).CombinedOutput()
 		emitLines(emit, string(out))
 		ok = cerr == nil
 	} else {
 		emit(fmt.Sprintf("[%s] syncing %s (hard reset to origin/%s)...", repo.Name, repo.URL, branch))
-		_, _ = exec.Command("git", "-C", dir, "remote", "set-url", "origin", url).CombinedOutput() // refresh token; output discarded like PS's Out-Null
+		_, _ = exec.CommandContext(ctx, "git", "-C", dir, "remote", "set-url", "origin", url).CombinedOutput() // refresh token; output discarded like PS's Out-Null
 
 		steps := [][]string{
 			{"fetch", "origin"},
@@ -53,8 +56,12 @@ func SyncOne(repo Repo, reg *secret.Registry, onLine func(string)) bool {
 
 		ok = true
 		for _, step := range steps {
+			if ctx.Err() != nil {
+				emit(fmt.Sprintf("[%s] cancelled", repo.Name))
+				return false
+			}
 			args := append([]string{"-C", dir}, step...)
-			out, serr := exec.Command("git", args...).CombinedOutput()
+			out, serr := exec.CommandContext(ctx, "git", args...).CombinedOutput()
 			emitLines(emit, string(out))
 			if serr != nil {
 				emit(fmt.Sprintf("[%s] git %s failed (exit %d)", repo.Name, step[0], exitCode(serr)))
@@ -75,7 +82,7 @@ func SyncOne(repo Repo, reg *secret.Registry, onLine func(string)) bool {
 // Sync is the port of Sync-StoRepo: migrates the legacy single-repo layout
 // if needed, then syncs every URL-configured repo, each step continuing
 // past a prior repo's failure (the caller sees the aggregate result).
-func Sync(cfg *config.Config, paths config.Paths, reg *secret.Registry, onLine func(string)) bool {
+func Sync(ctx context.Context, cfg *config.Config, paths config.Paths, reg *secret.Registry, onLine func(string)) bool {
 	all := Repos(cfg, paths)
 
 	var withURL []Repo
@@ -93,7 +100,7 @@ func Sync(cfg *config.Config, paths config.Paths, reg *secret.Registry, onLine f
 
 	allOk := true
 	for _, repo := range withURL {
-		if !SyncOne(repo, reg, onLine) {
+		if !SyncOne(ctx, repo, reg, onLine) {
 			allOk = false
 		}
 	}

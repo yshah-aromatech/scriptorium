@@ -40,15 +40,23 @@ type keyMap struct {
 	// run
 	Focus      key.Binding
 	Start      key.Binding
+	Args       key.Binding
 	Kill       key.Binding
 	ClearQueue key.Binding
 	Sync       key.Binding
 	Follow     key.Binding
+	Env        key.Binding
+	Deps       key.Binding
+	Lint       key.Binding
+	Upgrade    key.Binding
+	ViewLog    key.Binding
+	Scoped     key.Binding
 
 	// overlays
 	Palette key.Binding
 	Help    key.Binding
 	Close   key.Binding
+	Save    key.Binding
 	Accept  key.Binding
 	Deny    key.Binding
 }
@@ -73,14 +81,22 @@ func defaultKeys() keyMap {
 
 		Focus:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
 		Start:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "run")),
+		Args:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "args")),
 		Kill:       key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")),
 		ClearQueue: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "clear queue")),
 		Sync:       key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sync")),
 		Follow:     key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "follow")),
+		Env:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", ".env")),
+		Deps:       key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "deps")),
+		Lint:       key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "lint")),
+		Upgrade:    key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade")),
+		ViewLog:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "last log")),
+		Scoped:     key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "script history")),
 
 		Palette: key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
 		Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Close:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close")),
+		Save:    key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
 		Accept:  key.NewBinding(key.WithKeys("y", "enter"), key.WithHelp("y/↵", "confirm")),
 		Deny:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "no")),
 	}
@@ -108,9 +124,11 @@ func (k keyMap) groups() []keyGroup {
 		{Title: "move", Keys: []key.Binding{
 			k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom, k.Focus, k.Follow}},
 		{Title: "fleet", Keys: []key.Binding{k.Open, k.FailFilter}},
-		{Title: "run", Keys: []key.Binding{k.Start, k.Kill, k.ClearQueue, k.Sync}},
+		{Title: "run", Keys: []key.Binding{
+			k.Start, k.Args, k.Kill, k.ClearQueue, k.Sync,
+			k.Env, k.Deps, k.Lint, k.Upgrade, k.ViewLog, k.Scoped}},
 		{Title: "session", Keys: []key.Binding{k.Palette, k.Help, k.Quit}},
-		{Title: "overlays", Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Close}},
+		{Title: "overlays", Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Save, k.Close}},
 	}
 }
 
@@ -119,29 +137,33 @@ func (k keyMap) groups() []keyGroup {
 // showing list keys under a modal would advertise bindings that do nothing
 // there (the PS footer follows its mode for the same reason).
 //
-// Quit sits ahead of the view switcher: the footer is truncated to the terminal
-// width, and at 80 columns the tail falls off — the switcher digits are still
-// on screen in the header, but `q` is nowhere else, so it is the one that has
-// to survive.
+// The order is a truncation strategy. The footer is cut to the terminal width,
+// so it runs: this pane's PRIMARY keys, then the three that are written nowhere
+// else on screen (q, and the two that lead to everything else), then the rest
+// of the pane's keys, then the view digits — which are the only ones the header
+// still shows after the cut. At 80 columns the tail falls off; what survives is
+// what a user cannot find any other way.
 func (m *Model) hints() []key.Binding {
 	if m.ov != nil {
 		return m.ov.hints(m)
 	}
 	k := m.keys
-	var out []key.Binding
+	var primary, secondary []key.Binding
 	switch m.mode {
 	case modeFleet:
-		out = []key.Binding{k.Up, k.Down, k.Open, k.FailFilter, k.Start, k.Sync}
+		primary = []key.Binding{k.Up, k.Down, k.Open, k.FailFilter, k.Start, k.Sync}
 	case modeRun:
 		if m.focus == focusOutput {
-			out = []key.Binding{k.Up, k.Down, k.PageUp, k.Follow, k.Focus, k.Start, k.Kill}
+			primary = []key.Binding{k.Up, k.Down, k.PageUp, k.Follow, k.Focus, k.Start, k.Kill}
 		} else {
-			out = []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Kill, k.ClearQueue, k.Sync}
+			primary = []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
+			secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Scoped, k.ClearQueue}
 		}
 	case modeHistory, modeSchedules:
 		// nothing of their own yet — the placeholder pane says so.
 	}
-	out = append(out, k.Quit, k.Palette, k.Help)
+	out := append(primary, k.Quit, k.Palette, k.Help)
+	out = append(out, secondary...)
 	return append(out, k.Fleet, k.Run, k.History, k.Schedules)
 }
 

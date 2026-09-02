@@ -59,10 +59,8 @@ type runModel struct {
 
 	queue []queued
 
-	// background sync
-	syncing bool
-	syncOK  bool
-	syncCh  chan taskEvent
+	// the live background task (sync / lint / install / update), if any
+	task *task
 }
 
 func (r *runModel) init(m *Model) {
@@ -155,7 +153,7 @@ func (r *runModel) selectByName(m *Model, name string) {
 	}
 }
 
-func (r *runModel) active() bool    { return r.handle != nil || r.syncing }
+func (r *runModel) active() bool    { return r.handle != nil || r.task != nil }
 func (r *runModel) queueDepth() int { return len(r.queue) }
 
 func (r *runModel) isRunning(n string) bool { return r.handle != nil && r.handle.Name == n }
@@ -183,8 +181,12 @@ func (r *runModel) update(m *Model, msg tea.Msg) tea.Cmd {
 		return r.onRunEvents(m, msg)
 	case RunDoneMsg:
 		return r.onRunDone(m, msg)
-	case SyncEventsMsg:
-		return r.onSyncEvents(m, msg)
+	case TaskEventsMsg:
+		return r.onTaskEvents(m, msg)
+	case DepsScannedMsg:
+		return r.onDepsScanned(m, msg)
+	case LogLoadedMsg:
+		return r.onLogLoaded(m, msg)
 	case tea.KeyPressMsg:
 		return r.onKey(m, msg)
 	case tea.MouseClickMsg:
@@ -260,6 +262,27 @@ func (r *runModel) onKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 			return status(StatusWarn, "no script selected")
 		}
 		return r.start(m, *s)
+
+	case key.Matches(msg, k.Args):
+		return r.args(m)
+
+	case key.Matches(msg, k.Env):
+		return r.editEnv(m)
+
+	case key.Matches(msg, k.Deps):
+		return r.depScan(m)
+
+	case key.Matches(msg, k.Lint):
+		return r.lint(m)
+
+	case key.Matches(msg, k.Upgrade):
+		return r.systemUpdate(m)
+
+	case key.Matches(msg, k.ViewLog):
+		return r.viewLog(m)
+
+	case key.Matches(msg, k.Scoped):
+		return r.openHistory(m)
 
 	case key.Matches(msg, k.Kill):
 		return r.kill(m)
@@ -485,8 +508,8 @@ func (r *runModel) lastRunLines(m *Model, name string, w int) []string {
 func (r *runModel) statusLine(m *Model, w int) (string, bool) {
 	th := m.th
 	if r.handle == nil {
-		if r.syncing {
-			return " " + th.S.Info.Render(m.spinnerFrame()+" syncing scripts repos…"), true
+		if r.task != nil {
+			return " " + th.S.Info.Render(m.spinnerFrame()+" "+r.task.name+"…"), true
 		}
 		return "", false
 	}

@@ -472,7 +472,7 @@ func (o *Ops) GetRunLog(args map[string]any) (any, bool, error) {
 
 func (o *Ops) SyncRepos() (any, bool, error) {
 	var lines []string
-	ok := scripts.Sync(o.App.Cfg, o.App.Paths, o.App.Sec, func(l string) { lines = append(lines, l) })
+	ok := scripts.Sync(context.Background(), o.App.Cfg, o.App.Paths, o.App.Sec, func(l string) { lines = append(lines, l) })
 	return map[string]any{"ok": ok, "output": strings.Join(lines, "\n")}, !ok, nil
 }
 

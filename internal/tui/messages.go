@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
 	"github.com/yshah-aromatech/scriptorium/internal/missed"
@@ -127,12 +128,18 @@ type CronParsedMsg struct {
 	Err    error
 }
 
-// DepsScannedMsg carries a dependency scan's missing list (phase 11 — the
-// prompt it opens needs a modal).
+// DepsScannedMsg carries one dependency scan's result, plus what the scan was
+// FOR: a run that has to wait for the answer (Args, InstallOnly false) or a
+// plain `i` check. Degraded/Warning come from the PowerShell scanner's
+// no-pwsh fallback, which can report deps but never install them.
 type DepsScannedMsg struct {
-	Script  string
-	Missing []string
-	Err     error
+	Script      scripts.Script
+	Missing     []deps.Dep
+	Args        []string
+	InstallOnly bool
+	Degraded    bool
+	Warning     string
+	Err         error
 }
 
 // ---------------------------------------------------------------------------
@@ -165,34 +172,20 @@ type RunQueuedMsg struct {
 }
 
 // ---------------------------------------------------------------------------
-// Background tasks (sync now; apt/lint/self-update in phase 11)
+// Background tasks (sync, lint, dependency install, system update)
 // ---------------------------------------------------------------------------
 
-// SyncEventsMsg is one batched drain of a repo sync's output. Finished marks
-// the batch that carried the sync's terminal event, and OK is only meaningful
-// once it has.
-type SyncEventsMsg struct {
+// TaskEventsMsg is one batched drain of a background task's output — the repo
+// sync, a lint, a dependency install, the system update. Finished marks the
+// batch that carried the task's terminal event, and OK is only meaningful once
+// it has; Closed is the channel's end, which is when the task is really over
+// (a cancelled task still drains to it).
+type TaskEventsMsg struct {
+	Name     string
 	Batch    []string
 	Closed   bool
 	Finished bool
 	OK       bool
-}
-
-// SyncDoneMsg ends a sync.
-type SyncDoneMsg struct{ OK bool }
-
-// TaskEventsMsg is one batched drain of a generic child task's output
-// (phase 11: apt update, lint, self-update).
-type TaskEventsMsg struct {
-	Name   string
-	Batch  []string
-	Closed bool
-}
-
-// TaskDoneMsg ends a generic child task (phase 11).
-type TaskDoneMsg struct {
-	Name string
-	OK   bool
 }
 
 // ---------------------------------------------------------------------------
