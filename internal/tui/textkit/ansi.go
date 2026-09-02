@@ -20,6 +20,10 @@ import (
 //	escape into the frame and corrupt every downstream width computation.
 var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\a\x1b]*(?:\a|\x1b\\)|\x1b.`)
 
+// ansiHeadRE is the same three alternatives anchored at the start, for code
+// that has to step OVER escape sequences rather than delete them (Truncate).
+var ansiHeadRE = regexp.MustCompile(`^(?:\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\a\x1b]*(?:\a|\x1b\\)|\x1b.)`)
+
 // c0RE is the leftover-control sweep Add-TuiOutput runs after tab expansion.
 // LF and CR are absent on purpose: line splitting already consumed them.
 var c0RE = regexp.MustCompile("[\x00-\x08\x0b-\x1f\x7f]")

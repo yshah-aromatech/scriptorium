@@ -42,31 +42,62 @@ func ByteAtCell(s string, cell int) int {
 	return len(s)
 }
 
-// Truncate cuts s to at most w display cells, spending the last cell on an
-// ellipsis when anything was dropped.
+// VisibleWidth is Width ignoring escape sequences — the width of a string that
+// has already been styled. Every layout decision in the TUI is made on already
+// styled text, so counting an SGR's bytes as cells (which Width does, and must)
+// silently shortens every row it touches.
+func VisibleWidth(s string) int {
+	if !strings.ContainsRune(s, '\x1b') {
+		return Width(s)
+	}
+	return Width(StripANSI(s))
+}
+
+// Truncate cuts s to at most w visible cells, spending the last cell on an
+// ellipsis when anything was dropped. Escape sequences are copied through
+// without consuming width, and a cut that lands inside a styled span is closed
+// with a reset so the style cannot bleed across the rest of the row.
 func Truncate(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	if Width(s) <= w {
+	if VisibleWidth(s) <= w {
 		return s
 	}
-	if w == 1 {
-		return Ellipsis
+	var b strings.Builder
+	cells, styled := 0, false
+	for i := 0; i < len(s); {
+		if n := ansiHeadRE.FindStringIndex(s[i:]); n != nil {
+			b.WriteString(s[i : i+n[1]])
+			i += n[1]
+			styled = true
+			continue
+		}
+		g, _, gw, _ := uniseg.FirstGraphemeClusterInString(s[i:], -1)
+		if cells+gw > w-1 {
+			break
+		}
+		b.WriteString(g)
+		cells += gw
+		i += len(g)
 	}
-	return s[:ByteAtCell(s, w-1)] + Ellipsis
+	b.WriteString(Ellipsis)
+	if styled {
+		b.WriteString("\x1b[0m")
+	}
+	return b.String()
 }
 
-// Pad right-pads s with spaces to w display cells. Wider input is returned
+// Pad right-pads s with spaces to w visible cells. Wider input is returned
 // untouched — Fit is the one that also cuts.
 func Pad(s string, w int) string {
-	if gap := w - Width(s); gap > 0 {
+	if gap := w - VisibleWidth(s); gap > 0 {
 		return s + strings.Repeat(" ", gap)
 	}
 	return s
 }
 
-// Fit makes s occupy exactly w cells: truncated with an ellipsis when too
+// Fit makes s occupy exactly w visible cells: truncated with an ellipsis when too
 // wide, space-padded when too narrow. Every column of a rendered row is laid
 // out through this, which is why rows stay aligned under CJK and emoji.
 func Fit(s string, w int) string { return Pad(Truncate(s, w), w) }

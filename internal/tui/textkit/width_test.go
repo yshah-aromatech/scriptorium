@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
@@ -112,5 +113,31 @@ func TestTruncateAndFit(t *testing.T) {
 	}
 	if got := textkit.Pad("日本", 6); got != "日本  " {
 		t.Errorf("Pad = %q", got)
+	}
+}
+
+// Layout is decided on already-styled text, so width and truncation must not
+// count an SGR's bytes as cells. This is the bug that silently shortened every
+// styled row to about two thirds of the terminal.
+func TestStyledTextIsMeasuredByVisibleCells(t *testing.T) {
+	styled := "\x1b[38;2;34;218;110mokay then\x1b[0m" // 9 visible cells
+	if got := textkit.VisibleWidth(styled); got != 9 {
+		t.Errorf("VisibleWidth = %d, want 9", got)
+	}
+	if got := textkit.Truncate(styled, 20); got != styled {
+		t.Errorf("Truncate widened enough to fit still cut: %q", got)
+	}
+	cut := textkit.Truncate(styled, 5)
+	if got := textkit.VisibleWidth(cut); got != 5 {
+		t.Errorf("Truncate(styled, 5) is %d cells: %q", got, cut)
+	}
+	if want := "okay"; !strings.Contains(cut, want) {
+		t.Errorf("Truncate dropped the escapes or the text: %q", cut)
+	}
+	if !strings.HasSuffix(cut, "\x1b[0m") {
+		t.Errorf("a cut inside a styled span was left open: %q", cut)
+	}
+	if got := textkit.VisibleWidth(textkit.Fit(styled, 14)); got != 14 {
+		t.Errorf("Fit(styled, 14) is %d cells", got)
 	}
 }

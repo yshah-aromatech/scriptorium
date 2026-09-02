@@ -23,7 +23,6 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/format"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/mcp"
-	"github.com/yshah-aromatech/scriptorium/internal/missed"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 )
@@ -441,14 +440,7 @@ func runScript(a *app.App, f flags, stdout, stderr io.Writer) int {
 	// missed-run sweep piggybacks on every headless boot — best-effort,
 	// errors swallowed. Real schedules and the configured grace, both
 	// resolved here so Check never has to guess a default.
-	_, _ = missed.Check(missed.Options{
-		DataDir:      a.Paths.DataDir,
-		Schedules:    a.Cron.Schedules(),
-		GraceMinutes: a.Cfg.MissedGraceMinutes,
-		Locks:        a.Locks,
-		Hist:         a.Hist,
-		Hook:         a.Hook,
-	})
+	_, _ = a.MissedSweep()
 
 	all := scripts.Discover(scripts.Repos(a.Cfg, a.Paths), a.Paths)
 	var target *scripts.Script

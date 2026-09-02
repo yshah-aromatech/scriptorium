@@ -14,6 +14,7 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
+	"github.com/yshah-aromatech/scriptorium/internal/missed"
 	"github.com/yshah-aromatech/scriptorium/internal/retention"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/secret"
@@ -118,4 +119,19 @@ func OpenWith(appDir string, crontabRun cron.CrontabRunner) (*App, error) {
 		Cron:     ct,
 		Scanner:  &deps.Scanner{PwshBin: cfg.PwshBin},
 	}, nil
+}
+
+// MissedSweep runs the stateful missed-fire check against the live crontab —
+// the one place every frontend resolves Check's inputs, so the CLI's
+// once-per-boot sweep and the TUI's 60s ticker cannot drift apart on the
+// schedule source or the grace window.
+func (a *App) MissedSweep() ([]missed.Miss, error) {
+	return missed.Check(missed.Options{
+		DataDir:      a.Paths.DataDir,
+		Schedules:    a.Cron.Schedules(),
+		GraceMinutes: a.Cfg.MissedGraceMinutes,
+		Locks:        a.Locks,
+		Hist:         a.Hist,
+		Hook:         a.Hook,
+	})
 }
