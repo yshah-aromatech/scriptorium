@@ -22,7 +22,7 @@ internal/
   runner/     process launch, line streaming, sampling, timeout, pgroup kill, classify, finalize
   missed/     missed-fire detector + missed-state.json + one-shot 'missed' webhook
   retention/  prune orchestration: history rows, their logs, aged logs, frequent-script policy
-  migrate/    first-run migrations: crontab block rewrite, legacy markers, systemd unit swap
+  migrate/    RETIRED 2026-09-02 (fresh-install cutover — package removed; see design doc note)
   app/        the service facade every frontend uses (one implementation, no interfaces)
   tui/        bubbletea program: root model, sub-models, messages, theme, components
   cli/        cobra commands and exit-code mapping
@@ -43,7 +43,7 @@ deps        -> config, scripts
 runner      -> config, secret, scripts, lockfile, history, webhook, procstat
 missed      -> config, cron, history, lockfile, webhook
 retention   -> config, history, cron
-migrate     -> config, cron, scripts
+(migrate retired 2026-09-02 — was: migrate -> config, cron, scripts)
 app         -> everything above
 tui, cli, mcp -> app  (+ config for read-only values; tui also -> its own theme pkg)
 ```
@@ -202,6 +202,8 @@ Register call. lipgloss/v2 owns downsampling (ConvertTo-Ansi256Index disappears)
 config colorMode maps to profile override.
 
 ## Compat / migration
+
+> **RETIRED 2026-09-02:** the owner chose a fresh install over migration; `internal/migrate`, `--migrate`, the legacy crontab markers, dataDir/layout migrations, and the psscripts-era install.sh machinery described below were removed in commit 2e749f0. This section is preserved as historical design record only.
 
 Only `internal/migrate` is a dedicated compat package (one-shot migrations): crontab
 block rewrite (both marker generations recognized; KEEP the CLI spelling
