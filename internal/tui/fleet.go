@@ -265,12 +265,14 @@ func (f *fleetModel) railPanels(m *Model, w, h, _ int) []string {
 	inner := w - 2
 	items := f.agenda(m)
 
-	agendaH := min(len(items)+2, max(h/3, 4))
+	// every card keeps at least one content row: an empty agenda still says
+	// "nothing scheduled", an empty activity card still says "idle"
+	agendaH := min(max(len(items), 1)+2, max(h/3, 4))
 	out := renderPanel(th, agendaBody(th, items, inner, agendaH-2), w, agendaH,
 		panelOpts{title: "upcoming"})
 
 	queued := m.run.queueDepth()
-	actH := min(max(h-len(out), 3), len(m.live)+boolInt(queued > 0)+2)
+	actH := min(max(h-len(out), 3), max(len(m.live)+boolInt(queued > 0), 1)+2)
 	actBody := activityBody(th, m.live, m.now(), m.spinnerFrame(), queued, inner, actH-2)
 	out = append(out, renderPanel(th, actBody, w, actH,
 		panelOpts{title: "live now", titleStyle: m.pulseTitleStyle()})...)
