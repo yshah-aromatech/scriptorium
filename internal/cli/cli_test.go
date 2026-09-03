@@ -539,3 +539,44 @@ func TestVersionFlag(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", out.String(), want)
 	}
 }
+
+// ---------------------------------------------------------------------
+// ResolveAppDir's fallback chain — the runtime counterpart of install.sh's
+// own app-dir resolution, so a bare `scriptorium` invocation after a fresh
+// install finds what install.sh just bootstrapped.
+// ---------------------------------------------------------------------
+
+func TestResolveAppDirFallbackChain(t *testing.T) {
+	t.Setenv("SCRIPTORIUM_APP_DIR", "")
+	t.Setenv("PSSCRIPTS_APP_DIR", "")
+
+	t.Run("PSSCRIPTS_APP_DIR wins when SCRIPTORIUM_APP_DIR is unset", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("PSSCRIPTS_APP_DIR", dir)
+		if got := cli.ResolveAppDir(); got != dir {
+			t.Errorf("ResolveAppDir() = %q, want %q", got, dir)
+		}
+	})
+
+	t.Run("defaults to ~/scriptorium when nothing else applies", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Chdir(t.TempDir()) // no config.json here
+		want := filepath.Join(home, "scriptorium")
+		if got := cli.ResolveAppDir(); got != want {
+			t.Errorf("ResolveAppDir() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("cwd with config.json wins over the ~/scriptorium default (cron's cd)", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		cwd := t.TempDir()
+		if err := os.WriteFile(filepath.Join(cwd, "config.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(cwd)
+		if got := cli.ResolveAppDir(); got != cwd {
+			t.Errorf("ResolveAppDir() = %q, want %q", got, cwd)
+		}
+	})
+}

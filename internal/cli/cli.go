@@ -31,12 +31,30 @@ import (
 
 // ResolveAppDir finds the app directory the way scriptorium.ps1 does via
 // $PSScriptRoot, adapted for a compiled binary that has no script path of
-// its own: $SCRIPTORIUM_APP_DIR wins when set; else the executable's own
-// directory, when a config.json lives there (an installed binary shipped
-// beside its config); else the current working directory (running from a
-// dev checkout). Tests drive this via the env var.
+// its own — and mirroring install.sh's own app-dir chain, so a binary it
+// just installed and a bare `scriptorium` invocation agree on where
+// config.json/.env live without any extra ceremony:
+//
+//  1. $SCRIPTORIUM_APP_DIR, when set (explicit override, either mode).
+//  2. $PSSCRIPTS_APP_DIR, the pre-rename env var (install.sh still honors it).
+//  3. the executable's own directory, when a config.json lives there (an
+//     installed binary shipped beside its config).
+//  4. the current working directory, when a config.json lives there — this
+//     is what makes a cron line's `cd "$APP_DIR" && scriptorium --run ...`
+//     resolve correctly, and it's also the dev-checkout convenience of
+//     running `./scriptorium` from a repo root.
+//  5. install.sh's own default, ~/scriptorium — so a bare `scriptorium`
+//     typed from anywhere after a fresh install finds what install.sh just
+//     bootstrapped there.
+//  6. the current working directory, unconditionally, as the last resort.
+//
+// Tests drive step 1 via the env var; nothing here needs config.json to
+// exist for a fresh install (config.Load's own defaults apply either way).
 func ResolveAppDir() string {
 	if d := os.Getenv("SCRIPTORIUM_APP_DIR"); d != "" {
+		return d
+	}
+	if d := os.Getenv("PSSCRIPTS_APP_DIR"); d != "" {
 		return d
 	}
 	if exe, err := os.Executable(); err == nil {
@@ -46,6 +64,14 @@ func ResolveAppDir() string {
 		}
 	}
 	cwd, _ := os.Getwd()
+	if cwd != "" {
+		if _, err := os.Stat(filepath.Join(cwd, "config.json")); err == nil {
+			return cwd
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "scriptorium")
+	}
 	return cwd
 }
 
