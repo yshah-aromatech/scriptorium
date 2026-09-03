@@ -194,7 +194,7 @@ func activityRows(th theme.Theme, live []lockfile.Live, now time.Time, spin stri
 			mark = th.S.Info.Render("↗") // started outside this session: cron, MCP, another shell
 		}
 		name := textkit.Truncate(l.Name, max(w-9-lipgloss.Width(pid), 1))
-		rows = append(rows, " "+th.S.Info.Render(spin)+" "+name+mark+" "+elapsed+" "+pid)
+		rows = append(rows, " "+th.S.Pulse.Render(spin)+" "+name+mark+" "+elapsed+" "+pid)
 	}
 	if queued > 0 {
 		rows = append(rows, " "+th.S.Info.Render("»")+" "+

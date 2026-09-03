@@ -107,7 +107,7 @@ func TestTooSmallGuard(t *testing.T) {
 	}
 	m := newFixtureModel(t, truecolorEnv)
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
-	checkGolden(t, "too-small-30x8.txt", textkit.StripANSI(m.frame()))
+	checkGolden(t, "too-small-30x8.txt", plainGolden(m.frame()))
 	checkGolden(t, "too-small-30x8.ansi", m.frame())
 }
 

@@ -3,9 +3,11 @@ package theme_test
 import (
 	"image/color"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
@@ -13,7 +15,8 @@ import (
 // Every Night Owl token pinned against src/Core.psm1's $script:NightOwl table
 // (lines 13-29) and the CardBg blend at line 109. Copied here so a palette
 // edit has to be deliberate; the mapping from those raw color names to these
-// semantic tokens is inventory §12.2.
+// semantic tokens is inventory §12.2, as corrected 2026-09-03 (v1.0.1): the
+// Primary/Pulse unfold, the quieted Border and the contrast-lifted Muted.
 func TestNightOwlHexes(t *testing.T) {
 	p, ok := theme.Get(theme.Default)
 	if !ok {
@@ -27,19 +30,16 @@ func TestNightOwlHexes(t *testing.T) {
 		"Success":   "#22da6e", // Core.psm1:19  Green    — success
 		"RuntimePy": "#c5e478", // Core.psm1:20  Yellow   — python tag
 		"RuntimePS": "#82aaff", // Core.psm1:21  Blue     — powershell tag
-		"Accent":    "#c792ea", // Core.psm1:22  Magenta  — key hints + focus
+		"Primary":   "#82aaff", // Core.psm1:21  Blue     — focus, selection, hint keys
+		"Accent":    "#c792ea", // Core.psm1:22  Magenta  — brand chip + overlay highlight
 		"Info":      "#21c7a8", // Core.psm1:23  Cyan     — scheduled, queued
-		"Muted":     "#637777", // Core.psm1:25  BrBlack  — muted text
+		"Muted":     "#708284", // Core.psm1:25  BrBlack #637777 lifted to 4.5:1 on Bg
 		"Warning":   "#ffeb95", // Core.psm1:26  BrYellow — killed/timeout/skipped
-		"Border":    "#5f7e97", // Core.psm1:28  Border
+		"Pulse":     "#7fdbca", // Core.psm1:27  BrCyan   — spinner, focused title
+		"Border":    "#4c6981", // Core.psm1:28  Border #5f7e97 darkened toward Bg (chrome budget)
 		"CardBg":    "#0c2031", // Core.psm1:109 blend(Bg, #ffffff, 0.045)
 	}
-	got := map[string]string{
-		"Bg": p.Bg, "Fg": p.Fg, "SelBg": p.SelBg, "Danger": p.Danger,
-		"Success": p.Success, "RuntimePy": p.RuntimePy, "RuntimePS": p.RuntimePS,
-		"Accent": p.Accent, "Info": p.Info, "Muted": p.Muted,
-		"Warning": p.Warning, "Border": p.Border, "CardBg": p.CardBg,
-	}
+	got := p.Tokens()
 	for k, w := range want {
 		if got[k] != w {
 			t.Errorf("night-owl %s = %s, want %s", k, got[k], w)
@@ -47,21 +47,128 @@ func TestNightOwlHexes(t *testing.T) {
 	}
 }
 
+// The two v1.0.1 shade adjustments are exactly the "nearest passing shade"
+// rule: the published hex blended toward Fg in 1% steps until the floor holds.
+// Pinning the derivation (not just the result) keeps the note in palettes.go
+// honest.
+func TestNightOwlAdjustedShadesAreTheNearestPassing(t *testing.T) {
+	p, _ := theme.Get(theme.Default)
+	if r := theme.ContrastRatio(p.Muted, p.Bg); r < 4.5 || r > 4.7 {
+		t.Errorf("lifted Muted ratio = %.2f, want just above 4.5", r)
+	}
+	if r := theme.ContrastRatio(p.Border, p.Bg); r < 3.0 || r > 3.3 {
+		t.Errorf("quieted Border ratio = %.2f, want just above 3", r)
+	}
+	// the original shades really did fail, or the lift notes are fiction
+	if r := theme.ContrastRatio("#637777", p.Bg); r >= 4.5 {
+		t.Errorf("original Muted #637777 rates %.2f — the lift note is wrong", r)
+	}
+}
+
 // The alternates are day-one registrations, each one Register call; every token
 // must be a parseable hex so a typo fails here and not as an invisible cell.
+// The `terminal` palette is the deliberate exception: its tokens are ANSI
+// indices 0-15 plus "" for the terminal's own default fg/bg.
 func TestAllPalettesComplete(t *testing.T) {
 	names := theme.Names()
-	for _, want := range []string{"night-owl", "catppuccin-mocha", "gruvbox-dark", "tokyo-night"} {
+	for _, want := range []string{"night-owl", "catppuccin-mocha", "gruvbox-dark", "tokyo-night", "terminal"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("palette %q not registered (have %v)", want, names)
 		}
 	}
 	for _, name := range names {
 		p, _ := theme.Get(name)
-		for tok, hex := range p.Tokens() {
-			if len(hex) != 7 || hex[0] != '#' || strings.ToLower(hex) != hex {
-				t.Errorf("%s.%s = %q, want a lowercase #rrggbb", name, tok, hex)
+		for tok, v := range p.Tokens() {
+			if name == "terminal" {
+				if !validANSIToken(tok, v) {
+					t.Errorf("terminal.%s = %q, want \"\" (default) or an ANSI index 0-15", tok, v)
+				}
+				continue
 			}
+			if len(v) != 7 || v[0] != '#' || strings.ToLower(v) != v {
+				t.Errorf("%s.%s = %q, want a lowercase #rrggbb", name, tok, v)
+			}
+		}
+	}
+}
+
+func validANSIToken(tok, v string) bool {
+	if v == "" {
+		// only the tokens that mean "the terminal's own default" may be empty
+		return tok == "Bg" || tok == "Fg" || tok == "CardBg"
+	}
+	n, err := strconv.Atoi(v)
+	return err == nil && n >= 0 && n <= 15
+}
+
+// The style roles behind the v1.0.1 re-voicing: focus chrome speaks Primary,
+// the focused title and spinner speak Pulse (the PS Blue↔BrCyan interplay,
+// Tui.psm1:1476-1481), and Accent survives only on the brand chip (bg) and
+// the palette overlay's highlight.
+func TestFocusVoiceIsPrimaryAndPulse(t *testing.T) {
+	th := theme.New(theme.Default, colorprofile.TrueColor)
+	if got, want := th.S.BorderOn.Render("─"), th.S.Primary.Render("─"); got != want {
+		t.Errorf("BorderOn = %q, want the Primary voice %q", got, want)
+	}
+	if got := th.S.TitleOn.Render("t"); !strings.Contains(got, "38;2;127;219;202") {
+		t.Errorf("TitleOn = %q, want Pulse #7fdbca", got)
+	}
+	if got := th.S.Key.Render("k"); !strings.Contains(got, "38;2;130;170;255") {
+		t.Errorf("Key = %q, want Primary #82aaff", got)
+	}
+	if got := th.S.TabOn.Render("1"); !strings.Contains(got, "38;2;130;170;255") {
+		t.Errorf("TabOn = %q, want Primary on the selection band", got)
+	}
+	if got := th.S.Chip.Render("b"); !strings.Contains(got, "48;2;199;146;234") {
+		t.Errorf("Chip = %q, want the Accent background — the brand keeps the magenta", got)
+	}
+	if got := th.S.Pulse.Render("⠋"); !strings.Contains(got, "38;2;127;219;202") {
+		t.Errorf("Pulse = %q, want BrCyan #7fdbca", got)
+	}
+}
+
+// GroundRow is the v1.0.1 "no ground" fix: pad to width, arm Fg-on-Bg at the
+// head, re-arm after every reset a styled span leaves, close with a reset —
+// so no cell of a grounded row can fall back to the terminal's own colors.
+func TestGroundRow(t *testing.T) {
+	th := theme.New(theme.Default, colorprofile.TrueColor)
+	row := th.GroundRow("ab "+th.S.Success.Render("ok")+" tail", 12)
+
+	arm := "\x1b[38;2;214;222;235;48;2;1;22;39m"
+	if !strings.HasPrefix(row, arm) {
+		t.Errorf("row does not open by arming the ground:\n%q", row)
+	}
+	if !strings.HasSuffix(row, "\x1b[m") {
+		t.Errorf("row does not close with a reset:\n%q", row)
+	}
+	for _, reset := range []string{"\x1b[m", "\x1b[0m"} {
+		at := 0
+		for {
+			i := strings.Index(row[at:], reset)
+			if i < 0 {
+				break
+			}
+			rest := row[at+i+len(reset):]
+			if rest != "" && !strings.HasPrefix(rest, arm) {
+				t.Errorf("a %q reset is not re-armed with the ground:\n%q", reset, row)
+			}
+			at += i + len(reset)
+		}
+	}
+	if got := lipgloss.Width(row); got != 12 {
+		t.Errorf("grounded row is %d cells, want padded to 12", got)
+	}
+}
+
+// The two no-ground worlds: the `terminal` palette (by design — it inherits
+// the user's scheme) and any no-colour profile.
+func TestGroundRowNoGround(t *testing.T) {
+	for name, th := range map[string]theme.Theme{
+		"terminal palette": theme.New("terminal", colorprofile.TrueColor),
+		"ascii profile":    theme.New(theme.Default, colorprofile.Ascii),
+	} {
+		if got := th.GroundRow("plain", 10); got != "plain" {
+			t.Errorf("%s: GroundRow = %q, want the row untouched (no padding, no SGR)", name, got)
 		}
 	}
 }

@@ -282,7 +282,7 @@ func (s *schedulesModel) row(m *Model, r scheduleRow, selected bool, w, nameW in
 	bar := " "
 	if selected {
 		bg = th.C.SelBg
-		bar = tint(th.S.Accent, bg).Render("▎")
+		bar = tint(th.S.Primary, bg).Render("▎")
 	}
 	gap := tint(th.S.Base, bg).Render(" ")
 

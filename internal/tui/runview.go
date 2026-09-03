@@ -647,13 +647,15 @@ func (r *runModel) statusLine(m *Model, w int) (string, bool) {
 	th := m.th
 	if r.handle == nil {
 		if r.task != nil {
-			return " " + th.S.Info.Render(m.spinnerFrame()+" "+r.task.name+"…"), true
+			return " " + th.S.Pulse.Render(m.spinnerFrame()) + " " +
+				th.S.Base.Render(r.task.name+"…"), true
 		}
 		return "", false
 	}
 
 	elapsed := m.now().Sub(r.startedAt)
-	head := " " + th.S.Info.Render(m.spinnerFrame()+" "+r.handle.Name) + " " +
+	head := " " + th.S.Pulse.Render(m.spinnerFrame()) + " " +
+		th.S.Base.Render(r.handle.Name) + " " +
 		th.S.Desc.Render(format.RelativeTime(elapsed.Seconds()))
 
 	tail := ""

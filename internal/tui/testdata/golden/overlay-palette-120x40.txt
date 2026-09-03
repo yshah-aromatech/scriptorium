@@ -1,5 +1,5 @@
- ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                      scripts · synced 4m ago   ops-01   v1.4.2 
- ● 3 ok  ·  ✗ 1 failing  ·  ⚠ 1 missed  ·  ⏲ 2 due <1h                                                        5 scripts 
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                      scripts · synced 4m ago   ops-01   v1.4.2
+ ● 3 ok  ·  ✗ 1 failing  ·  ⚠ 1 missed  ·  ⏲ 2 due <1h                                                        5 scripts
 ─ scripts ─────────────────────────────────────────────────────────────────────────│─ upcoming ─────────────────────────
 ▎✓ backup-db      nightly postgres dump to object … ps ▃▆█▆▅▃ ↻ 0 2 * * *        3m│     5m  nightly-report
  · cleanup-tmp    prune /tmp older than 7 days      ps ······                     —│    10m  heartbeat
@@ -9,22 +9,22 @@
                                                                                    │ ⠋ sync-orders↗    1m ·4242
                                                                                    │
 ─ commands ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
- ❯ ru                                                                                                                   
- ▎ 2      run  ·  views                                                                                                 
-   r      run script  ·  run                                                                                            
-   a      args  ·  run                                                                                                  
-   x      kill  ·  run                                                                                                  
-   X      clear queue  ·  run                                                                                           
-   s      sync  ·  run                                                                                                  
-   e      .env  ·  run                                                                                                  
-   i      deps  ·  run                                                                                                  
-   l      lint  ·  run                                                                                                  
-   u      upgrade  ·  run                                                                                               
-   v      last log  ·  run                                                                                              
-   y      copy all output  ·  run                                                                                       
-   c      clear output  ·  run                                                                                          
-   h      script history  ·  run                                                                                        
-   ctrl+f search output · n/N next/prev  ·  tools                                                                       
+ ❯ ru
+ ▎ 2      run  ·  views
+   r      run script  ·  run
+   a      args  ·  run
+   x      kill  ·  run
+   X      clear queue  ·  run
+   s      sync  ·  run
+   e      .env  ·  run
+   i      deps  ·  run
+   l      lint  ·  run
+   u      upgrade  ·  run
+   v      last log  ·  run
+   y      copy all output  ·  run
+   c      clear output  ·  run
+   h      script history  ·  run
+   ctrl+f search output · n/N next/prev  ·  tools
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
                                                                                    │
                                                                                    │

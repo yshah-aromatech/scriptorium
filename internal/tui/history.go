@@ -274,7 +274,7 @@ func (h *historyModel) row(m *Model, r history.Row, selected, wide bool, w, name
 	bar := " "
 	if selected {
 		bg = th.C.SelBg
-		bar = tint(th.S.Accent, bg).Render("▎")
+		bar = tint(th.S.Primary, bg).Render("▎")
 	}
 	gap := tint(th.S.Base, bg).Render(" ")
 

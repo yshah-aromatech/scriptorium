@@ -59,7 +59,7 @@ func newInput(m *Model, kindOf inputKind, prompt, initial string,
 	// cannot pin. Static block cursor: the same cell, every render.
 	st := ti.Styles()
 	st.Cursor.Blink = false
-	st.Cursor.Color = m.th.C.Accent
+	st.Cursor.Color = m.th.C.Primary
 	st.Focused.Text = m.th.S.Base
 	st.Focused.Placeholder = m.th.S.Muted
 	ti.SetStyles(st)

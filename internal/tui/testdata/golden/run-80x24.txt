@@ -1,24 +1,24 @@
- ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2 
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2
 ─ scripts ────────────────│─ output ────────────────────────────────────────────
-▎✓ backup-db     ps ↻   3m│▸ scriptorium                                        
- · cleanup-tmp   ps      —│                                                     
- ✓ heartbeat     py ↻  40s│  r run · s sync · tab focus · 1-4 views             
- ✓ nightly-repo… ps ⚠   5h│                                                     
- ▶ sync-orders   py    12m│                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-                          │                                                     
-─ details ────────────────│                                                     
- ● backup-db · powershell…│                                                     
- ▸ entry backup-db/backup…│                                                     
- ⚙ env 0 vars             │                                                     
- ↻ cron 0 2 * * * · next …│                                                     
- ✦ last success · 42.5s ·…│                                                     
-   cpu 66% peak · mem 61.…│                                                     
-   at 2026-09-02 14:27:00 │                                                     
+▎✓ backup-db     ps ↻   3m│▸ scriptorium
+ · cleanup-tmp   ps      —│
+ ✓ heartbeat     py ↻  40s│  r run · s sync · tab focus · 1-4 views
+ ✓ nightly-repo… ps ⚠   5h│
+ ▶ sync-orders   py    12m│
+                          │
+                          │
+                          │
+                          │
+                          │
+                          │
+                          │
+─ details ────────────────│
+ ● backup-db · powershell…│
+ ▸ entry backup-db/backup…│
+ ⚙ env 0 vars             │
+ ↻ cron 0 2 * * * · next …│
+ ✦ last success · 42.5s ·…│
+   cpu 66% peak · mem 61.…│
+   at 2026-09-02 14:27:00 │
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
 q quit · ↑/k up · ↓/j down · tab focus · r run script · a args · x kill …

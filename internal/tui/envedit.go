@@ -56,7 +56,7 @@ func newEnvEditor(m *Model, s scripts.Script) *envOverlay {
 
 	st := ta.Styles()
 	st.Cursor.Blink = false // deterministic frames
-	st.Cursor.Color = m.th.C.Accent
+	st.Cursor.Color = m.th.C.Primary
 	st.Focused.Text = m.th.S.Base
 	st.Focused.EndOfBuffer = m.th.S.Muted
 	ta.SetStyles(st)

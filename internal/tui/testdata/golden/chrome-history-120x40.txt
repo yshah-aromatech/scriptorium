@@ -1,4 +1,4 @@
- ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                      scripts · synced 4m ago   ops-01   v1.4.2 
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                      scripts · synced 4m ago   ops-01   v1.4.2
 ─ history ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
  no runs yet
 

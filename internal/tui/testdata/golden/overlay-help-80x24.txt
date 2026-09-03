@@ -1,24 +1,24 @@
- ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2 
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2
 ─ keys ─────────────────────────────────────────────────────────────────────────
- # views                                # tools                                 
-  1       fleet                          /       filter list                    
-  2       run                            ctrl+f  search output · n/N next/prev  
-  3       history                        U       self-update                    
-  4       schedules                      t       webhook test                   
-                                                                                
- # move                                 # schedules                             
-  ↑/k     up                             e/↵     edit                           
-  ↓/j     down                                                                  
-  pgup    page up                       # session                               
-  pgdn    page down                      :       commands                       
-  g       top                            ?       help                           
-  G       bottom                         q       quit                           
-  tab     focus                                                                 
-  end     follow                        # overlays                              
-                                         y/↵     confirm                        
- # fleet                                 n       no                             
-  ↵       open                           ctrl+s  save                           
-  ▼ 16 more — ↑↓ scrolls                                                        
+ # views                                # tools
+  1       fleet                          /       filter list
+  2       run                            ctrl+f  search output · n/N next/prev
+  3       history                        U       self-update
+  4       schedules                      t       webhook test
+
+ # move                                 # schedules
+  ↑/k     up                             e/↵     edit
+  ↓/j     down
+  pgup    page up                       # session
+  pgdn    page down                      :       commands
+  g       top                            ?       help
+  G       bottom                         q       quit
+  tab     focus
+  end     follow                        # overlays
+                                         y/↵     confirm
+ # fleet                                 n       no
+  ↵       open                           ctrl+s  save
+  ▼ 16 more — ↑↓ scrolls
 ────────────────────────────────────────────────────────────────────────────────
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
 ↑/k up · ↓/j down · any other key close

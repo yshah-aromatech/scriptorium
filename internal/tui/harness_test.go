@@ -269,7 +269,7 @@ func goldenFrames(t *testing.T, name string, build func(t *testing.T, env []stri
 		m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		frame := m.frame()
 		checkFrameShape(t, base, frame, w, h)
-		checkGolden(t, base+".txt", textkit.StripANSI(frame))
+		checkGolden(t, base+".txt", plainGolden(frame))
 		checkGolden(t, base+".ansi", frame)
 
 		if w == 120 {
@@ -278,6 +278,17 @@ func goldenFrames(t *testing.T, name string, build func(t *testing.T, env []stri
 			checkGolden(t, base+".ansi256.ansi", m256.frame())
 		}
 	}
+}
+
+// plainGolden is the layout half of a frame: ANSI stripped, and the ground
+// pass's right-edge padding trimmed per row — the .txt goldens are for reading
+// the layout, and forty rows of trailing spaces would only obscure a diff.
+func plainGolden(frame string) string {
+	rows := strings.Split(textkit.StripANSI(frame), "\n")
+	for i, r := range rows {
+		rows[i] = strings.TrimRight(r, " ")
+	}
+	return strings.Join(rows, "\n")
 }
 
 // checkFrameShape is the invariant no golden can hide: exactly h rows, none

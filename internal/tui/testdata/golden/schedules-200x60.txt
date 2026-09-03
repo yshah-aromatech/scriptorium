@@ -1,10 +1,10 @@
- ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                                                                                                      scripts · synced 4m ago   ops-01   v1.4.2 
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                                                                                                      scripts · synced 4m ago   ops-01   v1.4.2
 ─ schedules ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-▎ nightly-report */5 * * * *    ⚠ missed Wed 13:55                                                                                                                                                      
-  heartbeat      */10 * * * *   next in 10m                                                                                                                                                             
-  backup-db      0 2 * * *      next in 11h                                                                                                                                                             
-  cleanup-tmp    —              not scheduled — e adds one                                                                                                                                              
-  sync-orders    —              not scheduled — e adds one                                                                                                                                              
+▎ nightly-report */5 * * * *    ⚠ missed Wed 13:55
+  heartbeat      */10 * * * *   next in 10m
+  backup-db      0 2 * * *      next in 11h
+  cleanup-tmp    —              not scheduled — e adds one
+  sync-orders    —              not scheduled — e adds one
 
 
 

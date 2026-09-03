@@ -541,14 +541,23 @@ func (m *Model) View() tea.View {
 }
 
 func (m *Model) frame() string {
+	var rows []string
 	if m.w < minWidth || m.h < minHeight {
-		return m.tooSmall()
+		rows = m.tooSmall()
+	} else {
+		rows = make([]string, 0, m.h)
+		rows = append(rows, m.header())
+		rows = append(rows, m.body()...)
+		rows = append(rows, m.statusBar())
+		rows = append(rows, m.footer())
 	}
-	rows := make([]string, 0, m.h)
-	rows = append(rows, m.header())
-	rows = append(rows, m.body()...)
-	rows = append(rows, m.statusBar())
-	rows = append(rows, m.footer())
+	// The ground pass (v1.0.1): every row carries Fg-on-Bg edge to edge, so no
+	// cell of the frame ever falls back to the terminal's own colors. The
+	// `terminal` palette and no-colour profiles have no ground and pass
+	// through untouched — see theme.GroundRow.
+	for i, r := range rows {
+		rows[i] = m.th.GroundRow(r, m.w)
+	}
 	return strings.Join(rows, "\n")
 }
 
@@ -597,7 +606,7 @@ func (m *Model) body() []string {
 }
 
 // tooSmall is the guard frame: the one thing that is still true at 30x8.
-func (m *Model) tooSmall() string {
+func (m *Model) tooSmall() []string {
 	lines := []string{
 		m.th.S.Danger.Render("terminal too small"),
 		m.th.S.Muted.Render(fmtSize(minWidth, minHeight) + " minimum · now " + fmtSize(m.w, m.h)),
@@ -610,7 +619,7 @@ func (m *Model) tooSmall() string {
 	for _, l := range lines {
 		rows = append(rows, center(l, m.w))
 	}
-	return strings.Join(fitRows(rows, max(m.h, 1)), "\n")
+	return fitRows(rows, max(m.h, 1))
 }
 
 // header is the brand chip, the view switcher and the right-hand context chips
@@ -641,7 +650,9 @@ func (m *Model) tabs(compact bool) string {
 		active := mode(i) == m.mode
 		switch {
 		case active:
-			b.WriteString(m.th.S.Sel.Render(" " + digit + " " + label + " "))
+			// Primary on the selection band — the "you are here" voice
+			// (v1.0.1: the active tab belongs to Primary, not to Sel's Fg)
+			b.WriteString(m.th.S.TabOn.Render(" " + digit + " " + label + " "))
 		case compact:
 			b.WriteString(" " + m.th.S.Key.Render(digit) + " ")
 		default:

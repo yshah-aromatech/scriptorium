@@ -47,7 +47,7 @@ func (d scriptDelegate) Render(w io.Writer, l list.Model, index int, item list.I
 	bar := " "
 	if index == l.Index() {
 		bg = th.C.SelBg
-		bar = tint(th.S.Accent, bg).Render("▎")
+		bar = tint(th.S.Primary, bg).Render("▎")
 	}
 
 	last := m.statuses[it.s.Name]

@@ -257,12 +257,14 @@ func (o *outputPane) view(th theme.Theme, spin string, focused bool) []string {
 				line = colorLine(th, text)
 			}
 		}
-		bar := th.S.Muted.Render("│")
+		// scrollbar: quiet Border track, Muted thumb — chrome, not data
+		// (v1.0.1: the Accent thumb was one more purple element per frame)
+		bar := th.S.Border.Render("│")
 		switch {
 		case visible <= n:
 			bar = " "
 		case i >= thumbAt && i < thumbAt+thumb:
-			bar = th.S.Accent.Render("█")
+			bar = th.S.Muted.Render("█")
 		}
 		rows = append(rows, fillTo(line, o.contentWidth(), nil)+bar)
 	}

@@ -291,7 +291,7 @@ func (f *fleetModel) row(m *Model, s scripts.Script, selected, wide bool, w, nam
 	bar := " "
 	if selected {
 		bg = th.C.SelBg
-		bar = tint(th.S.Accent, bg).Render("▎")
+		bar = tint(th.S.Primary, bg).Render("▎")
 	}
 
 	last := m.statuses[s.Name]

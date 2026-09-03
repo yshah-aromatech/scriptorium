@@ -1,5 +1,5 @@
- ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2 
- ● 3 ok  ·  ✗ 1 failing  ·  ⚠ 1 missed  ·  ⏲ 2 due <1h                5 scripts 
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2
+ ● 3 ok  ·  ✗ 1 failing  ·  ⚠ 1 missed  ·  ⏲ 2 due <1h                5 scripts
 ─ scripts — failures only ──────────────────────────────────────────────────────
 ▎▶ sync-orders pull orders from the ERP into postgres                 py     12m
 ─ upcoming ─────────────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
- ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                                      scripts   ops-01   v1.4.2 
- ● 0 ok  ·  ✗ 0 failing  ·  ⚠ 0 missed  ·  ⏲ 0 due <1h                                                        0 scripts 
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                                      scripts   ops-01   v1.4.2
+ ● 0 ok  ·  ✗ 0 failing  ·  ⚠ 0 missed  ·  ⏲ 0 due <1h                                                        0 scripts
 ─ scripts ─────────────────────────────────────────────────────────────────────────│─ upcoming ─────────────────────────
  no scripts yet — press s to sync a repo                                           │ nothing scheduled
                                                                                    │
