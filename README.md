@@ -196,6 +196,7 @@ See `config.json.example` for the full set. Unknown keys and bad values for nume
 - **clone/fetch fails** — check `GITHUB_TOKEN` in `.env` (needs Contents: Read on the scripts repo); rerun sync (`s`) after rotating it.
 - **webhook not firing** — press `t` to send a test event; check the n8n workflow is active and the URL is the production one.
 - **copy does nothing over SSH/tmux** — add `set -g allow-passthrough on` to `~/.tmux.conf` (OSC 52 copies are capped at 72KB).
+- **colors look gray/washed-out under tmux** — tmux often advertises only 256 colors; the UI then uses a harmonized indexed palette. For the true theme, let tmux pass truecolor through: `set -ga terminal-overrides ",*:Tc"` (tmux ≥3.2: `set -as terminal-features ",*:RGB"`) in `~/.tmux.conf`.
 - **a run is stuck "skipped"** — a stale lock under `~/.scriptorium/locks/` is reclaimed automatically once its owning PID is dead; delete the file manually to force it sooner.
 
 ## Development

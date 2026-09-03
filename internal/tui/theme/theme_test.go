@@ -9,6 +9,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
 
@@ -252,6 +253,48 @@ func TestCuratedPalettesMeetTheContrastFloor(t *testing.T) {
 				t.Errorf("%s.%s %s on %s = %.2f:1, floor is %.1f:1", name, c.tok, c.hex, p.Bg, r, c.floor)
 			}
 		}
+	}
+}
+
+// Design-review finding I1: on a 256-color terminal (the owner's tmux
+// reality) the dark surfaces must not downsample onto saturated cube colors —
+// CardBg landed on navy 17 and SelBg on teal 23, loud chips on the calm
+// gray-233 ground. The pinned picks put CardBg two gray steps above the
+// ground and SelBg on 24, the cube's quietest blue. Surfaces the downsampler
+// already placed on the gray ramp keep their gray, and truecolor is
+// untouched.
+func TestSurfaces256AreHarmonized(t *testing.T) {
+	no := theme.New(theme.Default, colorprofile.ANSI256)
+	if got := no.C.Bg; got != ansi.IndexedColor(233) {
+		t.Fatalf("night-owl 256 ground = %v, want gray 233 (the fix must not touch the ground)", got)
+	}
+	if got := no.C.CardBg; got != ansi.IndexedColor(235) {
+		t.Errorf("night-owl 256 CardBg = %v, want gray 235 (was navy 17)", got)
+	}
+	if got := no.C.SelBg; got != ansi.IndexedColor(24) {
+		t.Errorf("night-owl 256 SelBg = %v, want dim blue 24 (was teal 23)", got)
+	}
+
+	// the same class hits other dark palettes' derived CardBg — the fix is
+	// in the shared path, so they all come out harmonious
+	for _, name := range []string{"catppuccin-mocha", "tokyo-night", "dracula"} {
+		th := theme.New(name, colorprofile.ANSI256)
+		card, ok := th.C.CardBg.(ansi.IndexedColor)
+		if !ok || (card >= 16 && card < 232) {
+			t.Errorf("%s 256 CardBg = %v, want a grayscale-ramp index", name, th.C.CardBg)
+		}
+	}
+
+	// a surface the downsampler already placed on the gray ramp keeps it
+	gb := theme.New("gruvbox-dark", colorprofile.ANSI256)
+	if got := gb.C.SelBg; got != ansi.IndexedColor(237) {
+		t.Errorf("gruvbox 256 SelBg = %v, want the downsampler's own gray 237", got)
+	}
+
+	// truecolor keeps the real hexes
+	tc := theme.New(theme.Default, colorprofile.TrueColor)
+	if _, isIdx := tc.C.SelBg.(ansi.IndexedColor); isIdx {
+		t.Error("the 256 surface pins leaked into the truecolor path")
 	}
 }
 

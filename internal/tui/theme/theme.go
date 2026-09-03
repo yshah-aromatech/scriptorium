@@ -193,6 +193,10 @@ func New(name string, prof colorprofile.Profile) Theme {
 		SelBg: conv(prof, p.SelBg), CardBg: conv(prof, p.CardBg),
 		RuntimePS: conv(prof, p.RuntimePS), RuntimePy: conv(prof, p.RuntimePy),
 	}
+	if prof == colorprofile.ANSI256 {
+		c.CardBg = harmonize256(c.CardBg, c.Bg, cardBg256)
+		c.SelBg = harmonize256(c.SelBg, c.Bg, selBg256)
+	}
 	fg := func(x color.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(x) }
 	ground := ""
 	if c.Bg != nil && c.Fg != nil {
@@ -281,6 +285,46 @@ func conv(prof colorprofile.Profile, hex string) color.Color {
 		return nil
 	}
 	return prof.Convert(lipgloss.Color(hex))
+}
+
+// The pinned 256-color surface indices (design-review finding I1, 2026-09-03).
+//
+// xterm-256 has no quiet navy: the very dark low-chroma surfaces the dark
+// palettes derive (CardBg one step above a near-black blue ground, SelBg a
+// dim blue band) sit below the cube's first 0x5f step, so nearest-RGB
+// downsampling throws them onto saturated cube colors — CardBg landed on
+// index 17 (#00005f navy) and SelBg on 23 (#005f5f teal) for Night Owl,
+// Catppuccin, Tokyo Night and the Dracula tint alike: loud chips floating on
+// the calm gray-233 ground, the same fragments-on-an-alien-ground class the
+// truecolor fix killed. When a surface token lands in the cube while the
+// ground sits on the grayscale ramp, these picks replace the downsampler's:
+//
+//	cardBg256 — two gray steps above the ground ("one step above Bg", in the
+//	            ramp's own currency; ground 233 → card 235)
+//	selBg256  — index 24 (#005f87), the quietest blue the cube offers: a dim
+//	            selection band in the focus hue, matched to the ramp's value
+//
+// A surface the downsampler already placed on the gray ramp (Gruvbox, most
+// tints) keeps that gray; light grounds (not on the ramp) keep the generic
+// pick. Truecolor is untouched.
+func cardBg256(ground ansi.IndexedColor) ansi.IndexedColor {
+	return min(ground+2, 255)
+}
+
+func selBg256(ansi.IndexedColor) ansi.IndexedColor {
+	return 24
+}
+
+// harmonize256 applies a pinned pick when — and only when — the generic
+// downsample put a surface token on a saturated cube color (16-231) over a
+// grayscale-ramp ground (232-255).
+func harmonize256(surface, ground color.Color, pick func(ansi.IndexedColor) ansi.IndexedColor) color.Color {
+	s, sOK := surface.(ansi.IndexedColor)
+	g, gOK := ground.(ansi.IndexedColor)
+	if !sOK || !gOK || s >= 232 || s < 16 || g < 232 {
+		return surface
+	}
+	return pick(g)
 }
 
 // ---------------------------------------------------------------------------
