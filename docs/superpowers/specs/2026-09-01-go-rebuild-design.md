@@ -81,6 +81,19 @@ deep-links. Night Owl remains the default identity; themes are semantic tokens �
 palettes (Catppuccin, Gruvbox, Tokyo Night as day-one alternates — one `Register`
 call each).
 
+> **2026-09-03 (v1.0.1) token-list amendment:** the semantic-token contract grew
+> from thirteen to FIFTEEN tokens: `Bg Fg Muted Border Primary Pulse Accent
+> Success Warning Danger Info SelBg CardBg RuntimePS RuntimePy`. `Primary`
+> (focus borders, selection accent, hint keys, active tab) and `Pulse` (spinner,
+> focused-pane title) restore the PS Blue↔BrCyan focus interplay that v1.0.0 had
+> folded onto `Accent`; `Accent` retreats to the brand chip and palette-overlay
+> highlight. Every frame row now paints a full-width `Fg`-on-`Bg` ground (the
+> `terminal` palette excepted, by design — it inherits the user's scheme via
+> ANSI 0-15 + default fg/bg); Border sits just above 3:1 against Bg, Muted at
+> ≥4.5:1, Fg at ≥7:1, all test-enforced. Palettes now also resolve through the
+> bubbletint adapter (any of ~340 scheme IDs) with a live `]`/`[` cycler. See
+> parity-inventory entries 23, 26, 27, 28.
+
 1. **Fleet (home)** — the at-a-glance view: summary strip (`● ok ✗ failing ⚠ missed
    ⏲ due <1h`), per-script rows (status badge, last run age, cpu sparkline, schedule,
    missed flag), upcoming-runs agenda, live activity. Enter → Run view for that

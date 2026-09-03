@@ -2,7 +2,7 @@
 
 A terminal UI — a single static Go binary, zero required runtime dependencies — for running **PowerShell and Python** scripts on an Ubuntu server. Scripts live in one or more private GitHub repos, each script gets its own isolated environment (a module directory for PowerShell, a venv for Python), and every run is reported to an n8n webhook with logs and resource usage.
 
-Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/dark/) color scheme by default; Catppuccin, Gruvbox and Tokyo Night ship alongside it (`theme` in `config.json`).
+Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/dark/) color scheme by default; Catppuccin, Gruvbox and Tokyo Night ship alongside it, plus a `terminal` palette that inherits your terminal's own colors and any of the 340+ schemes from [bubbletint](https://github.com/lrstanley/bubbletint) — see [Themes](#themes).
 
 ## Features
 
@@ -40,6 +40,7 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 | `ctrl+f`, `n`/`N` | search the output pane, jump matches |
 | `1`-`4` | Fleet / Run / History / Schedules |
 | `ctrl+p` / `:` | command palette |
+| `[` / `]` | cycle the theme (session-only; the status line says how to keep one) |
 | `?` | help overlay |
 | `q` / `ctrl+c` | quit |
 
@@ -159,6 +160,18 @@ Setup:
 
 MCP/API-triggered runs go through the same pipeline as manual/cron runs (lock, dep install, log, history, webhook with `"trigger": "mcp"`).
 
+## Themes
+
+Set `theme` in `config.json`:
+
+- **Curated palettes** (hand-tuned, contrast-audited: body text ≥ 7:1, secondary text ≥ 4.5:1, borders ≥ 3:1): `night-owl` (the default), `catppuccin-mocha`, `gruvbox-dark`, `tokyo-night`.
+- **`terminal`** — no palette at all: the UI maps its roles onto ANSI colors 0-15 and your terminal's default foreground/background, so it inherits whatever scheme your terminal already uses (light terminals included). Uniquely, this palette paints no background of its own.
+- **Any of 340+ [bubbletint](https://github.com/lrstanley/bubbletint) scheme IDs** — `dracula`, `rose_pine`, `nord`, `solarized_dark_higher_contrast`, … Both `snake_case` and `kebab-case` spellings work. Borders and card tints are derived, and low-contrast secondary text is automatically lifted to the same floors the curated palettes meet; light schemes are supported.
+
+Lookup is curated-first (`tokyo_night` gets the curated palette, not the raw tint). A misspelled name falls back to Night Owl with a startup warning naming the three closest matches.
+
+Press `]` / `[` in any view to cycle the whole set live — curated palettes first, then every tint. Cycling is session-only; the status line shows each theme's name and the exact `"theme": "…"` line to add to `config.json` to keep it. Both commands are also in the palette (`:` then type `theme`).
+
 ## Configuration reference (config.json)
 
 | Key | Description | Default |
@@ -173,7 +186,7 @@ MCP/API-triggered runs go through the same pipeline as manual/cron runs (lock, d
 | `logRetentionDays` / `historyDays` / `historyMaxLines` | log/history retention | `30` / `30` / `50000` |
 | `missedGraceMinutes` | how late a scheduled fire may be before it's reported missed | `5` |
 | `colorMode` | `auto`, `truecolor`, or `256` | `auto` |
-| `theme` | `night-owl`, `catppuccin-mocha`, `gruvbox-dark`, `tokyo-night` | `night-owl` |
+| `theme` | a curated palette, `terminal`, or any bubbletint ID — see [Themes](#themes) | `night-owl` |
 | `mcpPort` / `mcpBind` | MCP/API server port and bind (`all` or `localhost`) | `8765` / `all` |
 
 See `config.json.example` for the full set. Unknown keys and bad values for numeric keys are reported as warnings at startup, never silently ignored.
