@@ -191,6 +191,9 @@ func (f *fleetModel) openInRun(m *Model) tea.Cmd {
 
 func (f *fleetModel) view(m *Model, w, h int) []string {
 	f.clamp(m)
+	if paneled(w) {
+		return f.viewPaneled(m, w, h)
+	}
 	rows := []string{summaryStrip(m.th, f.summary(m), w)}
 	lay := fleetLayoutFor(w)
 
@@ -213,6 +216,67 @@ func (f *fleetModel) view(m *Model, w, h int) []string {
 		rows = append(rows, fillTo(rowAt(table, i), lay.tableW, nil)+sep+rowAt(rail, i))
 	}
 	return rows
+}
+
+// viewPaneled is the Fleet frame at and above panelMinWidth: the summary
+// strip, then the script table and the rail cards each in a rounded panel.
+// The 1-cell gap the floor spent on a separator rule becomes the gap between
+// the table panel and the rail panels.
+func (f *fleetModel) viewPaneled(m *Model, w, h int) []string {
+	th := m.th
+	pad := panelPad(w)
+	rows := []string{summaryStrip(th, f.summary(m), w)}
+	lay := fleetLayoutFor(w)
+	body := h - 1
+
+	tableOpts := panelOpts{title: f.title(), focused: true, pad: pad,
+		hints: m.tailHints(modeFleet, focusList)}
+	if lay.railW == 0 {
+		// stacked: the table panel takes what its rows need, the cards the rest
+		content := f.tableRows(m, w-2-2*pad, body-2, lay.wide)
+		tableH := min(len(content)+2, body)
+		out := append(rows, renderPanel(th, content, w, tableH, tableOpts)...)
+		if rest := body - tableH; rest > 4 {
+			out = append(out, f.railPanels(m, w, rest, pad)...)
+		}
+		return out
+	}
+
+	table := renderPanel(th, f.tableRows(m, lay.tableW-2-2*pad, body-2, lay.wide),
+		lay.tableW, body, tableOpts)
+	rail := f.railPanels(m, lay.railW, body, pad)
+	for i := range body {
+		rows = append(rows, fillTo(rowAt(table, i), lay.tableW, nil)+" "+rowAt(rail, i))
+	}
+	return rows
+}
+
+// railPanels is the paneled rail: upcoming, live now and — when the rail is
+// tall enough — recent runs, each in its own rounded card. The live-now
+// title carries the activity pulse while anything is running (anim.go).
+// The cards keep pad 0 at every width: the rail is a fixed 36 columns, and
+// the recent card's columns need all 34 inner cells (the wide-pad pass is
+// for the panes that grow with the terminal, not for a fixed rail).
+func (f *fleetModel) railPanels(m *Model, w, h, _ int) []string {
+	th := m.th
+	inner := w - 2
+	items := f.agenda(m)
+
+	agendaH := min(len(items)+2, max(h/3, 4))
+	out := renderPanel(th, agendaBody(th, items, inner, agendaH-2), w, agendaH,
+		panelOpts{title: "upcoming"})
+
+	queued := m.run.queueDepth()
+	actH := min(max(h-len(out), 3), len(m.live)+boolInt(queued > 0)+2)
+	actBody := activityBody(th, m.live, m.now(), m.spinnerFrame(), queued, inner, actH-2)
+	out = append(out, renderPanel(th, actBody, w, actH,
+		panelOpts{title: "live now", titleStyle: m.pulseTitleStyle()})...)
+
+	if rest := min(h-len(out), recentCardRows+1); rest >= 5 {
+		out = append(out, renderPanel(th, recentBody(th, m.recent, m.now(), inner, rest-2),
+			w, rest, panelOpts{title: "recent"})...)
+	}
+	return out
 }
 
 func rowAt(rows []string, i int) string {
@@ -245,16 +309,22 @@ func (f *fleetModel) cards(m *Model, w, h int) []string {
 	return out
 }
 
-// table renders the script rows. Column budget, widest first: the sparkline and
-// the schedule expression are the two that go at the 80-column floor.
+// table renders the script rows under a title rule — the floor path. Column
+// budget, widest first: the sparkline and the schedule expression are the two
+// that go at the 80-column floor.
 func (f *fleetModel) table(m *Model, w, h int, wide bool) []string {
-	th := m.th
-	rows := f.rows(m)
-	f.top = scrollWindow(f.top, f.sel, len(rows), h-1)
+	return append([]string{sectionRule(m.th, f.title(), w, true)},
+		f.tableRows(m, w, h-1, wide)...)
+}
 
-	head := []string{sectionRule(th, f.title(), w, true)}
+// tableRows is the table's content: h rows of scripts, windowed on the
+// selection.
+func (f *fleetModel) tableRows(m *Model, w, h int, wide bool) []string {
+	rows := f.rows(m)
+	f.top = scrollWindow(f.top, f.sel, len(rows), h)
+
 	if len(rows) == 0 {
-		return append(head, " "+th.S.Muted.Render(f.emptyNote()))
+		return []string{" " + m.th.S.Muted.Render(f.emptyNote())}
 	}
 	nameW := 8
 	for _, s := range rows {
@@ -262,7 +332,7 @@ func (f *fleetModel) table(m *Model, w, h int, wide bool) []string {
 	}
 	nameW = min(nameW, nameColMax)
 
-	out := head
+	var out []string
 	for i := f.top; i < len(rows) && len(out) < h; i++ {
 		out = append(out, f.row(m, rows[i], i == f.sel, wide, w, nameW))
 	}

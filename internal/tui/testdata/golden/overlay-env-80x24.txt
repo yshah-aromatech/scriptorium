@@ -5,14 +5,14 @@
  ✓ heartbeat     py ↻  40s│  r run · s sync · tab focus · 1-4 views
  ✓ nightly-repo… ps ⚠   5h│
  ▶ sync-orders   py    12m│
-─ editing .env — backup-db ─────────────────────────────────────────────────────
- # where the dump goes
- S3_BUCKET=ops-backups
-
- # rotate weekly
- RETENTION_DAYS=7
-
-────────────────────────────────────────────────────────────────────────────────
+╭─ editing .env — backup-db ───────────────────────────────────────────────────╮
+│ # where the dump goes                                                        │
+│ S3_BUCKET=ops-backups                                                        │
+│                                                                              │
+│ # rotate weekly                                                              │
+│ RETENTION_DAYS=7                                                             │
+│                                                                              │
+╰─────────────────────────────────────────────────── ctrl+s save · esc close ──╯
  ● backup-db · powershell…│
  ▸ entry backup-db/backup…│
  ⚙ env 2 vars             │

@@ -24,15 +24,12 @@ func confirmPrompt(message string, onYes tea.Cmd) *confirmOverlay {
 
 func (c *confirmOverlay) kind() overlayKind           { return overlayConfirm }
 func (c *confirmOverlay) title() string               { return "confirm" }
-func (c *confirmOverlay) height(*Model, int, int) int { return 2 }
+func (c *confirmOverlay) height(*Model, int, int) int { return 1 }
 
+// rows is the question alone: the answers live in the modal's bottom border
+// (v1.1.0 task 1 — the hint tail replaced the in-body hint row).
 func (c *confirmOverlay) rows(m *Model, w, _ int) []string {
-	th := m.th
-	return []string{
-		th.S.Warning.Render(c.message),
-		th.S.Success.Render("y") + th.S.Desc.Render(" confirm · ") +
-			th.S.Muted.Render("n / esc cancel"),
-	}
+	return []string{m.th.S.Warning.Render(c.message)}
 }
 
 func (c *confirmOverlay) hints(m *Model) []key.Binding {

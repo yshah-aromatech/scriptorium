@@ -217,38 +217,76 @@ func (h *historyModel) openPreview(m *Model, rows []history.Row) tea.Cmd {
 func (h *historyModel) view(m *Model, w, hh int) []string {
 	rows := h.filteredRows(m)
 	h.clampSel(len(rows))
+	if paneled(w) {
+		return h.viewPaneled(m, rows, w, hh)
+	}
 
 	if h.preview == nil {
 		return fitRows(h.table(m, rows, w, hh), hh)
 	}
-	// split roughly in half, then favor the table's floor over the preview's
-	// if the frame is too short to give both (the too-small guard at 40x10
-	// keeps this from ever needing to go below "something on each side").
-	pv := max(hh/2, previewMinRows)
-	if tableFloor := hh - previewMinRows; pv > tableFloor {
-		pv = max(tableFloor, 1)
-	}
-	tableH := hh - pv
+	pv, tableH := h.split(hh)
 	out := fitRows(h.table(m, rows, w, tableH), tableH)
 	out = append(out, h.previewRows(m, w, pv)...)
 	return fitRows(out, hh)
 }
 
-func (h *historyModel) table(m *Model, rows []history.Row, w, hh int) []string {
+// split divides the body between table and preview: roughly in half, then
+// favoring the table's floor over the preview's if the frame is too short to
+// give both (the too-small guard at 40x10 keeps this from ever needing to go
+// below "something on each side").
+func (h *historyModel) split(hh int) (pv, tableH int) {
+	pv = max(hh/2, previewMinRows)
+	if tableFloor := hh - previewMinRows; pv > tableFloor {
+		pv = max(tableFloor, 1)
+	}
+	return pv, hh - pv
+}
+
+// viewPaneled is the History frame at and above panelMinWidth: the table in
+// a rounded panel, the log preview in its own panel under it.
+func (h *historyModel) viewPaneled(m *Model, rows []history.Row, w, hh int) []string {
 	th := m.th
-	title := "history"
+	pad := panelPad(w)
+	pv, tableH := 0, hh
+	if h.preview != nil {
+		pv, tableH = h.split(hh)
+	}
+	out := renderPanel(th, h.tableRows(m, rows, w-2-2*pad, tableH-2), w, tableH,
+		panelOpts{title: h.title(m, rows), focused: true, pad: pad,
+			hints: m.tailHints(modeHistory, focusList)})
+	if h.preview != nil {
+		out = append(out, renderPanel(th, h.previewBody(m, w-2-2*pad, pv-2),
+			w, pv, panelOpts{title: "log: " + h.preview.script, pad: pad})...)
+	}
+	return out
+}
+
+func (h *historyModel) title(m *Model, rows []history.Row) string {
 	if m.historyScope != "" {
-		title = "history — " + m.historyScope
+		return "history — " + m.historyScope
 	}
-	head := []string{sectionRule(th, title, w, true)}
+	return "history"
+}
+
+func (h *historyModel) emptyNote(m *Model) string {
+	if m.historyScope != "" {
+		return "no runs for " + m.historyScope + " — f shows everything"
+	}
+	return "no runs yet"
+}
+
+// table is the floor path: a title rule over tableRows.
+func (h *historyModel) table(m *Model, rows []history.Row, w, hh int) []string {
+	return append([]string{sectionRule(m.th, h.title(m, rows), w, true)},
+		h.tableRows(m, rows, w, hh-1)...)
+}
+
+// tableRows is the table's content: hh rows, windowed on the selection.
+func (h *historyModel) tableRows(m *Model, rows []history.Row, w, hh int) []string {
 	if len(rows) == 0 {
-		note := "no runs yet"
-		if m.historyScope != "" {
-			note = "no runs for " + m.historyScope + " — f shows everything"
-		}
-		return fitRows(append(head, " "+th.S.Muted.Render(note)), hh)
+		return []string{" " + m.th.S.Muted.Render(h.emptyNote(m))}
 	}
-	h.top = scrollWindow(h.top, h.sel, len(rows), max(hh-1, 1))
+	h.top = scrollWindow(h.top, h.sel, len(rows), max(hh, 1))
 
 	wide := w >= wideTableMin
 	nameW := 8
@@ -257,7 +295,7 @@ func (h *historyModel) table(m *Model, rows []history.Row, w, hh int) []string {
 	}
 	nameW = min(nameW, nameColMax)
 
-	out := head
+	var out []string
 	for i := h.top; i < len(rows) && len(out) < hh; i++ {
 		out = append(out, h.row(m, rows[i], i == h.sel, wide, w, nameW))
 	}
@@ -342,22 +380,27 @@ func (h *historyModel) row(m *Model, r history.Row, selected, wide bool, w, name
 	return fillTo(b.String(), w, bg)
 }
 
-// previewRows is the split log pane Enter opens: a title rule naming the run,
-// then its tail, colored the same way the output pane colors run output.
+// previewRows is the floor's split log pane: a title rule naming the run —
+// the script name only, never the path: a run log's real path is a temp or
+// per-host directory, which would make the frame environment-dependent (the
+// same class of bug P10's golden-authenticity rule exists to catch).
 func (h *historyModel) previewRows(m *Model, w, hh int) []string {
+	return fitRows(append([]string{sectionRule(m.th, "log: "+h.preview.script, w, false)},
+		h.previewBody(m, w, hh-1)...), hh)
+}
+
+// previewBody is the log tail itself, colored the same way the output pane
+// colors run output.
+func (h *historyModel) previewBody(m *Model, w, hh int) []string {
 	th := m.th
 	pv := h.preview
-	// the script name only, never the path: a run log's real path is a temp
-	// or per-host directory, which would make the frame environment-dependent
-	// (the same class of bug P10's golden-authenticity rule exists to catch).
-	rows := []string{sectionRule(th, "log: "+pv.script, w, false)}
 	if len(pv.lines) == 0 {
-		return fitRows(append(rows, " "+th.S.Muted.Render("no output")), hh)
+		return []string{" " + th.S.Muted.Render("no output")}
 	}
-	body := max(hh-1, 0)
-	start := max(len(pv.lines)-body, 0)
+	var rows []string
+	start := max(len(pv.lines)-max(hh, 0), 0)
 	for _, l := range pv.lines[start:] {
 		rows = append(rows, fillTo(colorLine(th, textkit.Truncate(l, w)), w, nil))
 	}
-	return fitRows(rows, hh)
+	return rows
 }

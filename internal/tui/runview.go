@@ -242,10 +242,17 @@ func (r *runModel) update(m *Model, msg tea.Msg) tea.Cmd {
 func (r *runModel) outputCell(m *Model, mouse tea.Mouse) (row, col int, ok bool) {
 	lay := runLayoutFor(m.w, m.bodyHeight())
 	body := mouse.Y - headerRows
-	if body < 1 || body >= m.bodyHeight() || mouse.X <= lay.listW {
+	// paneled frames put the pane's own border between the pointer and the
+	// content: one column of frame (plus padding) on the left, one row of
+	// frame at the bottom — the drag must never select a border cell.
+	maxBody, x0 := m.bodyHeight()-1, lay.listW+1
+	if lay.paneled {
+		maxBody, x0 = m.bodyHeight()-2, lay.listW+1+lay.pad
+	}
+	if body < 1 || body > maxBody || mouse.X < x0 {
 		return 0, 0, false
 	}
-	return r.out.scroll + body - 1, mouse.X - lay.listW - 1, true
+	return r.out.scroll + body - 1, mouse.X - x0, true
 }
 
 // onClick focuses the pane under the pointer and, in the list, selects the row
@@ -454,27 +461,66 @@ func (r *runModel) onKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 type runLayout struct {
 	listW, outW  int
 	listH, cardH int
+	paneled      bool
+	pad          int
 }
 
 func runLayoutFor(w, h int) runLayout {
-	l := runLayout{listW: min(max(w/3, listMinWidth), listMaxWidth)}
-	l.outW = max(w-l.listW-1, 10)
-	if h >= detailsMinBody {
-		l.cardH = detailsRows
+	l := runLayout{listW: min(max(w/3, listMinWidth), listMaxWidth),
+		paneled: paneled(w), pad: panelPad(w)}
+	if l.paneled {
+		// the panels' side borders take the column the floor spent on a
+		// separator rule, so the two frames abut
+		l.outW = max(w-l.listW, 10)
+		if h >= detailsMinBody {
+			l.cardH = detailsRows + 1 // two border rows instead of one rule
+		}
+	} else {
+		l.outW = max(w-l.listW-1, 10)
+		if h >= detailsMinBody {
+			l.cardH = detailsRows
+		}
 	}
 	l.listH = max(h-l.cardH, 1)
 	return l
 }
 
+// listInnerW is the width the bubbles list renders at: inside the panel's
+// borders and padding when paneled, the full column at the floor.
+func (l runLayout) listInnerW() int {
+	if l.paneled {
+		return max(l.listW-2-2*l.pad, 4)
+	}
+	return l.listW
+}
+
 func (r *runModel) resize(m *Model, w, h int) {
 	r.w, r.h = w, h
 	l := runLayoutFor(w, h)
-	r.list.SetWidth(l.listW)
-	r.list.SetHeight(max(l.listH-1, 1)) // the title rule takes one row
-	r.out.resize(l.outW, h)
+	r.list.SetWidth(l.listInnerW())
+	if l.paneled {
+		r.list.SetHeight(max(l.listH-2, 1)) // the panel borders take two rows
+		r.out.resize(max(l.outW-2-2*l.pad, 10), max(h-2, 1))
+	} else {
+		r.list.SetHeight(max(l.listH-1, 1)) // the title rule takes one row
+		r.out.resize(l.outW, max(h-1, 1))   // and one for the output's rule
+	}
 	if r.scriptsLen != len(m.scripts) {
 		r.reload(m)
 	}
+}
+
+// listRows is the left pane's content: the list itself, or the note that
+// explains why it is empty.
+func (r *runModel) listRows(m *Model) []string {
+	th := m.th
+	switch {
+	case len(m.scripts) == 0:
+		return []string{" " + th.S.Muted.Render("no scripts yet — press s to sync")}
+	case len(r.list.Items()) == 0:
+		return []string{" " + th.S.Muted.Render("no matches — esc restores")}
+	}
+	return strings.Split(r.list.View(), "\n")
 }
 
 func (r *runModel) view(m *Model, w, h int) []string {
@@ -482,16 +528,12 @@ func (r *runModel) view(m *Model, w, h int) []string {
 	r.noteSelection(m)
 	l := runLayoutFor(w, h)
 	th := m.th
+	if l.paneled {
+		return r.viewPaneled(m, l, h)
+	}
 
 	left := []string{sectionRule(th, r.listTitle(), l.listW, m.focus == focusList)}
-	switch {
-	case len(m.scripts) == 0:
-		left = append(left, " "+th.S.Muted.Render("no scripts yet — press s to sync"))
-	case len(r.list.Items()) == 0:
-		left = append(left, " "+th.S.Muted.Render("no matches — esc restores"))
-	default:
-		left = append(left, strings.Split(r.list.View(), "\n")...)
-	}
+	left = append(left, r.listRows(m)...)
 	left = fitRows(left, l.listH)
 	if l.cardH > 0 {
 		left = append(left, r.detailsCard(m, l.listW, l.cardH)...)
@@ -504,6 +546,37 @@ func (r *runModel) view(m *Model, w, h int) []string {
 	rows := make([]string, h)
 	for i := range h {
 		rows[i] = fillTo(left[i], l.listW, nil) + sep + right[i]
+	}
+	return rows
+}
+
+// viewPaneled is the Run frame at and above panelMinWidth: the script list
+// and the details card framed in the left column, the output pane in the
+// right, the interactive panes carrying their own keys in the bottom border.
+func (r *runModel) viewPaneled(m *Model, l runLayout, h int) []string {
+	th := m.th
+	var listHints, outHints []key.Binding
+	if m.focus == focusList {
+		listHints = m.tailHints(modeRun, focusList)
+	} else {
+		outHints = m.tailHints(modeRun, focusOutput)
+	}
+	left := renderPanel(th, r.listRows(m), l.listW, l.listH, panelOpts{
+		title: r.listTitle(), focused: m.focus == focusList, pad: l.pad,
+		hints: listHints})
+	if l.cardH > 0 {
+		left = append(left, renderPanel(th, r.detailsBody(m, l.listInnerW()),
+			l.listW, l.cardH, panelOpts{title: "details", pad: l.pad})...)
+	}
+	left = fitRows(left, h)
+
+	right := renderPanel(th, r.out.contentRows(th), l.outW, h, panelOpts{
+		title: r.out.viewTitle(r.spinFor(m)), focused: m.focus == focusOutput,
+		pad: l.pad, hints: outHints})
+
+	rows := make([]string, h)
+	for i := range h {
+		rows[i] = fillTo(left[i], l.listW, nil) + rowAt(right, i)
 	}
 	return rows
 }
@@ -528,14 +601,21 @@ func (r *runModel) spinFor(m *Model) string {
 	return m.spinnerFrame()
 }
 
-// detailsCard is the eight-row answer to "what am I about to run": identity,
-// entry point, environment, schedule, and how the last run went.
+// detailsCard is the eight-row answer to "what am I about to run" at the
+// floor: a title rule over detailsBody.
 func (r *runModel) detailsCard(m *Model, w, h int) []string {
+	return fitRows(append([]string{sectionRule(m.th, "details", w, false)},
+		r.detailsBody(m, w)...), h)
+}
+
+// detailsBody is the card's content: identity, entry point, environment,
+// schedule, and how the last run went.
+func (r *runModel) detailsBody(m *Model, w int) []string {
 	th := m.th
-	rows := []string{sectionRule(th, "details", w, false)}
+	var rows []string
 	s := r.selected(m)
 	if s == nil {
-		return fitRows(append(rows, " "+th.S.Muted.Render("no script selected")), h)
+		return []string{" " + th.S.Muted.Render("no script selected")}
 	}
 
 	line := func(glyph, label, value string) string {
@@ -553,8 +633,7 @@ func (r *runModel) detailsCard(m *Model, w, h int) []string {
 		line("⚙", "env", envLabel(*s)),
 		line("↻", "cron", m.cronLabel(s.Name)),
 	)
-	rows = append(rows, r.lastRunLines(m, s.Name, w)...)
-	return fitRows(rows, h)
+	return append(rows, r.lastRunLines(m, s.Name, w)...)
 }
 
 // entryLabel is the entry file relative to the scripts dir — the part a human

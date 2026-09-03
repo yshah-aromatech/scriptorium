@@ -159,16 +159,22 @@ type agendaItem struct {
 	In   time.Duration
 }
 
-// agendaRows renders the upcoming-runs card: soonest first, the countdown in
-// the gutter so the column reads as a timeline.
+// agendaRows renders the upcoming-runs card at the floor: a title rule over
+// agendaBody. Paneled frames wrap the body in a rounded panel instead.
 func agendaRows(th theme.Theme, items []agendaItem, w, h int) []string {
 	if h <= 0 {
 		return nil
 	}
-	rows := []string{sectionRule(th, "upcoming", w, false)}
+	return append([]string{sectionRule(th, "upcoming", w, false)}, agendaBody(th, items, w, h-1)...)
+}
+
+// agendaBody is the card's content: soonest first, the countdown in the
+// gutter so the column reads as a timeline.
+func agendaBody(th theme.Theme, items []agendaItem, w, h int) []string {
 	if len(items) == 0 {
-		return append(rows, " "+th.S.Muted.Render("nothing scheduled"))
+		return []string{" " + th.S.Muted.Render("nothing scheduled")}
 	}
+	var rows []string
 	for _, it := range items {
 		if len(rows) >= h {
 			break
@@ -188,11 +194,17 @@ func activityRows(th theme.Theme, live []lockfile.Live, now time.Time, spin stri
 	if h <= 0 {
 		return nil
 	}
-	rows := []string{sectionRule(th, "live now", w, false)}
+	return append([]string{sectionRule(th, "live now", w, false)},
+		activityBody(th, live, now, spin, queued, w, h-1)...)
+}
+
+// activityBody is the live-activity card's content (see activityRows).
+func activityBody(th theme.Theme, live []lockfile.Live, now time.Time, spin string, queued int, w, h int) []string {
+	var rows []string
 	// the queue line always gets a row if there is a queue at all
 	room := h - boolInt(queued > 0)
 	for i, l := range live {
-		if len(rows) >= room {
+		if len(rows) >= room-1 && i < len(live)-1 {
 			rows = append(rows, " "+th.S.Muted.Render("+"+strconv.Itoa(len(live)-i)+" more"))
 			break
 		}
@@ -210,8 +222,11 @@ func activityRows(th theme.Theme, live []lockfile.Live, now time.Time, spin stri
 			th.S.Desc.Render(strconv.Itoa(queued)+" queued")+" "+
 			th.S.Muted.Render("· X clears"))
 	}
-	if len(rows) == 1 {
+	if len(rows) == 0 {
 		rows = append(rows, " "+th.S.Muted.Render("idle"))
+	}
+	if len(rows) > h {
+		rows = rows[:max(h, 0)]
 	}
 	return rows
 }
@@ -227,11 +242,16 @@ func recentRows(th theme.Theme, rows []history.Row, now time.Time, w, h int) []s
 	if h <= 1 {
 		return nil
 	}
-	out := []string{sectionRule(th, "recent", w, false)}
-	if len(rows) == 0 {
-		return append(out, " "+th.S.Muted.Render("no runs yet"))
-	}
+	return append([]string{sectionRule(th, "recent", w, false)},
+		recentBody(th, rows, now, w, h-1)...)
+}
 
+// recentBody is the recent-runs card's content (see recentRows).
+func recentBody(th theme.Theme, rows []history.Row, now time.Time, w, h int) []string {
+	if len(rows) == 0 {
+		return []string{" " + th.S.Muted.Render("no runs yet")}
+	}
+	var out []string
 	nameW := max(min(w-26, 22), 8)
 	for i := len(rows) - 1; i >= 0 && len(out) < h; i-- {
 		row := rows[i]

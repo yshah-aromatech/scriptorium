@@ -91,8 +91,9 @@ func TestMarqueeIsWiredToTheSelectedRowOnly(t *testing.T) {
 	m, advance := clockedModel(t)
 	withLongName(t, m)
 
-	// the row the long name is on, as plain text
-	row := func() string { return textkit.StripANSI(frameRow(m, "reconcil")) }
+	// the row the long name is on, as plain text ("long-nightly" survives both
+	// the truncated and the scrolled renderings at the paneled list width)
+	row := func() string { return textkit.StripANSI(frameRow(m, "long-nightly")) }
 
 	if !strings.Contains(row(), "very-long-nightly") {
 		t.Fatalf("the long name is not on screen unscrolled:\n%s", plainFrame(m))

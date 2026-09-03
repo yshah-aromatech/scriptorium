@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"strings"
-
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 )
@@ -86,25 +84,16 @@ func (m *Model) queueUnblocked() bool {
 // Rendering
 // ---------------------------------------------------------------------------
 
-// overlayCard is the drawn card: a titled rule, the overlay's own rows padded
-// to the full width, and a closing rule. Full-width bands rather than a boxed
-// window — the same "rules, not boxes" grammar the panes use, and it needs no
-// mid-row surgery on already-styled text underneath.
+// overlayCard is the drawn card: a rounded modal spanning the full width —
+// title inset in the top border, the overlay's own hints inset in the bottom
+// one, the same panel primitive the panes use (v1.1.0 task 1). Full-width
+// rather than a floating window: rows above and below keep showing the view,
+// and no mid-row surgery is ever needed on already-styled text underneath.
 func (m *Model) overlayCard(w, h int) []string {
 	o := m.ov
 	inner := min(max(o.height(m, w, h), 1), max(h-2, 1))
-	content := o.rows(m, w-2, inner)
-
-	rows := make([]string, 0, inner+2)
-	rows = append(rows, sectionRule(m.th, o.title(), w, true))
-	for i := range inner {
-		line := ""
-		if i < len(content) {
-			line = content[i]
-		}
-		rows = append(rows, fillTo(" "+line, w, nil))
-	}
-	return append(rows, m.th.S.Border.Render(strings.Repeat("─", max(w, 0))))
+	return renderPanel(m.th, o.rows(m, w-4, inner), w, inner+2, panelOpts{
+		title: o.title(), focused: true, pad: 1, hints: o.hints(m)})
 }
 
 // applyOverlay lays the card over the middle of the body. Rows the card does

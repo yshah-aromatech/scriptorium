@@ -79,7 +79,7 @@ func (in *inputOverlay) title() string               { return in.kindOf.String()
 func (in *inputOverlay) height(*Model, int, int) int { return 2 }
 
 func (in *inputOverlay) rows(m *Model, w, _ int) []string {
-	in.ti.SetWidth(max(w-2, 4))
+	in.ti.SetWidth(max(w-4, 4)) // "❯ " plus the cursor cell must fit inside the panel
 	return []string{
 		m.th.S.Desc.Render(in.prompt),
 		m.th.S.Info.Render("❯ ") + in.ti.View(),

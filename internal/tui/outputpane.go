@@ -171,8 +171,9 @@ func (o *outputPane) append(lines ...string) {
 	o.clamp()
 }
 
-// rows is how many wrapped rows fit under the pane's title rule.
-func (o *outputPane) rows() int { return max(o.h-1, 0) }
+// rows is how many wrapped rows the pane shows. o.h is the CONTENT height:
+// the title rule (floor) or panel borders (paneled) are the caller's rows.
+func (o *outputPane) rows() int { return max(o.h, 0) }
 
 func (o *outputPane) maxScroll() int { return max(len(o.buf.Wrapped)-o.rows(), 0) }
 
@@ -207,11 +208,9 @@ func (o *outputPane) toBottom() {
 // back — the number the "more below" hint reports.
 func (o *outputPane) behind() int { return o.maxScroll() - o.scroll }
 
-// view renders the pane: a title rule, the visible slice of wrapped rows each
-// colored by what it says, and a scrollbar column. The last row becomes the
-// "N more — end follows" hint whenever output is arriving off-screen, because
-// a stalled-looking pane during a live run is the worst thing this view can do.
-func (o *outputPane) view(th theme.Theme, spin string, focused bool) []string {
+// viewTitle is what the pane's frame is labelled: the run's title with the
+// spinner ahead of it while something is in flight.
+func (o *outputPane) viewTitle(spin string) string {
 	title := o.title
 	if title == "" {
 		title = "output"
@@ -219,8 +218,21 @@ func (o *outputPane) view(th theme.Theme, spin string, focused bool) []string {
 	if spin != "" {
 		title = spin + " " + title
 	}
-	rows := []string{sectionRule(th, title, o.w, focused)}
+	return title
+}
 
+// view renders the floor pane: a title rule over contentRows.
+func (o *outputPane) view(th theme.Theme, spin string, focused bool) []string {
+	return append([]string{sectionRule(th, o.viewTitle(spin), o.w, focused)},
+		o.contentRows(th)...)
+}
+
+// contentRows is the visible slice of wrapped rows, each colored by what it
+// says, plus the scrollbar column. The last row becomes the "N more — end
+// follows" hint whenever output is arriving off-screen, because a
+// stalled-looking pane during a live run is the worst thing this view can do.
+func (o *outputPane) contentRows(th theme.Theme) []string {
+	var rows []string
 	n := o.rows()
 	visible := len(o.buf.Wrapped)
 	thumb, thumbAt := scrollbar(o.scroll, n, visible)
@@ -268,7 +280,7 @@ func (o *outputPane) view(th theme.Theme, spin string, focused bool) []string {
 		}
 		rows = append(rows, fillTo(line, o.contentWidth(), nil)+bar)
 	}
-	if behind := o.behind(); behind > 0 && len(rows) > 1 {
+	if behind := o.behind(); behind > 0 && len(rows) > 0 {
 		rows[len(rows)-1] = th.S.Warning.Render(" ▼ " + strconv.Itoa(behind) + " more — end follows")
 	}
 	return rows

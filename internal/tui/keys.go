@@ -213,32 +213,65 @@ func (m *Model) hints() []key.Binding {
 	return m.viewHints(m.mode, m.focus)
 }
 
+// primaryHints is THE per-(view,pane) key list — the single source both the
+// footer (through viewHints) and the panels' bottom-border hint tails
+// (tailHints) render from. A key a pane advertises anywhere is on this list
+// exactly once; the two renderers only differ in how much of it fits.
+func (m *Model) primaryHints(md mode, fc focus) []key.Binding {
+	k := m.keys
+	switch md {
+	case modeFleet:
+		return []key.Binding{k.Up, k.Down, k.Open, k.FailFilter, k.Start, k.Sync}
+	case modeRun:
+		if fc == focusOutput {
+			return []key.Binding{k.Up, k.Down, k.PageUp, k.Follow, k.Focus, k.Start, k.Kill}
+		}
+		return []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
+	case modeHistory:
+		return []key.Binding{k.Up, k.Down, k.Open, k.Start, k.FailFilter}
+	case modeSchedules:
+		return []key.Binding{k.Up, k.Down, k.ScheduleEdit}
+	}
+	return nil
+}
+
 // viewHints is hints() for a named view, ignoring any open overlay — the
 // palette needs it to ask what a view binds while the palette itself is what is
 // on screen.
 func (m *Model) viewHints(md mode, fc focus) []key.Binding {
 	k := m.keys
-	var primary, secondary []key.Binding
-	switch md {
-	case modeFleet:
-		primary = []key.Binding{k.Up, k.Down, k.Open, k.FailFilter, k.Start, k.Sync}
-	case modeRun:
-		if fc == focusOutput {
-			primary = []key.Binding{k.Up, k.Down, k.PageUp, k.Follow, k.Focus, k.Start, k.Kill}
-		} else {
-			primary = []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
-			secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Copy, k.ClearOut,
-				k.Scoped, k.ClearQueue, k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}
-		}
-	case modeHistory:
-		primary = []key.Binding{k.Up, k.Down, k.Open, k.Start, k.FailFilter}
-	case modeSchedules:
-		primary = []key.Binding{k.Up, k.Down, k.ScheduleEdit}
+	var secondary []key.Binding
+	if md == modeRun && fc != focusOutput {
+		secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Copy, k.ClearOut,
+			k.Scoped, k.ClearQueue, k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}
 	}
-	out := append([]key.Binding{k.Quit}, primary...)
+	out := append([]key.Binding{k.Quit}, m.primaryHints(md, fc)...)
 	out = append(out, k.Palette, k.Help)
 	out = append(out, secondary...)
 	return append(out, k.Fleet, k.Run, k.History, k.Schedules)
+}
+
+// tailHints is what a panel's bottom border carries: the view-owned subset of
+// primaryHints. Bindings whose owning group is modeAny (movement, session)
+// already live in the global footer on every screen, so the border repeats
+// only what is particular to this pane — same bindings, same order, one list.
+func (m *Model) tailHints(md mode, fc focus) []key.Binding {
+	global := map[string]bool{}
+	for _, g := range m.keys.groups() {
+		if g.Owner != modeAny {
+			continue
+		}
+		for _, b := range g.Keys {
+			global[strings.Join(b.Keys(), ",")] = true
+		}
+	}
+	var out []key.Binding
+	for _, b := range m.primaryHints(md, fc) {
+		if !global[strings.Join(b.Keys(), ",")] {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // bindsInView reports whether a view answers this key itself. A binding shared

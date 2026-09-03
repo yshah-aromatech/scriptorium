@@ -1,40 +1,40 @@
  ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                      scripts · synced 4m ago   ops-01   v1.4.2
-─ keys ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- # views                                                    # tools
-  1       fleet                                              /       filter list
-  2       run                                                ctrl+f  search output · n/N next/prev
-  3       history                                            U       self-update
-  4       schedules                                          t       webhook test
-
- # move                                                     # schedules
-  ↑/k     up                                                 e/↵     edit
-  ↓/j     down
-  pgup    page up                                           # session
-  pgdn    page down                                          :       commands
-  g       top                                                ?       help
-  G       bottom                                             ]       theme: next
-  tab     focus                                              [       theme: previous
-  end     follow                                             q       quit
-
- # fleet                                                    # overlays
-  ↵       open                                               y/↵     confirm
-  f       failures / scope                                   n       no
-                                                             ctrl+s  save
- # run                                                       esc     close
-  r       run script
-  a       args
-  x       kill
-  X       clear queue
-  s       sync
-  e       .env
-  i       deps
-  l       lint
-  u       upgrade
-  v       last log
-  y       copy all output
-  c       clear output
-  h       script history
-
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+╭─ keys ───────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ # views                                                   # tools                                                    │
+│  1       fleet                                             /       filter list                                       │
+│  2       run                                               ctrl+f  search output · n/N next/prev                     │
+│  3       history                                           U       self-update                                       │
+│  4       schedules                                         t       webhook test                                      │
+│                                                                                                                      │
+│ # move                                                    # schedules                                                │
+│  ↑/k     up                                                e/↵     edit                                              │
+│  ↓/j     down                                                                                                        │
+│  pgup    page up                                          # session                                                  │
+│  pgdn    page down                                         :       commands                                          │
+│  g       top                                               ?       help                                              │
+│  G       bottom                                            ]       theme: next                                       │
+│  tab     focus                                             [       theme: previous                                   │
+│  end     follow                                            q       quit                                              │
+│                                                                                                                      │
+│ # fleet                                                   # overlays                                                 │
+│  ↵       open                                              y/↵     confirm                                           │
+│  f       failures / scope                                  n       no                                                │
+│                                                            ctrl+s  save                                              │
+│ # run                                                      esc     close                                             │
+│  r       run script                                                                                                  │
+│  a       args                                                                                                        │
+│  x       kill                                                                                                        │
+│  X       clear queue                                                                                                 │
+│  s       sync                                                                                                        │
+│  e       .env                                                                                                        │
+│  i       deps                                                                                                        │
+│  l       lint                                                                                                        │
+│  u       upgrade                                                                                                     │
+│  v       last log                                                                                                    │
+│  y       copy all output                                                                                             │
+│  c       clear output                                                                                                │
+│  h       script history                                                                                              │
+│                                                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────── ↑/k up · ↓/j down · any other key close ──╯
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
 ↑/k up · ↓/j down · any other key close

@@ -7,10 +7,10 @@
  ▶ sync-orders   py    12m│
                           │
                           │
-─ missing dependencies · backup-db ─────────────────────────────────────────────
- ▲ Az.Accounts (>=2.0.0), PSSQLite
- y install & run · n run anyway · esc cancel
-────────────────────────────────────────────────────────────────────────────────
+╭─ missing dependencies · backup-db ───────────────────────────────────────────╮
+│ ▲ Az.Accounts (>=2.0.0), PSSQLite                                            │
+│ y install & run · n run anyway · esc cancel                                  │
+╰──────────────────────────────────────────── y/↵ confirm · n no · esc close ──╯
                           │
 ─ details ────────────────│
  ● backup-db · powershell…│

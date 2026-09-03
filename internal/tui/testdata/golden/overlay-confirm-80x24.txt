@@ -7,10 +7,10 @@
  ▶ sync-orders   py    12m│
                           │
                           │
-─ confirm ──────────────────────────────────────────────────────────────────────
- a script is running — kill it and quit?
- y confirm · n / esc cancel
-────────────────────────────────────────────────────────────────────────────────
+                          │
+╭─ confirm ────────────────────────────────────────────────────────────────────╮
+│ a script is running — kill it and quit?                                      │
+╰──────────────────────────────────────────── y/↵ confirm · n no · esc close ──╯
                           │
 ─ details ────────────────│
  ● backup-db · powershell…│

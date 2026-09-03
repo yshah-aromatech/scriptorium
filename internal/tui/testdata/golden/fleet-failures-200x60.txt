@@ -1,60 +1,60 @@
  ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                                                                                                      scripts · synced 4m ago   ops-01   v1.4.2
  ● 3 ok  ·  ✗ 1 failing  ·  ⚠ 1 missed  ·  ⏲ 2 due <1h                                                                                                                                        5 scripts
-─ scripts — failures only ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│─ upcoming ─────────────────────────
-▎▶ sync-orders pull orders from the ERP into postgres                                                                               py ▃▆█▅▂▁                   12m│     5m  nightly-report
-                                                                                                                                                                   │    10m  heartbeat
-                                                                                                                                                                   │    11h  backup-db
-                                                                                                                                                                   │
-                                                                                                                                                                   │─ live now ─────────────────────────
-                                                                                                                                                                   │ ⠋ sync-orders↗    1m ·4242
-                                                                                                                                                                   │
-                                                                                                                                                                   │─ recent ───────────────────────────
-                                                                                                                                                                   │ ✓ heartbeat  py success ▄█▆▅▃▂  41s
-                                                                                                                                                                   │ ✓ backup-db  ps success ▃▆█▆▅▃   3m
-                                                                                                                                                                   │ ✗ sync-orde… py failure ▃▆█▅▂▁  12m
-                                                                                                                                                                   │ ✓ nightly-r… ps success ▂▄▇█▆▃ 5h2m
-                                                                                                                                                                   │ ✓ backup-db  ps success ······   2d
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
-                                                                                                                                                                   │
+╭─ scripts — failures only ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮ ╭─ upcoming ───────────────────────╮
+│ ▎▶ sync-orders pull orders from the ERP into postgres                                                                           py ▃▆█▅▂▁                   12m │ │     5m  nightly-report           │
+│                                                                                                                                                                 │ │    10m  heartbeat                │
+│                                                                                                                                                                 │ │    11h  backup-db                │
+│                                                                                                                                                                 │ ╰──────────────────────────────────╯
+│                                                                                                                                                                 │ ╭─ live now ───────────────────────╮
+│                                                                                                                                                                 │ │ ⠋ sync-orders↗    1m ·4242       │
+│                                                                                                                                                                 │ ╰──────────────────────────────────╯
+│                                                                                                                                                                 │ ╭─ recent ─────────────────────────╮
+│                                                                                                                                                                 │ │ ✓ heartbe… py success ▄█▆▅▃▂  41s│
+│                                                                                                                                                                 │ │ ✓ backup-… ps success ▃▆█▆▅▃   3m│
+│                                                                                                                                                                 │ │ ✗ sync-or… py failure ▃▆█▅▂▁  12m│
+│                                                                                                                                                                 │ │ ✓ nightly… ps success ▂▄▇█▆▃ 5h2m│
+│                                                                                                                                                                 │ │ ✓ backup-… ps success ······   2d│
+│                                                                                                                                                                 │ ╰──────────────────────────────────╯
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+│                                                                                                                                                                 │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────── ↵ open · f failures / scope · r run script · s sync ──╯
  sync-orders · pull orders from the ERP into postgres
 q quit · ↑/k up · ↓/j down · ↵ open · f failures / scope · r run script · s sync · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules

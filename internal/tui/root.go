@@ -139,6 +139,11 @@ type Model struct {
 // spinnerFrame is the glyph any view showing "this is running" should use.
 func (m *Model) spinnerFrame() string { return m.spin.View() }
 
+// pulseTitleStyle is the live-now card's title voice: nil (the default panel
+// voice) while idle; the activity pulse animates it while anything runs
+// (task 2 wires the breathing — until then it stays the default).
+func (m *Model) pulseTitleStyle() *lipgloss.Style { return nil }
+
 // animating is true while there is something worth animating for.
 func (m *Model) animating() bool { return len(m.live) > 0 || m.run.active() }
 

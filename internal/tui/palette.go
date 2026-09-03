@@ -108,7 +108,7 @@ func subsequence(s, q string) bool {
 
 func (p *paletteOverlay) rows(m *Model, w, h int) []string {
 	th := m.th
-	p.ti.SetWidth(max(w-2, 4))
+	p.ti.SetWidth(max(w-4, 4)) // "❯ " plus the cursor cell must fit inside the panel
 	rows := []string{th.S.Info.Render("❯ ") + p.ti.View()}
 
 	body := max(h-1, 1)

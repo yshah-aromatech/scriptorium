@@ -250,16 +250,27 @@ func (m *Model) cronAI() func(string) (string, error) {
 func (s *schedulesModel) view(m *Model, w, hh int) []string {
 	rows := s.rows(m)
 	s.clampSel(len(rows))
+	if paneled(w) {
+		pad := panelPad(w)
+		return renderPanel(m.th, s.tableRows(m, rows, w-2-2*pad, hh-2), w, hh,
+			panelOpts{title: "schedules", focused: true, pad: pad,
+				hints: m.tailHints(modeSchedules, focusList)})
+	}
 	return fitRows(s.table(m, rows, w, hh), hh)
 }
 
+// table is the floor path: a title rule over tableRows.
 func (s *schedulesModel) table(m *Model, rows []scheduleRow, w, hh int) []string {
-	th := m.th
-	head := []string{sectionRule(th, "schedules", w, true)}
+	return append([]string{sectionRule(m.th, "schedules", w, true)},
+		s.tableRows(m, rows, w, hh-1)...)
+}
+
+// tableRows is the table's content: hh rows, windowed on the selection.
+func (s *schedulesModel) tableRows(m *Model, rows []scheduleRow, w, hh int) []string {
 	if len(rows) == 0 {
-		return fitRows(append(head, " "+th.S.Muted.Render("no scripts yet — press s to sync a repo")), hh)
+		return []string{" " + m.th.S.Muted.Render("no scripts yet — press s to sync a repo")}
 	}
-	s.top = scrollWindow(s.top, s.sel, len(rows), max(hh-1, 1))
+	s.top = scrollWindow(s.top, s.sel, len(rows), max(hh, 1))
 
 	nameW := 8
 	for _, r := range rows {
@@ -267,7 +278,7 @@ func (s *schedulesModel) table(m *Model, rows []scheduleRow, w, hh int) []string
 	}
 	nameW = min(nameW, nameColMax)
 
-	out := head
+	var out []string
 	for i := s.top; i < len(rows) && len(out) < hh; i++ {
 		out = append(out, s.row(m, rows[i], i == s.sel, w, nameW))
 	}

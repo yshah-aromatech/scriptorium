@@ -242,10 +242,10 @@ func TestDragGestureSelectsAndCopies(t *testing.T) {
 	m := runAt(t, 120, 40)
 	noTools(t)
 	lay := runLayoutFor(120, m.bodyHeight())
-	x0 := lay.listW + 1
+	x0 := lay.listW + 1 + lay.pad
 
 	m.run.out.reset("output", 5000)
-	m.run.out.resize(lay.outW, m.bodyHeight())
+	m.run.resize(m, 120, m.bodyHeight())
 	m.run.out.append("device code ABCD1234XY here", "second line of output")
 
 	// press → drag → release across the first line
@@ -282,10 +282,10 @@ func TestClickToCopyDeviceCode(t *testing.T) {
 	m := runAt(t, 120, 40)
 	noTools(t)
 	lay := runLayoutFor(120, m.bodyHeight())
-	x0 := lay.listW + 1
+	x0 := lay.listW + 1 + lay.pad
 
 	m.run.out.reset("output", 5000)
-	m.run.out.resize(lay.outW, m.bodyHeight())
+	m.run.resize(m, 120, m.bodyHeight())
 	m.run.out.append("enter the code ABCD1234XY to sign in")
 
 	// click on the code

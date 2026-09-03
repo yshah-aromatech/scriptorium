@@ -1,40 +1,40 @@
  ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules                      scripts · synced 4m ago   ops-01   v1.4.2
  ● 3 ok  ·  ✗ 1 failing  ·  ⚠ 1 missed  ·  ⏲ 2 due <1h                                                        5 scripts
-─ scripts ─────────────────────────────────────────────────────────────────────────│─ upcoming ─────────────────────────
-▎✓ backup-db      nightly postgres dump to object … ps ▃▆█▆▅▃ ↻ 0 2 * * *        3m│     5m  nightly-report
- · cleanup-tmp    prune /tmp older than 7 days      ps ······                     —│    10m  heartbeat
- ✓ heartbeat      ping the uptime endpoint          py ▄█▆▅▃▂ ↻ */10 * * * *    40s│    11h  backup-db
- ✓ nightly-report assemble and mail the ops digest  ps ▂▄▇█▆▃ ⚠ */5 * * * *      5h│
- ▶ sync-orders    pull orders from the ERP into po… py ▃▆█▅▂▁                   12m│─ live now ─────────────────────────
-                                                                                   │ ⠋ sync-orders↗    1m ·4242
-                                                                                   │
-                                                                                   │─ recent ───────────────────────────
-                                                                                   │ ✓ heartbeat  py success ▄█▆▅▃▂  41s
-                                                                                   │ ✓ backup-db  ps success ▃▆█▆▅▃   3m
-                                                                                   │ ✗ sync-orde… py failure ▃▆█▅▂▁  12m
-                                                                                   │ ✓ nightly-r… ps success ▂▄▇█▆▃ 5h2m
-                                                                                   │ ✓ backup-db  ps success ······   2d
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
-                                                                                   │
+╭─ scripts ───────────────────────────────────────────────────────────────────────╮ ╭─ upcoming ───────────────────────╮
+│ ▎✓ backup-db      nightly postgres dump to obj… ps ▃▆█▆▅▃ ↻ 0 2 * * *        3m │ │     5m  nightly-report           │
+│  · cleanup-tmp    prune /tmp older than 7 days  ps ······                     — │ │    10m  heartbeat                │
+│  ✓ heartbeat      ping the uptime endpoint      py ▄█▆▅▃▂ ↻ */10 * * * *    40s │ │    11h  backup-db                │
+│  ✓ nightly-report assemble and mail the ops di… ps ▂▄▇█▆▃ ⚠ */5 * * * *      5h │ ╰──────────────────────────────────╯
+│  ▶ sync-orders    pull orders from the ERP int… py ▃▆█▅▂▁                   12m │ ╭─ live now ───────────────────────╮
+│                                                                                 │ │ ⠋ sync-orders↗    1m ·4242       │
+│                                                                                 │ ╰──────────────────────────────────╯
+│                                                                                 │ ╭─ recent ─────────────────────────╮
+│                                                                                 │ │ ✓ heartbe… py success ▄█▆▅▃▂  41s│
+│                                                                                 │ │ ✓ backup-… ps success ▃▆█▆▅▃   3m│
+│                                                                                 │ │ ✗ sync-or… py failure ▃▆█▅▂▁  12m│
+│                                                                                 │ │ ✓ nightly… ps success ▂▄▇█▆▃ 5h2m│
+│                                                                                 │ │ ✓ backup-… ps success ······   2d│
+│                                                                                 │ ╰──────────────────────────────────╯
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+│                                                                                 │
+╰────────────────────────── ↵ open · f failures / scope · r run script · s sync ──╯
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
 q quit · ↑/k up · ↓/j down · ↵ open · f failures / scope · r run script · s sync · : commands · ? help · 1 fleet …
