@@ -23,12 +23,17 @@ import (
 // on each side of every pane; a top rule with an inset title costs none, says
 // the same thing, and leaves the 80-column floor with room for content.
 
-// blocks is the sparkline alphabet, eight levels of an eighth-block ramp.
-// blockRunes is what the level maths indexes: len() on the string is bytes,
-// and every one of these glyphs is three of them.
-const blocks = "▁▂▃▄▅▆▇█"
-
-var blockRunes = []rune(blocks)
+// The sparkline alphabet is braille (v1.1.0 task 3): each cell is a 2×4 dot
+// grid — two samples per cell, four levels per column — so the same width
+// carries twice the history at eight times the sub-cell resolution of the old
+// eighth-block ramp, and the shape survives monochrome untouched.
+//
+// brailleLeft/brailleRight are the dot bitmasks for one column filled
+// bottom-up by level 0-4 (U+2800 base; dots 7/3/2/1 left, 8/6/5/4 right).
+var (
+	brailleLeft  = [5]rune{0, 0x40, 0x44, 0x46, 0x47}
+	brailleRight = [5]rune{0, 0x80, 0xA0, 0xB0, 0xB8}
+)
 
 // sectionRule draws "─ title ───────────" across w cells. A focused pane's
 // rule and title take the accent; everything else stays in the border color,
@@ -79,15 +84,15 @@ func summaryStrip(th theme.Theme, s fleetSummary, w int) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// sparkline renders a series as `cells` blocks, scaled to the series' own
-// maximum (a script that never exceeds 5% CPU still gets a readable shape).
-// Fewer points than cells left-pads with blanks so the bars stay right-aligned
-// against the age column.
+// sparkline renders a series as `cells` braille columns — two samples per
+// cell, four dot levels per column — scaled to the series' own maximum (a
+// script that never exceeds 5% CPU still gets a readable shape). Fewer
+// samples than slots right-aligns the shape against the age column.
 //
-// Heat discipline (v1.0.1 task 2): the line is single-hue Info; only cells at
-// ≥80% of the series' own peak carry the heat color — color means exceptional
-// again, instead of an 8-stop ramp repainting every cell of every row. The
-// SHAPE still carries the whole series (and all of it under NO_COLOR).
+// Heat discipline (v1.0.1 task 2, preserved): the line is single-hue Info;
+// only cells holding a sample at ≥80% of the series' own peak carry the heat
+// color — color means exceptional, and the SHAPE still carries the whole
+// series under NO_COLOR.
 func sparkline(th theme.Theme, series []float64, cells int, bg color.Color) string {
 	if cells <= 0 {
 		return ""
@@ -95,27 +100,55 @@ func sparkline(th theme.Theme, series []float64, cells int, bg color.Color) stri
 	if len(series) == 0 {
 		return tint(th.S.Muted, bg).Render(strings.Repeat("·", cells))
 	}
-	if len(series) > cells {
-		series = series[len(series)-cells:]
+	slots := cells * 2
+	if len(series) > slots {
+		series = series[len(series)-slots:]
 	}
 	peak := 0.0
 	for _, v := range series {
 		peak = max(peak, v)
 	}
-	var b strings.Builder
-	if pad := cells - len(series); pad > 0 {
-		b.WriteString(tint(th.S.Muted, bg).Render(strings.Repeat(" ", pad)))
+	// a present sample always draws at least its bottom dot: a flatline at
+	// zero is still a visible baseline, not an empty column
+	level := func(v float64) int {
+		if peak <= 0 {
+			return 1
+		}
+		return min(max(int(v/peak*4+0.5), 1), 4)
 	}
-	for _, v := range series {
-		level := 0
-		if peak > 0 {
-			level = min(max(int(v/peak*float64(len(blockRunes)-1)+0.5), 0), len(blockRunes)-1)
+
+	vals := make([]float64, slots)
+	present := make([]bool, slots)
+	for i, v := range series {
+		at := slots - len(series) + i
+		vals[at], present[at] = v, true
+	}
+
+	var b strings.Builder
+	for c := range cells {
+		l, r := 2*c, 2*c+1
+		if !present[l] && !present[r] {
+			if bg != nil {
+				b.WriteString(lipgloss.NewStyle().Background(bg).Render(" "))
+			} else {
+				b.WriteString(" ")
+			}
+			continue
+		}
+		glyph, heat := rune(0x2800), false
+		if present[l] {
+			glyph |= brailleLeft[level(vals[l])]
+			heat = heat || (peak > 0 && vals[l] >= 0.8*peak)
+		}
+		if present[r] {
+			glyph |= brailleRight[level(vals[r])]
+			heat = heat || (peak > 0 && vals[r] >= 0.8*peak)
 		}
 		st := th.S.Info
-		if peak > 0 && v >= 0.8*peak {
+		if heat {
 			st = th.S.Warning
 		}
-		b.WriteString(tint(st, bg).Render(string(blockRunes[level])))
+		b.WriteString(tint(st, bg).Render(string(glyph)))
 	}
 	return b.String()
 }

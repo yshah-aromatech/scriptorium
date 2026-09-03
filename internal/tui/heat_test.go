@@ -10,14 +10,18 @@ import (
 	"github.com/charmbracelet/colorprofile"
 
 	"github.com/yshah-aromatech/scriptorium/internal/procstat"
+	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
 
-// v1.0.1 task 2 — heat discipline. The released sparklines ran an 8-stop
-// green→yellow→red ramp on every cell of every row (66 color switches on one
-// line); color has to go back to meaning exceptional. A sparkline is now
-// single-hue Info, and only the cells at ≥80% of the series' own peak carry
-// the heat color (Warning).
+// v1.0.1 task 2 — heat discipline; v1.1.0 task 3 — braille resolution. The
+// released sparklines ran an 8-stop green→yellow→red ramp on every cell of
+// every row (66 color switches on one line); color has to go back to meaning
+// exceptional. A sparkline is single-hue Info, and only the cells at ≥80% of
+// the series' own peak carry the heat color (Warning). Since v1.1.0 each cell
+// is a braille 2×4 dot grid — two samples per cell, four levels per column —
+// so the same six columns carry twice the history at eight times the
+// sub-cell resolution, and the SHAPE survives monochrome untouched.
 
 const (
 	infoSGR    = "38;2;33;199;168"  // Night Owl Info #21c7a8
@@ -26,14 +30,15 @@ const (
 
 func TestSparklineIsSingleHueWithHeatOnlyAtThePeak(t *testing.T) {
 	th := theme.New(theme.Default, colorprofile.TrueColor)
-	// peak 100; 85 is the only other cell at >=80% of it
+	// six samples fill three braille cells (two per cell), right-aligned; the
+	// peak-carrying pairs (100,30) and (85,40) heat, the (10,20) cell stays cool
 	got := sparkline(th, []float64{10, 20, 100, 30, 85, 40}, 6, nil)
 
 	if n := strings.Count(got, warningSGR); n != 2 {
-		t.Errorf("heat on %d cells, want exactly the two >=80%% of peak:\n%q", n, got)
+		t.Errorf("heat on %d cells, want exactly the two holding >=80%% of peak:\n%q", n, got)
 	}
-	if n := strings.Count(got, infoSGR); n != 4 {
-		t.Errorf("%d Info cells, want 4:\n%q", n, got)
+	if n := strings.Count(got, infoSGR); n != 1 {
+		t.Errorf("%d Info cells, want 1:\n%q", n, got)
 	}
 	// single hue + heat means exactly two foreground colors, full stop
 	fgRE := regexp.MustCompile(`38;2;\d+;\d+;\d+`)
@@ -44,26 +49,39 @@ func TestSparklineIsSingleHueWithHeatOnlyAtThePeak(t *testing.T) {
 	if len(distinct) != 2 {
 		t.Errorf("sparkline uses %d distinct colors %v, want Info + heat only", len(distinct), distinct)
 	}
+	// every glyph is either a braille cell or the pad — 8× the block ramp's
+	// sub-cell resolution, and shape alone carries the series under NO_COLOR
+	for _, r := range textkit.StripANSI(got) {
+		if r != ' ' && (r < 0x2800 || r > 0x28FF) {
+			t.Errorf("non-braille glyph %q in a sparkline", r)
+		}
+	}
+	if w := textkit.Width(textkit.StripANSI(got)); w != 6 {
+		t.Errorf("sparkline is %d cells, want 6", w)
+	}
 }
 
 // A flat series is its own peak everywhere — every cell is "exceptional", so
-// every cell heats. Degenerate but correct: the discipline is relative to the
-// series, and a flat line at 100%% CPU deserves to glow.
+// every data cell heats. Degenerate but correct: the discipline is relative
+// to the series, and a flat line at 100% CPU deserves to glow.
 func TestSparklineFlatSeriesHeatsEverywhere(t *testing.T) {
 	th := theme.New(theme.Default, colorprofile.TrueColor)
-	got := sparkline(th, []float64{50, 50, 50}, 3, nil)
-	if strings.Contains(got, infoSGR) || strings.Count(got, warningSGR) != 3 {
+	got := sparkline(th, []float64{50, 50, 50, 50}, 2, nil)
+	if strings.Contains(got, infoSGR) || strings.Count(got, warningSGR) != 2 {
 		t.Errorf("flat series should be all heat:\n%q", got)
 	}
 }
 
-// An all-zero series draws flat baseline blocks in Info — nothing is
-// exceptional about zero.
+// An all-zero series draws a flat dotted baseline in Info — nothing is
+// exceptional about zero, but a flatline must still be VISIBLE.
 func TestSparklineZeroSeriesStaysCool(t *testing.T) {
 	th := theme.New(theme.Default, colorprofile.TrueColor)
-	got := sparkline(th, []float64{0, 0, 0}, 3, nil)
+	got := sparkline(th, []float64{0, 0, 0, 0}, 2, nil)
 	if strings.Contains(got, warningSGR) {
 		t.Errorf("a zero series has no peak to heat:\n%q", got)
+	}
+	if plain := textkit.StripANSI(got); strings.TrimSpace(plain) == "" {
+		t.Errorf("a zero series rendered invisible: %q", plain)
 	}
 }
 

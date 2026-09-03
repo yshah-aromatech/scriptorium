@@ -100,6 +100,16 @@ func TestRowsAndBadges(t *testing.T) {
 	}
 }
 
+// hasBraille reports whether s carries any braille sparkline cell.
+func hasBraille(s string) bool {
+	for _, r := range s {
+		if r >= 0x2801 && r <= 0x28FF {
+			return true
+		}
+	}
+	return false
+}
+
 // Design §4's floor rule: at 80 columns the sparkline and the schedule
 // expression come out of the table, and the missed flag does not.
 func TestFloorCollapse(t *testing.T) {
@@ -109,13 +119,13 @@ func TestFloorCollapse(t *testing.T) {
 	if !strings.Contains(wide, "0 2 * * *") {
 		t.Errorf("the wide table lost the schedule column:\n%s", wide)
 	}
-	if !strings.ContainsAny(wide, blocks) {
+	if !hasBraille(wide) {
 		t.Errorf("the wide table lost the sparkline column:\n%s", wide)
 	}
 	if strings.Contains(floor, "0 2 * * *") {
 		t.Errorf("the 80-column table kept the schedule column:\n%s", floor)
 	}
-	if strings.ContainsAny(floor, blocks) {
+	if hasBraille(floor) {
 		t.Errorf("the 80-column table kept the sparkline column:\n%s", floor)
 	}
 	if !strings.Contains(scriptRow(floorM, "nightly-report"), "⚠") {
@@ -227,31 +237,36 @@ func TestSparkline(t *testing.T) {
 	if got := textkit.StripANSI(sparkline(th, nil, 6, nil)); got != "······" {
 		t.Errorf("empty series = %q, want a muted placeholder", got)
 	}
-	// scaled to the series' own peak: the max value is always a full block
+	// braille (v1.1.0 task 3): two samples per cell, scaled to the series' own
+	// peak — the closing cell holds (4,5) of peak 5: left column 3 dots, right
+	// column full, which is ⣾
 	got := textkit.StripANSI(sparkline(th, []float64{0, 1, 2, 3, 4, 5}, 6, nil))
-	if !strings.HasSuffix(got, "█") {
+	if !strings.HasSuffix(got, "⣾") {
 		t.Errorf("sparkline %q does not end at full height", got)
 	}
 	if textkit.Width(got) != 6 {
 		t.Errorf("sparkline %q is not 6 cells", got)
 	}
-	// a flat low series still reads, because the scale is relative
-	if flat := textkit.StripANSI(sparkline(th, []float64{2, 2, 2}, 6, nil)); flat != "   ███" {
+	// a flat low series still reads at full height, because the scale is
+	// relative; three samples right-align, starting mid-cell
+	if flat := textkit.StripANSI(sparkline(th, []float64{2, 2, 2}, 6, nil)); flat != "    ⢸⣿" {
 		t.Errorf("flat series = %q", flat)
 	}
-	// longer series keep their tail
+	// longer series keep their tail: twelve slots hold all eight points, and
+	// the final zero sample still draws its baseline dot
 	long := textkit.StripANSI(sparkline(th, []float64{9, 9, 9, 9, 9, 9, 9, 0}, 6, nil))
-	if !strings.HasSuffix(long, "▁") {
+	if !strings.HasSuffix(long, "⣇") {
 		t.Errorf("a long series lost its most recent point: %q", long)
 	}
-	// heat discipline (v1.0.1): the peak heats, the trough stays Info —
-	// the full ≥80%-of-peak contract is pinned in heat_test.go
-	hot := sparkline(th, []float64{0, 100}, 2, nil)
-	if !strings.Contains(hot, th.S.Warning.Render("█")) {
-		t.Errorf("the peak is not painted with the heat color: %q", hot)
+	// heat discipline (v1.0.1, preserved): a cell holding the peak heats, a
+	// cell below 80% stays Info — the full contract is pinned in heat_test.go
+	hot := sparkline(th, []float64{0, 100}, 1, nil)
+	if !strings.Contains(hot, th.S.Warning.Render("⣸")) {
+		t.Errorf("the peak cell is not painted with the heat color: %q", hot)
 	}
-	if !strings.Contains(hot, th.S.Info.Render("▁")) {
-		t.Errorf("the trough is not painted in the sparkline hue: %q", hot)
+	cool := sparkline(th, []float64{10, 100, 20, 30}, 2, nil)
+	if !strings.Contains(cool, th.S.Info.Render("⣀")) {
+		t.Errorf("the sub-peak cell is not painted in the sparkline hue: %q", cool)
 	}
 }
 

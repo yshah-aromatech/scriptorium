@@ -226,8 +226,11 @@ func (f *fleetModel) viewPaneled(m *Model, w, h int) []string {
 	th := m.th
 	pad := panelPad(w)
 	rows := []string{summaryStrip(th, f.summary(m), w)}
+	if pad > 0 {
+		rows = append(rows, "") // task 3's breathing row under the summary strip
+	}
 	lay := fleetLayoutFor(w)
-	body := h - 1
+	body := h - len(rows)
 
 	tableOpts := panelOpts{title: f.title(), focused: true, pad: pad,
 		hints: m.tailHints(modeFleet, focusList)}

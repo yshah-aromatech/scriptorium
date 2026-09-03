@@ -2,6 +2,7 @@ package tui
 
 import (
 	"image/color"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -263,7 +264,9 @@ func (h *historyModel) viewPaneled(m *Model, rows []history.Row, w, hh int) []st
 
 func (h *historyModel) title(m *Model, rows []history.Row) string {
 	if m.historyScope != "" {
-		return "history — " + m.historyScope
+		// the fzf-style count: how many of the loaded runs the scope keeps
+		return "history — " + m.historyScope + " · " +
+			strconv.Itoa(len(rows)) + "/" + strconv.Itoa(len(h.loaded))
 	}
 	return "history"
 }

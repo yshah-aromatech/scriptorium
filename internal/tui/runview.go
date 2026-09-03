@@ -553,7 +553,9 @@ func (r *runModel) viewPaneled(m *Model, l runLayout, h int) []string {
 func (r *runModel) listTitle() string {
 	title := "scripts"
 	if r.filter != "" {
-		title += " [/" + r.filter + "]"
+		// the fzf-style match count: how many survive the filter, out of what
+		title += " " + strconv.Itoa(len(r.list.Items())) + "/" + strconv.Itoa(r.scriptsLen) +
+			" [/" + r.filter + "]"
 	}
 	if n := len(r.queue); n > 0 {
 		title += " · " + strconv.Itoa(n) + " queued"

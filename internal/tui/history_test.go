@@ -67,8 +67,8 @@ func TestHistoryScopeToggle(t *testing.T) {
 			t.Errorf("a scoped table still shows %s", r.Script)
 		}
 	}
-	if !strings.Contains(plainFrame(m), "history — heartbeat") {
-		t.Errorf("the scoped title is not on screen:\n%s", plainFrame(m))
+	if !strings.Contains(plainFrame(m), "history — heartbeat · 1/6") {
+		t.Errorf("the scoped title does not carry the fzf-style count:\n%s", plainFrame(m))
 	}
 
 	press(m, "f")

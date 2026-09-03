@@ -90,7 +90,8 @@ func TestFilterKeepsDeepLinkSelectionCorrect(t *testing.T) {
 	}
 }
 
-// The list title carries the active filter, matching PS's inset " [/filter]".
+// The list title carries the active filter, matching PS's inset " [/filter]",
+// plus the fzf-style match count (v1.1.0 task 3).
 func TestFilterShowsInTheListTitle(t *testing.T) {
 	m := runAt(t, 120, 40)
 	press(m, "/")
@@ -100,6 +101,9 @@ func TestFilterShowsInTheListTitle(t *testing.T) {
 	press(m, "enter")
 	if !strings.Contains(plainFrame(m), "[/sync]") {
 		t.Errorf("the list title does not show the active filter:\n%s", plainFrame(m))
+	}
+	if !strings.Contains(plainFrame(m), "scripts 1/5") {
+		t.Errorf("the list title does not carry the fzf-style 1/5 count:\n%s", plainFrame(m))
 	}
 }
 
