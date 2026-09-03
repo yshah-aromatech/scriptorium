@@ -11,7 +11,6 @@ import (
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/colorprofile"
 
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
 	"github.com/yshah-aromatech/scriptorium/internal/envfile"
@@ -102,35 +101,31 @@ func (r *runModel) init(m *Model) {
 // injected profile rather than whatever the process environment happened to say
 // when the model was built.
 //
+// The ETA bar is a solid Primary fill over a Muted empty half (v1.0.1 task 2).
+// The released gradient did two wrong things at once: it painted background
+// colors across the status line (bubbles/progress's half-block mode pairs a
+// bg with every fg step — the "teal gradient bg" defect), and below truecolor
+// it emitted interpolated 24-bit SGRs the profile never saw. Solid full-block
+// fill has neither problem, on any profile.
+//
 // The nil check is not defensive padding: under a no-colour profile (NO_COLOR,
 // TERM=dumb, an explicit colorMode) every token resolves to nil — correctly,
-// that is what "no colour" means — and bubbles/progress's blend path then asks
-// lipgloss.Blend1D for a gradient it cannot build from nil stops, gets an empty
-// slice back, and indexes it. Handing it no colours instead selects its solid
-// fill, which has no gradient to index.
+// that is what "no colour" means — and the bar should render unstyled blocks.
 func (r *runModel) applyTheme(th theme.Theme) {
 	r.prog.SetWidth(etaBarWidth)
+	progress.WithFillCharacters('█', '░')(&r.prog)
 
-	if th.C.Info == nil || th.C.Accent == nil {
+	if th.C.Primary == nil {
 		// WithColors() alone would fall back to the component's OWN default
-		// palette — a 24-bit gradient, on a terminal that just said it wants
+		// palette — a 24-bit fill, on a terminal that just said it wants
 		// none. Clearing the fields as well leaves the bar unstyled, which is
 		// what a no-colour profile is asking for.
 		progress.WithColors()(&r.prog)
 		r.prog.FullColor, r.prog.EmptyColor = nil, nil
 		return
 	}
-
+	progress.WithColors(th.C.Primary)(&r.prog)
 	r.prog.EmptyColor = th.C.Muted
-	if th.Profile >= colorprofile.TrueColor {
-		progress.WithColors(th.C.Info, th.C.Accent)(&r.prog)
-		return
-	}
-	// Below truecolor, a gradient is the wrong shape: the component blends its
-	// two stops and renders every INTERPOLATED step directly, so the colours in
-	// between never pass through the profile and the bar emits 24-bit SGR on a
-	// terminal that cannot name it. One already-downsampled colour, solid.
-	progress.WithColors(th.C.Accent)(&r.prog)
 }
 
 // initCmd is the root's startup hook for this view. Nothing to schedule yet —

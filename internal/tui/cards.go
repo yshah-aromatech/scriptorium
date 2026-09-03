@@ -79,10 +79,15 @@ func summaryStrip(th theme.Theme, s fleetSummary, w int) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// sparkline renders a series as `cells` heat-colored blocks, scaled to the
-// series' own maximum (a script that never exceeds 5% CPU still gets a
-// readable shape). Fewer points than cells left-pads with blanks so the bars
-// stay right-aligned against the age column.
+// sparkline renders a series as `cells` blocks, scaled to the series' own
+// maximum (a script that never exceeds 5% CPU still gets a readable shape).
+// Fewer points than cells left-pads with blanks so the bars stay right-aligned
+// against the age column.
+//
+// Heat discipline (v1.0.1 task 2): the line is single-hue Info; only cells at
+// ≥80% of the series' own peak carry the heat color — color means exceptional
+// again, instead of an 8-stop ramp repainting every cell of every row. The
+// SHAPE still carries the whole series (and all of it under NO_COLOR).
 func sparkline(th theme.Theme, series []float64, cells int, bg color.Color) string {
 	if cells <= 0 {
 		return ""
@@ -106,7 +111,11 @@ func sparkline(th theme.Theme, series []float64, cells int, bg color.Color) stri
 		if peak > 0 {
 			level = min(max(int(v/peak*float64(len(blockRunes)-1)+0.5), 0), len(blockRunes)-1)
 		}
-		b.WriteString(tint(th.S.Heat[level], bg).Render(string(blockRunes[level])))
+		st := th.S.Info
+		if peak > 0 && v >= 0.8*peak {
+			st = th.S.Warning
+		}
+		b.WriteString(tint(st, bg).Render(string(blockRunes[level])))
 	}
 	return b.String()
 }

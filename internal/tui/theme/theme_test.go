@@ -229,31 +229,29 @@ func TestUnknownPaletteFallsBack(t *testing.T) {
 	}
 }
 
-// The sparkline ramp runs cool to hot and ends where the status colors do, so
-// a busy bar reads as "hot" without a legend.
-func TestHeatRamp(t *testing.T) {
-	th := theme.New(theme.Default, colorprofile.TrueColor)
-	first, last := th.S.Heat[0].Render("x"), th.S.Heat[7].Render("x")
-	if want := th.S.Success.Render("x"); first != want {
-		t.Errorf("heat[0] = %q, want the Success color %q", first, want)
-	}
-	if want := th.S.Danger.Render("x"); last != want {
-		t.Errorf("heat[7] = %q, want the Danger color %q", last, want)
-	}
-	seen := map[string]bool{}
-	warned := false
-	for _, s := range th.S.Heat {
-		r := s.Render("x")
-		seen[r] = true
-		if r == th.S.Warning.Render("x") {
-			warned = true
+// The contrast floor (v1.0.1 task 2), computed rather than eyeballed: in every
+// curated palette, body text clears WCAG AAA (7:1), metadata text clears AA
+// (4.5:1), and borders clear the non-text minimum (3:1) — all against the
+// palette's own ground. The `terminal` palette is exempt by construction: its
+// tokens are ANSI indices whose actual colors belong to the user's terminal.
+func TestCuratedPalettesMeetTheContrastFloor(t *testing.T) {
+	for _, name := range []string{"night-owl", "catppuccin-mocha", "gruvbox-dark", "tokyo-night"} {
+		p, ok := theme.Get(name)
+		if !ok {
+			t.Fatalf("%q is not registered", name)
 		}
-	}
-	if !warned {
-		t.Error("the ramp never passes through the Warning color")
-	}
-	if len(seen) < 6 {
-		t.Errorf("the ramp has %d distinct stops, want a readable spread", len(seen))
+		for _, c := range []struct {
+			tok, hex string
+			floor    float64
+		}{
+			{"Fg", p.Fg, 7},
+			{"Muted", p.Muted, 4.5},
+			{"Border", p.Border, 3},
+		} {
+			if r := theme.ContrastRatio(c.hex, p.Bg); r < c.floor {
+				t.Errorf("%s.%s %s on %s = %.2f:1, floor is %.1f:1", name, c.tok, c.hex, p.Bg, r, c.floor)
+			}
+		}
 	}
 }
 

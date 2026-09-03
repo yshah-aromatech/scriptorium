@@ -244,13 +244,14 @@ func TestSparkline(t *testing.T) {
 	if !strings.HasSuffix(long, "▁") {
 		t.Errorf("a long series lost its most recent point: %q", long)
 	}
-	// hot values take the hot end of the ramp, cool ones the cool end
+	// heat discipline (v1.0.1): the peak heats, the trough stays Info —
+	// the full ≥80%-of-peak contract is pinned in heat_test.go
 	hot := sparkline(th, []float64{0, 100}, 2, nil)
-	if !strings.Contains(hot, th.S.Heat[7].Render("█")) {
-		t.Errorf("the peak is not painted with the hottest ramp stop: %q", hot)
+	if !strings.Contains(hot, th.S.Warning.Render("█")) {
+		t.Errorf("the peak is not painted with the heat color: %q", hot)
 	}
-	if !strings.Contains(hot, th.S.Heat[0].Render("▁")) {
-		t.Errorf("the trough is not painted with the coolest ramp stop: %q", hot)
+	if !strings.Contains(hot, th.S.Info.Render("▁")) {
+		t.Errorf("the trough is not painted in the sparkline hue: %q", hot)
 	}
 }
 

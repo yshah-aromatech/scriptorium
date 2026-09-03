@@ -102,16 +102,7 @@ type Styles struct {
 	Desc      lipgloss.Style // a key hint's description
 	RuntimePS lipgloss.Style
 	RuntimePy lipgloss.Style
-
-	// Heat is the eight-level sparkline ramp, cool to hot: Success through
-	// Warning to Danger (inventory §1.12's green→bright-yellow→red). Built
-	// once per theme so a row of sparklines is not blending colors per cell.
-	Heat [heatLevels]lipgloss.Style
 }
-
-// heatLevels is the number of block glyphs a sparkline can draw, and so the
-// number of stops the ramp needs.
-const heatLevels = 8
 
 // Theme is a palette bound to a profile: the tokens, the resolved colors and
 // the styles, built once at startup and again only on a theme change.
@@ -204,25 +195,6 @@ func New(name string, prof colorprofile.Profile) Theme {
 	if c.Bg != nil && c.Fg != nil {
 		ground = ansi.Style{}.ForegroundColor(c.Fg).BackgroundColor(c.Bg).String()
 	}
-	var heat [heatLevels]lipgloss.Style
-	if strings.HasPrefix(p.Success, "#") {
-		for i, step := range lipgloss.Blend1D(heatLevels, c.Success, c.Warning, c.Danger) {
-			heat[i] = fg(prof.Convert(step))
-		}
-	} else {
-		// the `terminal` palette has no RGB to blend between: stepwise thirds,
-		// so the ramp never invents a truecolor the scheme does not own
-		for i := range heat {
-			switch {
-			case i < heatLevels/3:
-				heat[i] = fg(c.Success)
-			case i < 2*heatLevels/3:
-				heat[i] = fg(c.Warning)
-			default:
-				heat[i] = fg(c.Danger)
-			}
-		}
-	}
 	return Theme{
 		Name: name, P: p, C: c, Profile: prof, groundSGR: ground,
 		S: Styles{
@@ -248,7 +220,6 @@ func New(name string, prof colorprofile.Profile) Theme {
 			Desc:      fg(c.Muted),
 			RuntimePS: fg(c.RuntimePS),
 			RuntimePy: fg(c.RuntimePy),
-			Heat:      heat,
 		},
 	}
 }
