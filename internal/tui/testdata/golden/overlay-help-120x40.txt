@@ -12,15 +12,15 @@
   pgup    page up                                           # session
   pgdn    page down                                          :       commands
   g       top                                                ?       help
-  G       bottom                                             q       quit
-  tab     focus
-  end     follow                                            # overlays
-                                                             y/↵     confirm
- # fleet                                                     n       no
-  ↵       open                                               ctrl+s  save
-  f       failures / scope                                   esc     close
+  G       bottom                                             ]       theme: next
+  tab     focus                                              [       theme: previous
+  end     follow                                             q       quit
 
- # run
+ # fleet                                                    # overlays
+  ↵       open                                               y/↵     confirm
+  f       failures / scope                                   n       no
+                                                             ctrl+s  save
+ # run                                                       esc     close
   r       run script
   a       args
   x       kill

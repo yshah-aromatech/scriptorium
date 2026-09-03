@@ -72,6 +72,10 @@ type keyMap struct {
 	// schedules
 	ScheduleEdit key.Binding
 
+	// session
+	ThemeNext key.Binding
+	ThemePrev key.Binding
+
 	// overlays
 	Palette key.Binding
 	Help    key.Binding
@@ -130,6 +134,12 @@ func defaultKeys() keyMap {
 
 		ScheduleEdit: key.NewBinding(key.WithKeys("e", "enter"), key.WithHelp("e/↵", "edit")),
 
+		// the live theme cycler (v1.0.1): session-only, the status line says
+		// how to keep one. Advertised as "theme: next/previous" so the
+		// command palette finds both under ":theme".
+		ThemeNext: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "theme: next")),
+		ThemePrev: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "theme: previous")),
+
 		Palette: key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
 		Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Close:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "close")),
@@ -178,7 +188,7 @@ func (k keyMap) groups() []keyGroup {
 		// at 120x40 (TestHelpOverlayShowsTheWholeKeySet caught it).
 		{Title: "tools", Owner: modeRun, Keys: []key.Binding{k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}},
 		{Title: "schedules", Owner: modeSchedules, Keys: []key.Binding{k.ScheduleEdit}},
-		{Title: "session", Owner: modeAny, Keys: []key.Binding{k.Palette, k.Help, k.Quit}},
+		{Title: "session", Owner: modeAny, Keys: []key.Binding{k.Palette, k.Help, k.ThemeNext, k.ThemePrev, k.Quit}},
 		{Title: "overlays", Owner: modeAny, Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Save, k.Close}},
 	}
 }

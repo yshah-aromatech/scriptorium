@@ -173,14 +173,17 @@ func Profile(colorMode string, env []string) colorprofile.Profile {
 	return max(p, colorprofile.ANSI256)
 }
 
-// New builds a theme. An unknown name falls back to Default: a stale config
-// value must not black out the UI.
+// New builds a theme. The name resolves curated-first, then through the
+// bubbletint registry (see Resolve); an unknown name falls back to Default —
+// a stale config value must not black out the UI. Theme.Name carries the
+// canonical resolved spelling, which is what the live cycler indexes on.
 func New(name string, prof colorprofile.Profile) Theme {
-	p, ok := Get(name)
+	p, canonical, ok := Resolve(name)
 	if !ok {
-		name = Default
+		canonical = Default
 		p, _ = Get(Default)
 	}
+	name = canonical
 	c := Colors{
 		Bg: conv(prof, p.Bg), Fg: conv(prof, p.Fg), Muted: conv(prof, p.Muted),
 		Border: conv(prof, p.Border), Accent: conv(prof, p.Accent),

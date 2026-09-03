@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -184,25 +185,45 @@ func New(a *app.App, now func() time.Time) *Model {
 	return m
 }
 
-// themeName resolves config.json's `theme` key against the registered
-// palettes. An unknown name falls back to the default WITH a warning rather
-// than silently — a typo that leaves the UI looking identical is a bug report
-// waiting to happen. The warning joins the app's own list, which the Run view
-// prints into the output pane on first open.
+// themeName resolves config.json's `theme` key: the curated palettes first,
+// then any bubbletint ID (both `-` and `_` spellings — theme.Resolve). An
+// unknown name falls back to the default WITH a warning naming the three
+// nearest known names rather than silently — a typo that leaves the UI
+// looking identical is a bug report waiting to happen. The warning joins the
+// app's own list, which the Run view prints into the output pane on first
+// open.
 //
-// This is the Go-only config key (parity divergence 23). Its warning string is
-// Go's own; nothing here touches config.json's PS-parity warnings.
+// This is the Go-only config key (parity divergence 23, amended for v1.0.1).
+// Its warning string is Go's own; nothing here touches config.json's
+// PS-parity warnings.
 func themeName(a *app.App) string {
 	name := strings.TrimSpace(a.Cfg.Theme)
 	if name == "" {
 		return theme.Default
 	}
-	if _, ok := theme.Get(name); ok {
-		return name
+	if _, canonical, ok := theme.Resolve(name); ok {
+		return canonical
 	}
-	a.Warnings = append(a.Warnings, "config.json: unknown theme '"+name+"' — using "+
-		theme.Default+" (available: "+strings.Join(theme.Names(), ", ")+")")
+	warn := "config.json: unknown theme '" + name + "' — using " + theme.Default
+	if near := theme.NearMatches(name, 3); len(near) > 0 {
+		warn += " (closest: " + strings.Join(near, ", ") + ")"
+	}
+	a.Warnings = append(a.Warnings, warn)
 	return theme.Default
+}
+
+// cycleTheme is `]` / `[` — the live palette cycler over the full set, curated
+// palettes first, then every bubbletint ID. Session-only by design: the status
+// line says which theme this is and how to make it stick.
+func (m *Model) cycleTheme(dir int) tea.Cmd {
+	names := theme.CycleNames()
+	if len(names) == 0 {
+		return nil
+	}
+	at := slices.Index(names, m.th.Name)
+	next := names[((at+dir)%len(names)+len(names))%len(names)] // at==-1 walks in from the ends
+	m.useTheme(theme.New(next, m.th.Profile))
+	return status(StatusInfo, "theme: "+next+" — session only · set \"theme\": \""+next+"\" in config.json to keep it")
 }
 
 // useTheme swaps the palette and re-derives every style that was copied out of
@@ -470,6 +491,10 @@ func (m *Model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, k.Help):
 		m.open(&helpOverlay{})
 		return nil
+	case key.Matches(msg, k.ThemeNext):
+		return m.cycleTheme(1)
+	case key.Matches(msg, k.ThemePrev):
+		return m.cycleTheme(-1)
 	case key.Matches(msg, k.Fleet):
 		return m.switchTo(modeFleet)
 	case key.Matches(msg, k.Run):

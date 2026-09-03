@@ -266,6 +266,10 @@ func TestThemeConfigKey(t *testing.T) {
 	}{
 		{"unset", "", theme.Default, ""},
 		{"registered", "gruvbox-dark", "gruvbox-dark", ""},
+		{"terminal palette", "terminal", "terminal", ""},
+		{"tint id", "dracula", "dracula", ""},
+		{"tint id, kebab spelling", "rose-pine", "rose_pine", ""},
+		{"curated beats the tint of the same family", "tokyo_night", "tokyo-night", ""},
 		{"unknown", "solarised-beige", theme.Default, "unknown theme 'solarised-beige'"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -283,6 +287,13 @@ func TestThemeConfigKey(t *testing.T) {
 			}
 			if c.warn != "" && !strings.Contains(warned, theme.Default) {
 				t.Errorf("the warning does not say what it fell back to: %q", warned)
+			}
+			// the v1.0.1 warning names near matches instead of dumping the
+			// whole registry — "solarised" should suggest the solarized family
+			if c.warn != "" {
+				if !strings.Contains(warned, "closest:") || !strings.Contains(warned, "solar") {
+					t.Errorf("the warning names no near matches: %q", warned)
+				}
 			}
 		})
 	}

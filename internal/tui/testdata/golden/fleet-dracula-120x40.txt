@@ -8,25 +8,25 @@
  ▶ sync-orders    pull orders from the ERP into po… py ▃▆█▅▂▁                   12m│─ live now ─────────────────────────
                                                                                    │ ⠋ sync-orders↗    1m ·4242
                                                                                    │
-─ commands ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
- ❯ ru
- ▎ 2      run  ·  views
-   r      run script  ·  run
-   a      args  ·  run
-   x      kill  ·  run
-   X      clear queue  ·  run
-   s      sync  ·  run
-   e      .env  ·  run
-   i      deps  ·  run
-   l      lint  ·  run
-   u      upgrade  ·  run
-   v      last log  ·  run
-   y      copy all output  ·  run
-   c      clear output  ·  run
-   h      script history  ·  run
-   ctrl+f search output · n/N next/prev  ·  tools
-   [      theme: previous  ·  session
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                   │─ recent ───────────────────────────
+                                                                                   │ ✓ heartbeat  py success ▄█▆▅▃▂  41s
+                                                                                   │ ✓ backup-db  ps success ▃▆█▆▅▃   3m
+                                                                                   │ ✗ sync-orde… py failure ▃▆█▅▂▁  12m
+                                                                                   │ ✓ nightly-r… ps success ▂▄▇█▆▃ 5h2m
+                                                                                   │ ✓ backup-db  ps success ······   2d
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
+                                                                                   │
                                                                                    │
                                                                                    │
                                                                                    │
@@ -37,4 +37,4 @@
                                                                                    │
                                                                                    │
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-↑/k up · ↓/j down · ↵ run · esc close
+q quit · ↑/k up · ↓/j down · ↵ open · f failures / scope · r run script · s sync · : commands · ? help · 1 fleet …

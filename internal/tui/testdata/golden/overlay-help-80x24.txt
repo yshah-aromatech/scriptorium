@@ -12,12 +12,12 @@
   pgup    page up                       # session
   pgdn    page down                      :       commands
   g       top                            ?       help
-  G       bottom                         q       quit
-  tab     focus
-  end     follow                        # overlays
-                                         y/↵     confirm
- # fleet                                 n       no
-  ↵       open                           ctrl+s  save
+  G       bottom                         ]       theme: next
+  tab     focus                          [       theme: previous
+  end     follow                         q       quit
+
+ # fleet                                # overlays
+  ↵       open                           y/↵     confirm
   ▼ 16 more — ↑↓ scrolls
 ────────────────────────────────────────────────────────────────────────────────
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
