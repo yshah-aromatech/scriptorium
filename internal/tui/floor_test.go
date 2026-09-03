@@ -312,6 +312,29 @@ func TestSelfUpdateStampedModeFailureReportsStatus(t *testing.T) {
 	}
 }
 
+// TestDevBuildSkipsVersionCheckAtInit is F1's regression test: a dev build
+// (every build without ldflags — the default in every test in this
+// package) must never even construct the startup version-check command,
+// so it can never reach the network no matter what internal/update's
+// active Source does. The gate lives at the Init() call site (root.go),
+// not inside versionCheckCmd itself, so this checks Init()'s own command
+// count rather than executing anything — running Init()'s real ticker
+// commands (1s/2s/60s) would make this test needlessly slow.
+func TestDevBuildSkipsVersionCheckAtInit(t *testing.T) {
+	m := runAt(t, 120, 40)
+	old := buildinfo.Version
+
+	buildinfo.Version = "dev"
+	devCount := len(batchCmds(m.Init()))
+	buildinfo.Version = "v1.2.3"
+	stampedCount := len(batchCmds(m.Init()))
+	buildinfo.Version = old
+
+	if stampedCount != devCount+1 {
+		t.Errorf("Init() command count: dev=%d stamped=%d, want stamped = dev+1 (the version check)", devCount, stampedCount)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // t — webhook test
 // ---------------------------------------------------------------------------

@@ -257,7 +257,7 @@ func TestRecentRunsCard(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The theme config key (Go-only, parity divergence 24)
+// The theme config key (Go-only, parity divergence 23)
 // ---------------------------------------------------------------------------
 
 func TestThemeConfigKey(t *testing.T) {

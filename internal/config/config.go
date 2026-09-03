@@ -151,7 +151,7 @@ var knownNonNumericKeys = map[string]bool{
 	"openRouterModel": true,
 	"syncOnLaunch":    true,
 	"colorMode":       true,
-	// theme is a GO-ONLY key (parity divergence 24): it selects one of the
+	// theme is a GO-ONLY key (parity divergence 23): it selects one of the
 	// palettes registered in internal/tui/theme. The PS app has no such key
 	// and would warn "unknown key 'theme'" on a config that sets it — which is
 	// why it is documented in the divergence registry rather than quietly

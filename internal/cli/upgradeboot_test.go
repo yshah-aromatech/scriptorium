@@ -11,6 +11,7 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,7 +28,22 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/cli"
 	"github.com/yshah-aromatech/scriptorium/internal/tui"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
+	"github.com/yshah-aromatech/scriptorium/internal/update"
 )
+
+// panicUpdateSource proves a call never happens rather than merely hoping a
+// no-op source masks one: any call panics loudly (bubbletea recovers Cmd
+// panics gracefully — the program just shuts down early — so this is safe
+// to run inside a real teatest boot, not a process crash).
+type panicUpdateSource struct{}
+
+func (panicUpdateSource) Latest(context.Context) (string, bool, error) {
+	panic("update.Source.Latest called — a dev build's Init() must never check for updates")
+}
+
+func (panicUpdateSource) Replace(context.Context, string) (string, error) {
+	panic("update.Source.Replace called unexpectedly")
+}
 
 func psFixturesDir(t *testing.T) string {
 	t.Helper()
@@ -134,6 +150,16 @@ func TestUpgradeBootGate(t *testing.T) {
 	})
 
 	t.Run("TUI boot shows the running badge", func(t *testing.T) {
+		// F1 regression proof: swap the package-wide no-op update.Source for
+		// one that panics on any call. A dev build's Init() (buildinfo.Version
+		// defaults to "dev" — no ldflags in a test binary) must never
+		// construct the startup version-check command at all, so this real
+		// teatest boot completing normally (not panicking, not timing out
+		// waiting on a frame that never arrives because the program shut
+		// itself down) is itself the proof that nothing here reaches
+		// update.Check.
+		t.Cleanup(update.SetSource(panicUpdateSource{}))
+
 		a, err := app.Open(appDir)
 		if err != nil {
 			t.Fatal(err)

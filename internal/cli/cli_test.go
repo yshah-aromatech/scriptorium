@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
 	"github.com/yshah-aromatech/scriptorium/internal/pwshtest"
+	"github.com/yshah-aromatech/scriptorium/internal/update"
 )
 
 // stubBuildinfo overrides the package-level buildinfo vars for one test —
@@ -54,6 +56,19 @@ func writeShim(dir, block string) error {
 	return os.WriteFile(filepath.Join(dir, "crontab"), []byte(script), 0o755)
 }
 
+// noOpUpdateSource is the package-wide belt-and-braces default (mirrors
+// internal/tui's TestMain): every test here runs as buildinfo.Version ==
+// "dev", so nothing in this package should ever call an update.Source at
+// all after F1's fix (dev builds skip the TUI's Init() version check
+// entirely) — this is just a safety net in case something someday does,
+// so it fails soft (found=false) rather than reaching the network.
+type noOpUpdateSource struct{}
+
+func (noOpUpdateSource) Latest(context.Context) (string, bool, error) { return "", false, nil }
+func (noOpUpdateSource) Replace(_ context.Context, current string) (string, error) {
+	return current, nil
+}
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "sto-crontab-shim")
 	if err != nil {
@@ -65,6 +80,7 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
 		panic(err)
 	}
+	update.SetSource(noOpUpdateSource{})
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

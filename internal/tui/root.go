@@ -190,7 +190,7 @@ func New(a *app.App, now func() time.Time) *Model {
 // waiting to happen. The warning joins the app's own list, which the Run view
 // prints into the output pane on first open.
 //
-// This is the Go-only config key (parity divergence 24). Its warning string is
+// This is the Go-only config key (parity divergence 23). Its warning string is
 // Go's own; nothing here touches config.json's PS-parity warnings.
 func themeName(a *app.App) string {
 	name := strings.TrimSpace(a.Cfg.Theme)
@@ -222,19 +222,28 @@ func (m *Model) useTheme(th theme.Theme) {
 // reads the app facade and returns a message — none of them touch the model,
 // which is what keeps the update loop single-threaded (see messages.go).
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.loadFleet(),
 		m.scanLocks(),
 		tickCmd(),
 		lockPollCmd(),
 		missedTickCmd(),
 		m.run.initCmd(),
-		versionCheckCmd(),
-	)
+	}
+	// A dev build (every build that isn't a goreleaser release) has no
+	// release version to compare against and self-update runs git pull
+	// instead (actions.go's selfUpdate) — checking here would show a
+	// permanently-false "update available" notice on every boot AND be the
+	// only network call the app makes with zero configuration. Gated at the
+	// call site so the network call itself is skipped, not just the notice.
+	if buildinfo.Version != "dev" {
+		cmds = append(cmds, versionCheckCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 // versionCheckCmd is the startup version notice (design row 45: it ships
-// regardless of which self-update mechanism a build ends up using).
+// regardless of which self-update mechanism a stamped build ends up using).
 // Non-blocking and off the update loop like every other Init command; a
 // network hiccup is swallowed rather than shown, and "already current"
 // posts nothing at all — returning a nil tea.Msg is bubbletea's own way of

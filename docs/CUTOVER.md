@@ -25,10 +25,24 @@ scp scriptorium user@server:~/scriptorium-bin
 or, once a release exists, run `install.sh` in binary mode (see step 7 for
 when that release exists on the real repo — until then, use the scp path,
 or point `install.sh` at a pre-release build via a manual copy into
-`~/.local/bin/scriptorium`). Either way, do **not** point it at the
+`~/.local/bin/scriptorium`). For steps 2-3, do **not** point it at the
 PowerShell app's app dir's `config.json`/`.env` yet if you want to keep the
 two fully separate during the sanity pass — `SCRIPTORIUM_APP_DIR` can target
-a scratch directory for step 2.
+a scratch directory, and the binary can live anywhere (`~/scriptorium-bin`
+above is fine) while it's only ever invoked by its full path.
+
+**Before step 4:** move (or re-copy) the binary to its FINAL path —
+`~/.local/bin/scriptorium` — and confirm that's what's on `$PATH` as
+`scriptorium`. `--migrate` bakes the running binary's own absolute path
+(`os.Executable()`) into every cron line it writes, and re-running
+`--migrate` later never re-adopts a block that's already in the current
+markers — so migrating from a scratch/scp path (like `~/scriptorium-bin`)
+pins cron to that path forever, even after step 7 installs the real
+`v1.0.0` release at `~/.local/bin/scriptorium`. If this is ever missed, the
+recovery is one command, not a re-migrate: re-`Set` any one schedule (the
+Schedules view's `e`/`Enter`, or the MCP `set_schedule` tool) — that
+re-renders the WHOLE managed block against whatever binary is currently
+running, fixing every line's path in one shot.
 
 **Rollback:** delete the binary. Nothing else has been touched.
 
@@ -47,10 +61,20 @@ scriptorium --history   # compare against: pwsh -File scriptorium.ps1 --history
 
 Both must show the same scripts, the same last-run statuses, and the same
 schedules (bracket-shaped in `--list`, same rows in `--history`). Do **not**
-run `scriptorium --migrate` yet — reading is fully safe, this step is
-read-only by construction (`--list`/`--history` never write anything).
+run `scriptorium --migrate` yet.
 
-**Rollback:** none needed — nothing was written.
+Be aware: `--list`/`--history` don't write anything THEMSELVES, but every
+`scriptorium` invocation (any flag, this one included) runs the same
+startup retention prune the PowerShell app already applies — hourly-
+throttled and flock-serialized, so it's safe, but the first Go command
+against the real data dir may age out old history rows and delete old log
+files under `logRetentionDays`/`historyDays`, same as PowerShell has been
+doing all along. Nothing about the crontab, `config.json`, or `.env` is
+touched by this step.
+
+**Rollback:** none needed — the crontab, config, and every script are
+untouched; a retention prune only ever removes what the existing policy
+already marked for deletion.
 
 ---
 

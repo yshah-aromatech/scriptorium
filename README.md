@@ -13,10 +13,10 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 - **Live output** — streamed into the TUI (word-wrapped, wide-character aware, mouse-scrollable), saved to a timestamped log file per run; `y` copies the buffer to your clipboard (OSC 52, tmux-aware)
 - **Resource monitoring** — CPU % and RSS memory sampled across the whole process tree every second via `/proc`; average and peak reported, with a per-run sparkline in history
 - **n8n webhook reporting** — success/failure, exit code, duration, avg/max CPU & memory, host, and a log tail POSTed after every run. Delivery is retried, and undelivered reports are queued on disk and re-sent after the next successful delivery
-- **Cron scheduling** — set a cron expression or plain English on any script from the Schedules view; schedules live in a managed block in your user crontab that leaves every other entry alone
+- **Cron scheduling** — `e`/`Enter` in the Schedules view sets a cron expression or plain English on any script; schedules live in a managed block in your user crontab that leaves every other entry alone
 - **Overlap protection + missed-run detection** — a per-script lock prevents concurrent runs of the same script (the loser is reported `skipped`); a schedule that silently stops firing gets a red badge and a one-time `missed` webhook
 - **MCP server + REST API** — a built-in [MCP](https://modelcontextprotocol.io) server and a co-hosted REST surface so an AI agent (e.g. an n8n AI Agent node) can list/run scripts and manage schedules — see [MCP server](#mcp-server-ai-agents--n8n) below
-- **Self-update** — `U` in the TUI updates the app in place (binary self-update for a released build, `git pull` for a source checkout); a startup notice tells you when a newer release exists either way
+- **Self-update** — `U` in the TUI updates the app in place (binary self-update for a released build, `git pull` for a source checkout); a released build also gets a startup notice when a newer release exists
 
 ## Keybindings (Run view)
 
@@ -25,8 +25,8 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 | `↑`/`↓`/`j`/`k`, `g`/`G` | navigate / jump to top / bottom |
 | `Enter` / `r` | run the selected script (deps checked first; queued if something is already running) |
 | `a` | run with extra arguments (quote-aware) |
-| `e` | set/edit/remove the cron schedule |
-| `v` | edit the script's `.env` file |
+| `e` | edit the script's `.env` file |
+| `v` | view the script's last run log |
 | `s` | sync scripts repos |
 | `i` | scan + install missing dependencies |
 | `l` | lint the script |
@@ -77,7 +77,7 @@ sudo dpkg -i /tmp/packages-microsoft-prod.deb && sudo apt-get update && sudo apt
 
 ## Updating
 
-- **`U` in the TUI** updates the app in place: a released binary downloads and installs the latest GitHub release over itself; a source checkout runs `git pull --ff-only` instead. Either way, restart `scriptorium` to run the new code. A startup notice (`update available: vX.Y.Z — press U`) tells you when one is available.
+- **`U` in the TUI** updates the app in place: a released binary downloads and installs the latest GitHub release over itself; a source checkout runs `git pull --ff-only` instead. Either way, restart `scriptorium` to run the new code. A released build also shows a startup notice (`update available: vX.Y.Z — press U`) when one is available — a source checkout has no release version to compare against, so it skips the check entirely.
 - **Re-running `install.sh`** is always safe (it never touches `config.json`/`.env`) and is the only path that also picks up new prerequisites — worth doing occasionally even if `U` looks up to date.
 - `scriptorium --version` prints the running build.
 
@@ -127,7 +127,7 @@ Script names must be unique across repos; a folder name appearing in more than o
 
 ## Per-script .env files
 
-Each script folder can have a `.env` file (`KEY=VALUE`, `#` comments) — press `v` in the Run view to edit it in place. Every value (8+ characters) is treated as a secret and redacted (`***`) in TUI output, log files, and webhook payloads. Keep `.env` gitignored in the scripts repo; a `.env.example` there pre-fills the editor when no `.env` exists yet.
+Each script folder can have a `.env` file (`KEY=VALUE`, `#` comments) — press `e` in the Run view to edit it in place. Every value (8+ characters) is treated as a secret and redacted (`***`) in TUI output, log files, and webhook payloads. Keep `.env` gitignored in the scripts repo; a `.env.example` there pre-fills the editor when no `.env` exists yet.
 
 ## n8n webhook payload
 
@@ -144,7 +144,7 @@ POSTed as JSON after every run (`{"event":"script_run", ...}`; `{"event":"test"}
 }
 ```
 
-`status` is one of `success`, `failure`, `killed`, `timeout`, `skipped`. Delivery is retried twice; a payload that still fails is queued on disk and re-sent after the next successful delivery.
+`status` is one of `success`, `failure`, `killed`, `timeout`, `skipped`. Delivery is retried once (2 attempts total); a payload that still fails is queued on disk and re-sent after the next successful delivery.
 
 ## MCP server (AI agents / n8n)
 
