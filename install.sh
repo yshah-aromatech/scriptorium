@@ -64,7 +64,9 @@ as_root() {
 
 install_powershell() {
   # the PS-era §13.1 recipe: Microsoft's repo package for this release, then
-  # the powershell package from it
+  # the powershell package from it. On non-LTS Ubuntu the per-version MS repo
+  # can set up fine yet not carry a powershell package at all (v1.1.1: e.g.
+  # 25.04) — fall back to snap before giving up.
   VERSION_ID=""
   [ -r /etc/os-release ] && . /etc/os-release
   PMP_DIR="$(mktemp -d)"
@@ -75,8 +77,15 @@ install_powershell() {
     as_root apt-get update -y >/dev/null &&
     as_root apt-get install -y powershell; then
     say "PowerShell 7 installed"
+  elif command -v snap >/dev/null 2>&1; then
+    say "PowerShell 7 not available via the Microsoft apt repo — trying snap instead..."
+    if as_root snap install powershell --classic; then
+      say "PowerShell 7 installed via snap"
+    else
+      say "WARN: PowerShell 7 install failed — install it later with: sudo snap install powershell --classic (or via the Microsoft repo: https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux)"
+    fi
   else
-    say "WARN: PowerShell 7 install failed — install it later with: sudo apt-get install -y powershell (after adding the Microsoft repo: https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux)"
+    say "WARN: PowerShell 7 install failed — install it later with: sudo apt-get install -y snapd && sudo snap install powershell --classic (or via the Microsoft repo: https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux)"
   fi
   rm -rf "$PMP_DIR"
 }
@@ -103,7 +112,7 @@ if [ "$MISSING_PWSH" = 1 ] || [ "$MISSING_PY" = 1 ]; then
   if command -v apt-get >/dev/null 2>&1; then
     apt_probe
     if [ "$APT_READY" = "none" ]; then
-      [ "$MISSING_PWSH" = 1 ] && say "WARN: PowerShell 7 (pwsh) is missing and sudo is unavailable — install it with: sudo apt-get install -y powershell (after adding the Microsoft repo: https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux)"
+      [ "$MISSING_PWSH" = 1 ] && say "WARN: PowerShell 7 (pwsh) is missing and sudo is unavailable — install it with: sudo apt-get install -y snapd && sudo snap install powershell --classic (or via the Microsoft repo: https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux)"
       [ "$MISSING_PY" = 1 ] && say "WARN: python3/venv/pip are missing and sudo is unavailable — install them with: sudo apt-get install -y python3 python3-venv python3-pip"
     else
       [ "$MISSING_PWSH" = 1 ] && install_powershell
@@ -199,7 +208,15 @@ else
   say "extracting..."
   tar -xzf "$DLDIR/$ASSET" -C "$DLDIR"
 
-  cp "$DLDIR/scriptorium" "$LAUNCHER"
+  # atomic replace: cp-in-place onto a running binary fails with "Text file
+  # busy" (e.g. the scriptorium-mcp systemd service still executing it) —
+  # stage in the same directory (same filesystem) and rename over the
+  # target instead. A rename just swaps the directory entry; a process
+  # already executing the old inode keeps running against it untouched.
+  cp "$DLDIR/scriptorium" "$LAUNCHER.new"
+  trap 'rm -f "$LAUNCHER.new"; rm -rf "$DLDIR"' EXIT
+  chmod +x "$LAUNCHER.new"
+  mv -f "$LAUNCHER.new" "$LAUNCHER"
   EXAMPLES_DIR="$DLDIR"
 fi
 chmod +x "$LAUNCHER"
@@ -212,6 +229,16 @@ elif [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
   say "scriptorium $NEW_VERSION is already current — binary refreshed at $LAUNCHER"
 else
   say "updated scriptorium $OLD_VERSION → ${NEW_VERSION:-(version unknown)} at $LAUNCHER"
+fi
+
+# --- restart hint: the rename above lets a running scriptorium-mcp service
+# finish out its old inode, but it won't pick up the new binary on its own --
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl is-active --quiet scriptorium-mcp 2>/dev/null; then
+    say "scriptorium-mcp is running the old binary — restart to apply: systemctl restart scriptorium-mcp"
+  elif [ "$(id -u)" != "0" ] && systemctl --user is-active --quiet scriptorium-mcp 2>/dev/null; then
+    say "scriptorium-mcp is running the old binary — restart to apply: systemctl --user restart scriptorium-mcp"
+  fi
 fi
 
 # --- config bootstrap (never overwrites an existing file) -------------------

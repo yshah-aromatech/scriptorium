@@ -1,10 +1,12 @@
 // Package installtest hermetically exercises install.sh end to end: a stub
 // curl serves a real tarball this file builds (with a real sha256
 // checksums.txt alongside it), stub apt-get/dpkg/sudo fail loudly so any
-// accidental system mutation surfaces as a test failure, and HOME/PATH are
-// fully sandboxed per test. Checkout-mode tests use real git against fully
-// local, disposable bare repos (never the real scriptorium remote). No test
-// in this package touches the network, the real crontab, or systemd.
+// accidental system mutation surfaces as a test failure, snap is stubbed to
+// merely record its invocation, and stub systemctl reports "inactive" by
+// default (overridden per test) — HOME/PATH are fully sandboxed per test.
+// Checkout-mode tests use real git against fully local, disposable bare
+// repos (never the real scriptorium remote). No test in this package
+// touches the network or a real apt/snap/systemctl.
 package installtest
 
 import (
@@ -17,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
@@ -190,6 +193,16 @@ fi
 exit 1
 `
 
+// systemctlInactiveStub is the hermetic default: no scriptorium-mcp unit
+// exists in test fixtures, so both system- and user-scope `is-active`
+// checks report inactive (real systemctl's own exit code for that) and
+// install.sh's restart hint never fires unless a test overrides this stub.
+const systemctlInactiveStub = "#!/bin/sh\nexit 3\n"
+
+// systemctlActiveStub answers `is-active --quiet` as active regardless of
+// scope, for tests that assert the restart hint fires.
+const systemctlActiveStub = "#!/bin/sh\nexit 0\n"
+
 func writeStub(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
@@ -208,6 +221,7 @@ func newStubBin(t *testing.T) string {
 	writeStub(t, dir, "curl", curlStub)
 	writeStub(t, dir, "uname", unameStub)
 	writeStub(t, dir, "python3", python3Stub)
+	writeStub(t, dir, "systemctl", systemctlInactiveStub)
 	return dir
 }
 
@@ -858,6 +872,105 @@ func TestSameVersionRerunSaysSoAndStillRefreshes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// 8b. ETXTBSY regression (v1.1.1 hotfix): updating over a binary that is
+//     currently executing must succeed via rename, never a write-in-place
+//     `cp`. sleepLoopBinarySource is a real compiled program (not a script —
+//     a script's text pages belong to its interpreter, not the script file,
+//     so it wouldn't exercise the same kernel path) that answers --version
+//     immediately and otherwise loops forever, standing in for the
+//     scriptorium-mcp systemd service still running the old binary.
+// ---------------------------------------------------------------------
+
+const sleepLoopBinarySource = `package main
+
+import (
+	"fmt"
+	"os"
+	"time"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println("scriptorium vTEST (commit test, built test)")
+		return
+	}
+	for {
+		time.Sleep(time.Second)
+	}
+}
+`
+
+func TestUpdateReplacesRunningBinaryAtomically(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		systemctlStub string
+		wantHint      bool
+	}{
+		{"systemctl-active", systemctlActiveStub, true},
+		{"systemctl-inactive", systemctlInactiveStub, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			stubBin := newStubBin(t)
+			writeStub(t, stubBin, "systemctl", tc.systemctlStub) // override the hermetic default
+			script := copyInstallSh(t, t.TempDir())
+
+			launcher := filepath.Join(home, ".local", "bin", "scriptorium")
+			if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			srcDir := t.TempDir()
+			src := filepath.Join(srcDir, "main.go")
+			if err := os.WriteFile(src, []byte(sleepLoopBinarySource), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// no Env override: this runs directly from the test process
+			// (unlike install.sh's own sandboxed go build), so it already
+			// inherits the real GOCACHE/PATH/etc.
+			build := exec.Command("go", "build", "-o", launcher, src)
+			if out, err := build.CombinedOutput(); err != nil {
+				t.Fatalf("building the fixture binary: %v\n%s", err, out)
+			}
+
+			// exec the "already installed" binary in the background — this
+			// is the process an ETXTBSY-prone install would step on.
+			running := exec.Command(launcher)
+			if err := running.Start(); err != nil {
+				t.Fatalf("starting the background fixture process: %v", err)
+			}
+			t.Cleanup(func() {
+				_ = running.Process.Kill()
+				_, _ = running.Process.Wait()
+			})
+
+			release := t.TempDir()
+			buildRelease(t, release, "amd64", "fake-binary-v2")
+			res := runInstall(t, script, home, stubBin, map[string]string{
+				"FAKE_RELEASE_DIR": release,
+				"FAKE_UNAME_M":     "x86_64",
+			})
+			if res.exitCode != 0 {
+				t.Fatalf("update over a running binary: exit = %d\n%s", res.exitCode, res.combined())
+			}
+			if strings.Contains(res.combined(), "Text file busy") {
+				t.Errorf("ETXTBSY regressed — install.sh is writing in place again:\n%s", res.combined())
+			}
+			assertFileContent(t, launcher, "fake-binary-v2")
+
+			if err := running.Process.Signal(syscall.Signal(0)); err != nil {
+				t.Errorf("the background process died across the replace (its old inode should have survived): %v", err)
+			}
+
+			want := "scriptorium-mcp is running the old binary — restart to apply: systemctl restart scriptorium-mcp"
+			if got := strings.Contains(res.combined(), want); got != tc.wantHint {
+				t.Errorf("restart hint present = %v, want %v\noutput:\n%s", got, tc.wantHint, res.combined())
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------
 // 9. prerequisite matrix (v1.1.0): FULL install on apt systems, through the
 //    sudo ladder — root direct, sudo -n, no-sudo → WARN per package.
 // ---------------------------------------------------------------------
@@ -869,7 +982,7 @@ func minimalRealBin(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	for _, name := range []string{
-		"bash", "sh", "mktemp", "grep", "tar", "cp", "chmod", "mkdir", "head",
+		"bash", "sh", "mktemp", "grep", "tar", "cp", "mv", "chmod", "mkdir", "head",
 		"awk", "rm", "dirname", "basename", "cat", "sha256sum", "shasum", "gzip",
 	} {
 		real, err := exec.LookPath(name)
@@ -1040,7 +1153,7 @@ func TestPrereqNoSudoWarnsPerPackageAndNeverFails(t *testing.T) {
 	out := res.combined()
 	for _, want := range []string{
 		"WARN: PowerShell 7 (pwsh) is missing and sudo is unavailable",
-		"sudo apt-get install -y powershell",
+		"sudo apt-get install -y snapd && sudo snap install powershell --classic",
 		"WARN: python3/venv/pip are missing and sudo is unavailable",
 		"sudo apt-get install -y python3 python3-venv python3-pip",
 	} {
@@ -1080,5 +1193,87 @@ func TestPrereqVenvRealCheck(t *testing.T) {
 	})
 	if strings.Contains(rec, "python3") {
 		t.Errorf("a working venv still triggered the python install:\n%s", rec)
+	}
+}
+
+// ---------------------------------------------------------------------
+// 10. pwsh snap fallback (v1.1.1 hotfix): the per-version Microsoft repo can
+//     set up fine yet not carry a powershell package at all (e.g. non-LTS
+//     Ubuntu) — apt-get reports "Unable to locate package" (exit 100), and
+//     install.sh must fall back to snap before ever warning.
+// ---------------------------------------------------------------------
+
+// aptGetPwshMissingStub records every call and behaves like a real apt-get
+// that has no powershell candidate: `install -y powershell` exits 100
+// ("E: Unable to locate package"), every other call (update, python trio)
+// succeeds — so the test isolates the pwsh/snap path.
+const aptGetPwshMissingStub = `#!/bin/sh
+echo "apt-get $*" >> "$STUB_RECORD"
+case "$*" in
+  "install -y powershell")
+    echo "E: Unable to locate package powershell" >&2
+    exit 100
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+
+func TestPrereqPwshFallsBackToSnapWhenAptLacksPackage(t *testing.T) {
+	res, rec := prereqScenario(t, map[string]string{
+		"id":      idRootStub,
+		"apt-get": aptGetPwshMissingStub,
+		"dpkg":    recorderStub,
+		"snap":    recorderStub,
+		// no pwsh stub: the controlled PATH has none, so MISSING_PWSH=1
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("exit = %d\n%s\nrecord:\n%s", res.exitCode, res.combined(), rec)
+	}
+	for _, want := range []string{
+		"apt-get install -y powershell",
+		"snap install powershell --classic",
+	} {
+		if !strings.Contains(rec, want) {
+			t.Errorf("record missing %q:\n%s", want, rec)
+		}
+	}
+	if strings.Contains(res.combined(), "WARN") {
+		t.Errorf("the snap fallback succeeded but a WARN was still printed:\n%s", res.combined())
+	}
+	if !strings.Contains(res.combined(), "installed scriptorium v1.1.0") {
+		t.Errorf("the install itself did not complete:\n%s", res.combined())
+	}
+}
+
+func TestPrereqPwshWarnsBothRoutesWhenNoSnapEither(t *testing.T) {
+	res, rec := prereqScenario(t, map[string]string{
+		"id":      idRootStub,
+		"apt-get": aptGetPwshMissingStub,
+		"dpkg":    recorderStub,
+		// no snap stub and none in the minimal PATH: command -v snap fails
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("exit = %d — a missing pwsh must never fail the install\n%s\nrecord:\n%s", res.exitCode, res.combined(), rec)
+	}
+	if strings.Contains(rec, "snap") {
+		t.Errorf("snap ran despite not being on PATH:\n%s", rec)
+	}
+	out := res.combined()
+	// snap isn't even installed here, so the first runnable step must be
+	// getting snapd, not a bare `snap install` that would itself fail.
+	snapRoute := "sudo apt-get install -y snapd && sudo snap install powershell --classic"
+	msRoute := "https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux"
+	snapAt := strings.Index(out, snapRoute)
+	msAt := strings.Index(out, msRoute)
+	if snapAt < 0 || msAt < 0 {
+		t.Fatalf("WARN missing a manual route (snap=%q ms=%q):\n%s", snapRoute, msRoute, out)
+	}
+	if snapAt > msAt {
+		t.Errorf("WARN lists the Microsoft-repo route before snap, want snap first:\n%s", out)
+	}
+	if !strings.Contains(out, "installed scriptorium v1.1.0") {
+		t.Errorf("the install did not complete despite the warning:\n%s", out)
 	}
 }
