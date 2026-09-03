@@ -254,6 +254,10 @@ func runInstall(t *testing.T, scriptPath, home, stubBin string, extra map[string
 		// treats "" identically to unset), so a test that wants the real
 		// default just omits it from extra.
 		"SCRIPTORIUM_APP_DIR=",
+		// pinned: bash re-derives SHELL from the login shell when unset, so
+		// on a zsh workstation the rc selection would otherwise follow the
+		// HOST, not the scenario (a test overrides via extra).
+		"SHELL=/bin/bash",
 	}
 	env = append(env, hostGoEnv(t)...)
 	for k, v := range extra {
@@ -496,27 +500,109 @@ func TestOldLauncherScriptReplaced(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// 6. PATH warning
+// 6. PATH persistence (v1.1.0): marker-idempotent rc append, $SHELL-detected
 // ---------------------------------------------------------------------
 
-func TestPathWarning(t *testing.T) {
+const pathMarker = "# added by scriptorium install.sh"
+const pathExport = `export PATH="$HOME/.local/bin:$PATH"`
+
+// Three runs, one line: the rc is created on the first run, and the marker
+// keeps the second and third from appending again.
+func TestPathAppendIsIdempotentAcrossThreeRuns(t *testing.T) {
 	home := t.TempDir()
 	stubBin := newStubBin(t)
 	pipeDir := t.TempDir()
 	script := copyInstallSh(t, pipeDir)
+
+	for i := range 3 {
+		release := t.TempDir()
+		buildRelease(t, release, "amd64", "fake-binary")
+		res := runInstall(t, script, home, stubBin, map[string]string{
+			"FAKE_RELEASE_DIR": release,
+			"FAKE_UNAME_M":     "x86_64",
+		})
+		if res.exitCode != 0 {
+			t.Fatalf("run %d: exit = %d, output:\n%s", i+1, res.exitCode, res.combined())
+		}
+		want := "PATH: added ~/.local/bin to "
+		if i > 0 {
+			want = "PATH: ~/.local/bin already configured in "
+		}
+		if !strings.Contains(res.combined(), want) {
+			t.Errorf("run %d: output missing %q:\n%s", i+1, want, res.combined())
+		}
+	}
+
+	rc, err := os.ReadFile(filepath.Join(home, ".bashrc"))
+	if err != nil {
+		t.Fatalf("no ~/.bashrc was created: %v", err)
+	}
+	if got := strings.Count(string(rc), pathMarker); got != 1 {
+		t.Errorf("marker appears %d times after three runs, want exactly 1:\n%s", got, rc)
+	}
+	if got := strings.Count(string(rc), pathExport); got != 1 {
+		t.Errorf("export line appears %d times, want exactly 1:\n%s", got, rc)
+	}
+}
+
+// $SHELL picks the rc: zsh appends to ~/.zshrc, everything else to ~/.bashrc.
+func TestPathAppendFollowsTheShell(t *testing.T) {
+	for shell, rcName := range map[string]string{
+		"/usr/bin/zsh": ".zshrc",
+		"/bin/bash":    ".bashrc",
+		"":             ".bashrc",
+	} {
+		home := t.TempDir()
+		stubBin := newStubBin(t)
+		script := copyInstallSh(t, t.TempDir())
+		release := t.TempDir()
+		buildRelease(t, release, "amd64", "fake-binary")
+
+		res := runInstall(t, script, home, stubBin, map[string]string{
+			"FAKE_RELEASE_DIR": release,
+			"FAKE_UNAME_M":     "x86_64",
+			"SHELL":            shell,
+		})
+		if res.exitCode != 0 {
+			t.Fatalf("SHELL=%q: exit = %d, output:\n%s", shell, res.exitCode, res.combined())
+		}
+		rc, err := os.ReadFile(filepath.Join(home, rcName))
+		if err != nil {
+			t.Fatalf("SHELL=%q: expected %s: %v", shell, rcName, err)
+		}
+		if !strings.Contains(string(rc), pathMarker) || !strings.Contains(string(rc), pathExport) {
+			t.Errorf("SHELL=%q: %s does not carry the marker + export:\n%s", shell, rcName, rc)
+		}
+	}
+}
+
+// An unwritable rc degrades to the old plain warning — never a failed install.
+func TestPathUnwritableRcFallsBackToWarning(t *testing.T) {
+	home := t.TempDir()
+	stubBin := newStubBin(t)
+	script := copyInstallSh(t, t.TempDir())
 	release := t.TempDir()
 	buildRelease(t, release, "amd64", "fake-binary")
+
+	rc := filepath.Join(home, ".bashrc")
+	if err := os.WriteFile(rc, []byte("# locked\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
 
 	res := runInstall(t, script, home, stubBin, map[string]string{
 		"FAKE_RELEASE_DIR": release,
 		"FAKE_UNAME_M":     "x86_64",
 	})
 	if res.exitCode != 0 {
-		t.Fatalf("exit = %d, output:\n%s", res.exitCode, res.combined())
+		t.Fatalf("exit = %d — an unwritable rc must not fail the install:\n%s", res.exitCode, res.combined())
 	}
 	want := `NOTE: ~/.local/bin is not on your PATH — add: export PATH="$HOME/.local/bin:$PATH"`
 	if !strings.Contains(res.combined(), want) {
-		t.Errorf("output missing the PATH warning; want it to contain:\n%s\ngot:\n%s", want, res.combined())
+		t.Errorf("output missing the fallback PATH warning:\n%s", res.combined())
+	}
+	got, _ := os.ReadFile(rc)
+	if strings.Contains(string(got), pathMarker) {
+		t.Errorf("the unwritable rc was modified:\n%s", got)
 	}
 }
 
@@ -691,4 +777,308 @@ func TestCheckoutModeFastForwardFailureLeavesTreeUntouched(t *testing.T) {
 		t.Error("the remote's file appeared — a merge/reset happened when it must not have")
 	}
 	assertExecutable(t, filepath.Join(home, ".local", "bin", "scriptorium"))
+}
+
+// ---------------------------------------------------------------------
+// 8. self-update path (v1.1.0): re-running the one-liner replaces the binary
+//    and reports vOLD → vNEW
+// ---------------------------------------------------------------------
+
+// versionBinary is a stand-in scriptorium binary: an executable WITHOUT a
+// shebang (the '#!' head marks the old pwsh wrapper to install.sh), which the
+// shell's ENOEXEC fallback runs as sh — enough to answer `--version` in the
+// real CLI's format. The tag makes replacement observable even when the
+// version does not change.
+func versionBinary(version, tag string) string {
+	return "echo \"scriptorium " + version + " (commit " + tag + ", built test)\"\n"
+}
+
+func TestUpdateReplacesBinaryAndPrintsOldToNew(t *testing.T) {
+	home := t.TempDir()
+	stubBin := newStubBin(t)
+	script := copyInstallSh(t, t.TempDir())
+
+	// first install: v1.0.0
+	release := t.TempDir()
+	buildRelease(t, release, "amd64", versionBinary("v1.0.0", "old"))
+	res := runInstall(t, script, home, stubBin, map[string]string{
+		"FAKE_RELEASE_DIR": release, "FAKE_UNAME_M": "x86_64",
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("first install: exit = %d\n%s", res.exitCode, res.combined())
+	}
+	if !strings.Contains(res.combined(), "installed scriptorium v1.0.0") {
+		t.Errorf("fresh install did not report its version:\n%s", res.combined())
+	}
+
+	// the release moves on: v1.1.0
+	release2 := t.TempDir()
+	buildRelease(t, release2, "amd64", versionBinary("v1.1.0", "new"))
+	res = runInstall(t, script, home, stubBin, map[string]string{
+		"FAKE_RELEASE_DIR": release2, "FAKE_UNAME_M": "x86_64",
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("update run: exit = %d\n%s", res.exitCode, res.combined())
+	}
+	if !strings.Contains(res.combined(), "updated scriptorium v1.0.0 → v1.1.0") {
+		t.Errorf("update run did not print vOLD → vNEW:\n%s", res.combined())
+	}
+	launcher := filepath.Join(home, ".local", "bin", "scriptorium")
+	assertFileContent(t, launcher, versionBinary("v1.1.0", "new"))
+}
+
+func TestSameVersionRerunSaysSoAndStillRefreshes(t *testing.T) {
+	home := t.TempDir()
+	stubBin := newStubBin(t)
+	script := copyInstallSh(t, t.TempDir())
+	launcher := filepath.Join(home, ".local", "bin", "scriptorium")
+
+	release := t.TempDir()
+	buildRelease(t, release, "amd64", versionBinary("v1.1.0", "first"))
+	if res := runInstall(t, script, home, stubBin, map[string]string{
+		"FAKE_RELEASE_DIR": release, "FAKE_UNAME_M": "x86_64",
+	}); res.exitCode != 0 {
+		t.Fatalf("first install: exit = %d\n%s", res.exitCode, res.combined())
+	}
+
+	// same version again, distinguishable bytes: the re-run must SAY it is
+	// current and still refresh the binary on disk
+	release2 := t.TempDir()
+	buildRelease(t, release2, "amd64", versionBinary("v1.1.0", "second"))
+	res := runInstall(t, script, home, stubBin, map[string]string{
+		"FAKE_RELEASE_DIR": release2, "FAKE_UNAME_M": "x86_64",
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("re-run: exit = %d\n%s", res.exitCode, res.combined())
+	}
+	if !strings.Contains(res.combined(), "scriptorium v1.1.0 is already current — binary refreshed") {
+		t.Errorf("same-version re-run did not say so:\n%s", res.combined())
+	}
+	assertFileContent(t, launcher, versionBinary("v1.1.0", "second"))
+}
+
+// ---------------------------------------------------------------------
+// 9. prerequisite matrix (v1.1.0): FULL install on apt systems, through the
+//    sudo ladder — root direct, sudo -n, no-sudo → WARN per package.
+// ---------------------------------------------------------------------
+
+// minimalRealBin symlinks just the real tools install.sh needs, so a matrix
+// test's PATH is stubs + this dir and NOTHING else — `command -v pwsh` (or
+// sudo) then answers for the scenario, not for whatever the host has.
+func minimalRealBin(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{
+		"bash", "sh", "mktemp", "grep", "tar", "cp", "chmod", "mkdir", "head",
+		"awk", "rm", "dirname", "basename", "cat", "sha256sum", "shasum", "gzip",
+	} {
+		real, err := exec.LookPath(name)
+		if err != nil {
+			continue // e.g. sha256sum on macOS — install.sh falls back to shasum
+		}
+		if err := os.Symlink(real, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// recorderStub logs "<name> <args>" to $STUB_RECORD and succeeds.
+const recorderStub = `#!/bin/sh
+echo "$(basename "$0") $*" >> "$STUB_RECORD"
+exit 0
+`
+
+// sudoRecorderStub logs the escalated command; `sudo -n true` (the probe)
+// succeeds silently.
+const sudoRecorderStub = `#!/bin/sh
+if [ "$1" = "-n" ]; then exit 0; fi
+echo "sudo $*" >> "$STUB_RECORD"
+exit 0
+`
+
+const idRootStub = "#!/bin/sh\necho 0\n"
+const idUserStub = "#!/bin/sh\necho 1000\n"
+
+// brokenVenvPython3 answers --version but fails the venv probe — the Debian
+// "python3 without python3-venv" shape the REAL check exists for.
+const brokenVenvPython3 = `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Python 3.11.0 (fake)"; exit 0; fi
+exit 1
+`
+
+// prereqScenario runs install.sh with a controlled PATH (stubs + minimal real
+// tools) and returns the run plus the recorded privileged commands.
+func prereqScenario(t *testing.T, stubs map[string]string) (runResult, string) {
+	t.Helper()
+	home := t.TempDir()
+	script := copyInstallSh(t, t.TempDir())
+	release := t.TempDir()
+	buildRelease(t, release, "amd64", versionBinary("v1.1.0", "x"))
+	// the Microsoft repo package the pwsh recipe downloads, served by the curl
+	// stub exactly like the release assets
+	if err := os.WriteFile(filepath.Join(release, "packages-microsoft-prod.deb"), []byte("fake-deb"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stubBin := t.TempDir()
+	base := map[string]string{"curl": curlStub, "uname": unameStub, "python3": python3Stub}
+	for name, body := range base {
+		writeStub(t, stubBin, name, body)
+	}
+	for name, body := range stubs {
+		if body == "" {
+			os.Remove(filepath.Join(stubBin, name))
+			continue
+		}
+		writeStub(t, stubBin, name, body)
+	}
+
+	record := filepath.Join(t.TempDir(), "record")
+	cmd := exec.Command("bash", script)
+	cmd.Env = []string{
+		"HOME=" + home,
+		"PATH=" + stubBin + string(os.PathListSeparator) + minimalRealBin(t),
+		"SCRIPTORIUM_APP_DIR=",
+		"SHELL=/bin/bash",
+		"FAKE_RELEASE_DIR=" + release,
+		"FAKE_UNAME_M=x86_64",
+		"STUB_RECORD=" + record,
+	}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	code := 0
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else {
+			t.Fatalf("running install.sh: %v", err)
+		}
+	}
+	rec, _ := os.ReadFile(record)
+	return runResult{out.String(), "", code}, string(rec)
+}
+
+// Root installs everything directly: the Microsoft-repo recipe for pwsh
+// (deb → dpkg -i → apt-get update → apt-get install powershell), then the
+// python trio — no sudo anywhere.
+func TestPrereqRootInstallsEverythingDirectly(t *testing.T) {
+	res, rec := prereqScenario(t, map[string]string{
+		"id":      idRootStub,
+		"apt-get": recorderStub,
+		"dpkg":    recorderStub,
+		"python3": brokenVenvPython3,
+		// no pwsh stub: the controlled PATH has none
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("exit = %d\n%s\nrecord:\n%s", res.exitCode, res.combined(), rec)
+	}
+	for _, want := range []string{
+		"dpkg -i",
+		"packages-microsoft-prod.deb",
+		"apt-get update -y",
+		"apt-get install -y powershell",
+		"apt-get install -y python3 python3-venv python3-pip",
+	} {
+		if !strings.Contains(rec, want) {
+			t.Errorf("record missing %q:\n%s", want, rec)
+		}
+	}
+	if strings.Contains(rec, "sudo") {
+		t.Errorf("root escalated through sudo:\n%s", rec)
+	}
+	// the recipe's order: dpkg -i, then apt-get update, then install powershell
+	dpkgAt := strings.Index(rec, "dpkg -i")
+	psAt := strings.Index(rec, "apt-get install -y powershell")
+	if dpkgAt < 0 || psAt < 0 || dpkgAt > psAt {
+		t.Errorf("the Microsoft-repo recipe ran out of order:\n%s", rec)
+	}
+	if !strings.Contains(res.combined(), "installed scriptorium v1.1.0") {
+		t.Errorf("the install itself did not complete:\n%s", res.combined())
+	}
+}
+
+// A non-root user with a cached sudo credential (`sudo -n` succeeds) gets the
+// same installs, each through sudo.
+func TestPrereqSudoNonInteractive(t *testing.T) {
+	res, rec := prereqScenario(t, map[string]string{
+		"id":      idUserStub,
+		"sudo":    sudoRecorderStub,
+		"apt-get": recorderStub, // reached only if sudo were bypassed
+		"dpkg":    recorderStub,
+		"python3": brokenVenvPython3,
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("exit = %d\n%s\nrecord:\n%s", res.exitCode, res.combined(), rec)
+	}
+	for _, want := range []string{
+		"sudo dpkg -i",
+		"sudo apt-get update -y",
+		"sudo apt-get install -y powershell",
+		"sudo apt-get install -y python3 python3-venv python3-pip",
+	} {
+		if !strings.Contains(rec, want) {
+			t.Errorf("record missing %q:\n%s", want, rec)
+		}
+	}
+}
+
+// No sudo at all: every missing prerequisite becomes a WARN carrying the
+// exact manual command — and the install itself still succeeds.
+func TestPrereqNoSudoWarnsPerPackageAndNeverFails(t *testing.T) {
+	res, rec := prereqScenario(t, map[string]string{
+		"id":      idUserStub,
+		"apt-get": forbiddenStub, // present, so the apt path IS taken
+		"dpkg":    forbiddenStub,
+		"python3": brokenVenvPython3,
+		// no sudo stub and none in the minimal PATH: command -v sudo fails
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("exit = %d — a missing prerequisite must never fail the install\n%s", res.exitCode, res.combined())
+	}
+	out := res.combined()
+	for _, want := range []string{
+		"WARN: PowerShell 7 (pwsh) is missing and sudo is unavailable",
+		"sudo apt-get install -y powershell",
+		"WARN: python3/venv/pip are missing and sudo is unavailable",
+		"sudo apt-get install -y python3 python3-venv python3-pip",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if rec != "" {
+		t.Errorf("privileged commands ran without sudo:\n%s", rec)
+	}
+	if !strings.Contains(out, "installed scriptorium v1.1.0") {
+		t.Errorf("the install did not complete despite the warnings:\n%s", out)
+	}
+}
+
+// The venv REAL-check: python3 on PATH but `python3 -m venv --help` failing
+// (Debian's stub) still triggers the python install; a working venv does not.
+func TestPrereqVenvRealCheck(t *testing.T) {
+	// broken venv → install
+	_, rec := prereqScenario(t, map[string]string{
+		"id":      idRootStub,
+		"apt-get": recorderStub,
+		"dpkg":    recorderStub,
+		"pwsh":    "#!/bin/sh\nexit 0\n",
+		"python3": brokenVenvPython3,
+	})
+	if !strings.Contains(rec, "apt-get install -y python3 python3-venv python3-pip") {
+		t.Errorf("a broken venv did not trigger the python install:\n%s", rec)
+	}
+
+	// working venv → no python install
+	_, rec = prereqScenario(t, map[string]string{
+		"id":      idRootStub,
+		"apt-get": recorderStub,
+		"dpkg":    recorderStub,
+		"pwsh":    "#!/bin/sh\nexit 0\n",
+	})
+	if strings.Contains(rec, "python3") {
+		t.Errorf("a working venv still triggered the python install:\n%s", rec)
+	}
 }
