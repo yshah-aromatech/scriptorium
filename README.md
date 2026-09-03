@@ -7,9 +7,10 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 ## Features
 
 - **Fleet / Run / History / Schedules views** — a home screen showing every script's status at a glance, a two-pane run view (script list + live output), full-width run history, and a schedules agenda — switch with `1`-`4` or the command palette (`ctrl+p` / `:`)
+- **Rounded panels + 60 fps animations** (v1.1.0) — every pane, card and modal sits in a rounded frame with its title inset in the top border and its own keys inset in the bottom one; braille sparklines carry twice the history per column; one coalesced 16 ms clock drives the spinner, the marquee, a sub-cell-smooth ETA bar, per-frame status fades and a breathing live-activity title — and disarms itself entirely when nothing moves, so an idle session costs zero timers. Narrow terminals (under 100 columns) keep the denser rule-based layout; screenshots of the new look are coming with the release notes
 - **Two runtimes, one pipeline** — folders with a `.ps1` entry run under `pwsh` with a per-script module dir prepended to `PSModulePath`; folders with a `.py` entry run under a per-script venv (created automatically, cwd = script folder). Locks, logs, history, secret redaction, timeouts and the webhook are identical for both
 - **Multiple script repos** — the `repos` config key syncs any number of repos side by side; the legacy single `scriptsRepo` key keeps working unchanged
-- **Automatic dependency detection** — no manifest needed. PowerShell scripts are scanned with a real AST (via `pwsh`, when present — see [PowerShell is optional](#powershell-is-optional) below) or a degraded regex fallback otherwise; missing modules install from the PowerShell Gallery. Python imports are scanned inside the script's venv; missing packages are pip-installed, with a `requirements.txt` taking precedence when present
+- **Automatic dependency detection** — no manifest needed. PowerShell scripts are scanned with a real AST (via `pwsh`, which the installer sets up — see [PowerShell 7](#powershell-7) below) or a degraded regex fallback otherwise; missing modules install from the PowerShell Gallery. Python imports are scanned inside the script's venv; missing packages are pip-installed, with a `requirements.txt` taking precedence when present
 - **Live output** — streamed into the TUI (word-wrapped, wide-character aware, mouse-scrollable), saved to a timestamped log file per run; `y` copies the buffer to your clipboard (OSC 52, tmux-aware)
 - **Resource monitoring** — CPU % and RSS memory sampled across the whole process tree every second via `/proc`; average and peak reported, with a per-run sparkline in history
 - **n8n webhook reporting** — success/failure, exit code, duration, avg/max CPU & memory, host, and a log tail POSTed after every run. Delivery is retried, and undelivered reports are queued on disk and re-sent after the next successful delivery
@@ -52,7 +53,7 @@ Mouse: wheel scrolls the hovered pane; click focuses/selects; drag over the outp
 curl -fsSL https://raw.githubusercontent.com/yshah-aromatech/scriptorium/main/install.sh | bash
 ```
 
-This downloads the latest release for your architecture (linux amd64/arm64), verifies its checksum, and installs it to `~/.local/bin/scriptorium`, creating `config.json` + `.env` from the examples in `~/scriptorium` (override with `SCRIPTORIUM_APP_DIR`). Prefer to build from source instead:
+This downloads the latest release for your architecture (linux amd64/arm64), verifies its checksum, and installs it to `~/.local/bin/scriptorium`, creating `config.json` + `.env` from the examples in `~/scriptorium` (override with `SCRIPTORIUM_APP_DIR`). On apt systems it also installs the runtime prerequisites — PowerShell 7 via the Microsoft repo, and python3 + pip + venv — escalating via sudo where it has to and downgrading each to a warning with the exact manual command where it can't. It adds `~/.local/bin` to your shell rc (marker-guarded, never duplicated) when it isn't on your PATH. Re-running the same one-liner later is the updater: it verifies and replaces the binary and prints `updated scriptorium vOLD → vNEW`. Prefer to build from source instead:
 
 ```bash
 git clone https://github.com/yshah-aromatech/scriptorium.git && cd scriptorium && ./install.sh
@@ -66,12 +67,12 @@ Then:
 2. Configure `config.json` (`scriptsRepo`, `n8nWebhookUrl`) and `.env` (`GITHUB_TOKEN` if the scripts repo is private).
 3. Run: `scriptorium`
 
-### PowerShell is optional
+### PowerShell 7
 
-The app itself has no PowerShell dependency — only *running PowerShell scripts* needs `pwsh` on the machine, same as needing Python for Python scripts. Without `pwsh`, PowerShell scripts still run, just with a degraded (regex-based) dependency scan instead of the real AST scan; install.sh warns about this rather than installing it for you:
+The app binary itself has no PowerShell dependency — only *running PowerShell scripts* needs `pwsh` on the machine, same as needing Python for Python scripts. Without `pwsh`, PowerShell scripts still run, just with a degraded (regex-based) dependency scan instead of the real AST scan. Since v1.1.0, install.sh installs `pwsh` for you on apt systems (via the Microsoft repo, matched to your `/etc/os-release` release); with no usable sudo it prints the manual command instead:
 
 ```bash
-# optional, recommended — adjust the ubuntu/24.04 path for your release
+# what install.sh runs for you — adjust the ubuntu/24.04 path for your release
 curl -fsSL https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb
 sudo dpkg -i /tmp/packages-microsoft-prod.deb && sudo apt-get update && sudo apt-get install -y powershell
 ```
@@ -79,7 +80,7 @@ sudo dpkg -i /tmp/packages-microsoft-prod.deb && sudo apt-get update && sudo apt
 ## Updating
 
 - **`U` in the TUI** updates the app in place: a released binary downloads and installs the latest GitHub release over itself; a source checkout runs `git pull --ff-only` instead. Either way, restart `scriptorium` to run the new code. A released build also shows a startup notice (`update available: vX.Y.Z — press U`) when one is available — a source checkout has no release version to compare against, so it skips the check entirely.
-- **Re-running `install.sh`** is always safe (it never touches `config.json`/`.env`) and is the only path that also picks up new prerequisites — worth doing occasionally even if `U` looks up to date.
+- **Re-running `install.sh`** is always safe (it never touches `config.json`/`.env`), prints `updated scriptorium vOLD → vNEW` (or "already current") after verifying the download, and is the only path that also installs new prerequisites — worth doing occasionally even if `U` looks up to date.
 - `scriptorium --version` prints the running build.
 
 ## Scripts repo layout

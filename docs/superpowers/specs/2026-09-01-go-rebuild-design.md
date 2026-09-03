@@ -118,6 +118,46 @@ selects+copies in output/log panes.
 below 14 body rows (as today); History drops to when/status/script/duration; below
 40×10 → "terminal too small". Golden frames pin all of this at three sizes.
 
+> **2026-09-03 (v1.1.0) panel + animation amendment:**
+>
+> *Panels.* One primitive (`internal/tui/panel.go`) frames every pane, card and
+> modal at and above **100 columns**: rounded corners `╭╮╰╯`, the title inset in
+> the top border (`╭─ Fleet ─────╮`), and the pane's own keys inset in the
+> bottom border (`╰── r run · x kill ──╯`) — rendered from the SAME
+> `key.Binding` list the footer and help read (`primaryHints` is the single
+> source; `tailHints` is its view-owned subset), so the border can never
+> advertise a key the rest of the app does not know. Focused = Primary border
+> with the bold title voice; unfocused = quiet Border; ASCII profiles get
+> `+-|`. Panels pad content one extra cell at ≥120 columns (the breathing
+> pass), and Fleet gains a blank row under its summary strip there.
+>
+> *Floor rules, per view (all below 100 columns):* every view keeps the
+> v1.0.1 rule grammar — a top rule with an inset title, no side or bottom
+> borders — because a full frame costs two columns per pane side and one row
+> per pane bottom, exactly the budget the 80×24 floor protects. Fleet: rule
+> headers on the table and each stacked card; column collapse unchanged. Run:
+> rule headers on list/output/details; the pane separator stays a single `│`
+> column. History: rule headers on table and preview. Schedules: one rule
+> header. Overlays are the exception: modals are rounded boxes at EVERY size —
+> they cover the view, so their frame costs no data. The 80×24 frames are
+> byte-identical to v1.0.1 apart from the intended glyph changes (braille
+> sparklines, the 8-frame spinner).
+>
+> *Animation engine* (`internal/tui/anim.go`): ONE self-rescheduling 16 ms
+> clock, armed only while something on screen actually moves and disarmed by
+> its own beat otherwise — idle is zero ticks. Every stepper is a pure
+> function of the injected clock: the braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧`) at exact
+> 80 ms boundaries; the marquee's 165 ms rune cadence evaluated
+> frame-accurately (its standalone tick is gone); the status fade
+> interpolating per-frame toward Bg in truecolor and stepping through five
+> stops below it (its 100 ms tick is gone); the ETA bar filling in
+> eighth-block sub-cell steps (`▏▎▍▌▋▊▉█`) and easing toward its target over
+> 300 ms; and the live-activity title breathing Pulse↔Muted on a ~2 s period
+> at low amplitude while anything runs. An animated 120×40 frame builds in
+> ~1.1 ms — under the 2 ms budget a 60 fps clock allows — and a 16 ms step
+> dirties only the rows that animate, so Bubble Tea's differ repaints cells,
+> not screens.
+
 ## 5. Parity & migration strategy
 
 > **2026-09-02:** migration machinery removed — fresh-install cutover chosen by the
@@ -141,6 +181,8 @@ below 14 body rows (as today); History drops to when/status/script/duration; bel
   dataDir migration, scripts layout migration, systemd unit swap — all idempotent.
 - Cutover (P12): merge to main, tag PS as `powershell-final`, install.sh switches to
   release-asset download (pwsh becomes optional-but-recommended, for the AST scanner).
+  *(Reversed 2026-09-03, v1.1.0, owner directive: install.sh installs pwsh again on
+  apt systems via the Microsoft repo — parity-inventory divergence 31.)*
 
 ## 6. Build plan — phases, gates, and agent assignments
 
