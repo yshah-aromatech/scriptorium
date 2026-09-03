@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/yshah-aromatech/scriptorium/internal/app"
+	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
 	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/missed"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
+	"github.com/yshah-aromatech/scriptorium/internal/update"
 )
 
 // Ops is the shared tool-implementation layer both the JSON-RPC dispatcher
@@ -560,14 +562,42 @@ func (o *Ops) InstallDeps(args map[string]any) (any, bool, error) {
 // 11. update_app
 // ---------------------------------------------------------------------
 
+// UpdateApp mode-gates on buildinfo.Version, same as the TUI's U key: a dev
+// build (every build that isn't a goreleaser release) keeps the original
+// git pull --ff-only against the app's own checkout; a stamped release
+// binary instead downloads and installs the latest GitHub release over
+// itself (internal/update) — there is no git checkout to pull in that case.
 func (o *Ops) UpdateApp() (any, bool, error) {
-	out, err := exec.Command("git", deps.GitPullFFOnlyArgs(o.App.Paths.AppDir)...).CombinedOutput()
-	ok := err == nil
+	if buildinfo.Version == "dev" {
+		out, err := exec.Command("git", deps.GitPullFFOnlyArgs(o.App.Paths.AppDir)...).CombinedOutput()
+		ok := err == nil
+		return map[string]any{
+			"ok":     ok,
+			"output": o.App.Sec.Redact(string(out)),
+			"note":   "restart the MCP service to apply: systemctl restart scriptorium-mcp",
+		}, !ok, nil
+	}
+
+	installed, err := update.Apply(buildinfo.Version)
+	if err != nil {
+		return map[string]any{
+			"ok":     false,
+			"output": o.App.Sec.Redact(err.Error()),
+			"note":   "restart the MCP service to apply: systemctl restart scriptorium-mcp",
+		}, true, nil
+	}
+	if installed == buildinfo.Version {
+		return map[string]any{
+			"ok":     true,
+			"output": "already up to date (" + buildinfo.Version + ")",
+			"note":   "already up to date (" + buildinfo.Version + ") — no restart needed",
+		}, false, nil
+	}
 	return map[string]any{
-		"ok":     ok,
-		"output": o.App.Sec.Redact(string(out)),
-		"note":   "restart the MCP service to apply: systemctl restart scriptorium-mcp",
-	}, !ok, nil
+		"ok":     true,
+		"output": "updated to " + installed,
+		"note":   "updated to " + installed + " — restart the MCP service to apply: systemctl restart scriptorium-mcp",
+	}, false, nil
 }
 
 // ---------------------------------------------------------------------

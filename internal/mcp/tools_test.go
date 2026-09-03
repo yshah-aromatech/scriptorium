@@ -1,7 +1,9 @@
 package mcp_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,9 +11,11 @@ import (
 	"testing"
 
 	"github.com/yshah-aromatech/scriptorium/internal/app"
+	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
 	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/mcp"
 	"github.com/yshah-aromatech/scriptorium/internal/pwshtest"
+	"github.com/yshah-aromatech/scriptorium/internal/update"
 )
 
 // ---------------------------------------------------------------------
@@ -672,6 +676,85 @@ func TestUpdateAppNotAGitRepoReportsFailureRedacted(t *testing.T) {
 	}
 	if !strings.Contains(out["note"].(string), "systemctl restart scriptorium-mcp") {
 		t.Errorf("note = %v", out["note"])
+	}
+}
+
+// stubUpdateSource drives update_app's stamped-mode path with no network.
+type stubUpdateSource struct {
+	replaced   string
+	replaceErr error
+}
+
+func (s stubUpdateSource) Latest(context.Context) (string, bool, error) { return "", false, nil }
+func (s stubUpdateSource) Replace(_ context.Context, _ string) (string, error) {
+	return s.replaced, s.replaceErr
+}
+
+// withStampedVersion sets buildinfo.Version for the duration of one test —
+// update_app's mode gate reads it directly, same as the TUI's U key.
+func withStampedVersion(t *testing.T, v string) {
+	t.Helper()
+	old := buildinfo.Version
+	buildinfo.Version = v
+	t.Cleanup(func() { buildinfo.Version = old })
+}
+
+func TestUpdateAppStampedModeAppliesSelfUpdate(t *testing.T) {
+	withStampedVersion(t, "v1.0.0")
+	t.Cleanup(update.SetSource(stubUpdateSource{replaced: "v1.1.0"}))
+
+	a := newTestApp(t)
+	ops := &mcp.Ops{App: a}
+	result, isErr, err := ops.UpdateApp()
+	if err != nil || isErr {
+		t.Fatalf("UpdateApp() = %v, %v, %v", result, isErr, err)
+	}
+	out := asMap(t, result)
+	if out["ok"] != true {
+		t.Errorf("ok = %v", out["ok"])
+	}
+	note, _ := out["note"].(string)
+	if !strings.Contains(note, "v1.1.0") || !strings.Contains(note, "systemctl restart scriptorium-mcp") {
+		t.Errorf("note = %q, want it to mention v1.1.0 and the systemctl restart", note)
+	}
+}
+
+func TestUpdateAppStampedModeAlreadyUpToDate(t *testing.T) {
+	withStampedVersion(t, "v1.0.0")
+	t.Cleanup(update.SetSource(stubUpdateSource{replaced: "v1.0.0"}))
+
+	a := newTestApp(t)
+	ops := &mcp.Ops{App: a}
+	result, isErr, err := ops.UpdateApp()
+	if err != nil || isErr {
+		t.Fatalf("UpdateApp() = %v, %v, %v", result, isErr, err)
+	}
+	out := asMap(t, result)
+	if out["ok"] != true {
+		t.Errorf("ok = %v", out["ok"])
+	}
+	note, _ := out["note"].(string)
+	if !strings.Contains(note, "already up to date") {
+		t.Errorf("note = %q, want \"already up to date\"", note)
+	}
+}
+
+func TestUpdateAppStampedModeFailurePropagates(t *testing.T) {
+	withStampedVersion(t, "v1.0.0")
+	t.Cleanup(update.SetSource(stubUpdateSource{replaceErr: errors.New("no releases found")}))
+
+	a := newTestApp(t)
+	ops := &mcp.Ops{App: a}
+	result, isErr, err := ops.UpdateApp()
+	if err != nil || !isErr {
+		t.Fatalf("UpdateApp() = %v, %v, %v, want isErr", result, isErr, err)
+	}
+	out := asMap(t, result)
+	if out["ok"] != false {
+		t.Errorf("ok = %v", out["ok"])
+	}
+	if !strings.Contains(out["output"].(string), "no releases found") {
+		t.Errorf("output = %v", out["output"])
 	}
 }
 

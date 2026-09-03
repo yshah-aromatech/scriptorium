@@ -21,6 +21,7 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
+	"github.com/yshah-aromatech/scriptorium/internal/update"
 )
 
 // The four workflow views (design §4). One spatial grammar, switched by 1-4.
@@ -228,7 +229,24 @@ func (m *Model) Init() tea.Cmd {
 		lockPollCmd(),
 		missedTickCmd(),
 		m.run.initCmd(),
+		versionCheckCmd(),
 	)
+}
+
+// versionCheckCmd is the startup version notice (design row 45: it ships
+// regardless of which self-update mechanism a build ends up using).
+// Non-blocking and off the update loop like every other Init command; a
+// network hiccup is swallowed rather than shown, and "already current"
+// posts nothing at all — returning a nil tea.Msg is bubbletea's own way of
+// saying a command had nothing to report.
+func versionCheckCmd() tea.Cmd {
+	return func() tea.Msg {
+		latest, available, err := update.Check(buildinfo.Version)
+		if err != nil || !available {
+			return nil
+		}
+		return StatusMsg{Kind: StatusInfo, Text: "update available: " + latest + " — press U"}
+	}
 }
 
 func tickCmd() tea.Cmd {

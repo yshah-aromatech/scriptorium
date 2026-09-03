@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
+	"github.com/yshah-aromatech/scriptorium/internal/update"
 	"github.com/yshah-aromatech/scriptorium/internal/webhook"
 )
 
@@ -250,6 +253,61 @@ func TestSelfUpdateFailureReportsStatus(t *testing.T) {
 
 	pump(t, m, press(m, "U"), 10*time.Second, nil)
 	if !strings.Contains(m.statusText, "app update failed") {
+		t.Errorf("status = %q", m.statusText)
+	}
+}
+
+// stubTUIUpdateSource drives U's stamped-mode path with no network.
+type stubTUIUpdateSource struct {
+	latest     string
+	found      bool
+	replaced   string
+	replaceErr error
+}
+
+func (s stubTUIUpdateSource) Latest(context.Context) (string, bool, error) {
+	return s.latest, s.found, nil
+}
+func (s stubTUIUpdateSource) Replace(_ context.Context, _ string) (string, error) {
+	return s.replaced, s.replaceErr
+}
+
+func withStampedVersion(t *testing.T, v string) {
+	t.Helper()
+	old := buildinfo.Version
+	buildinfo.Version = v
+	t.Cleanup(func() { buildinfo.Version = old })
+}
+
+func TestSelfUpdateStampedModeAppliesReleaseAndReportsVersion(t *testing.T) {
+	withStampedVersion(t, "v1.0.0")
+	t.Cleanup(update.SetSource(stubTUIUpdateSource{replaced: "v1.1.0"}))
+
+	m := runAt(t, 120, 40)
+	pump(t, m, press(m, "U"), 10*time.Second, nil)
+	if !strings.Contains(m.statusText, "updated to v1.1.0 — restart scriptorium to apply") {
+		t.Errorf("status = %q", m.statusText)
+	}
+}
+
+func TestSelfUpdateStampedModeAlreadyUpToDate(t *testing.T) {
+	withStampedVersion(t, "v1.0.0")
+	t.Cleanup(update.SetSource(stubTUIUpdateSource{replaced: "v1.0.0"}))
+
+	m := runAt(t, 120, 40)
+	pump(t, m, press(m, "U"), 10*time.Second, nil)
+	if !strings.Contains(m.statusText, "already up to date (v1.0.0)") {
+		t.Errorf("status = %q", m.statusText)
+	}
+}
+
+func TestSelfUpdateStampedModeFailureReportsStatus(t *testing.T) {
+	withStampedVersion(t, "v1.0.0")
+	t.Cleanup(update.SetSource(stubTUIUpdateSource{replaceErr: fmt.Errorf("no releases found")}))
+
+	m := runAt(t, 120, 40)
+	pump(t, m, press(m, "U"), 10*time.Second, nil)
+	if !strings.Contains(m.statusText, "self-update failed") {
 		t.Errorf("status = %q", m.statusText)
 	}
 }

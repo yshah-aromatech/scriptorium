@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -16,7 +17,20 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/missed"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
+	"github.com/yshah-aromatech/scriptorium/internal/update"
 )
+
+// noNetworkUpdateSource answers "no release found" without ever leaving the
+// process — the package-wide default so Init()'s startup version check
+// (root.go's versionCheckCmd, exercised by every teatest boot) never
+// reaches the network. A test that wants a specific answer overrides it via
+// update.SetSource + t.Cleanup, which restores exactly this default.
+type noNetworkUpdateSource struct{}
+
+func (noNetworkUpdateSource) Latest(context.Context) (string, bool, error) { return "", false, nil }
+func (noNetworkUpdateSource) Replace(_ context.Context, current string) (string, error) {
+	return current, nil
+}
 
 // Every test in this package is hermetic: a temp app dir, an injected crontab
 // runner that refuses to write, no webhook URL, and a frozen clock. Nothing
@@ -26,6 +40,7 @@ import (
 // wall-clock label renders the same in every developer's timezone.
 func TestMain(m *testing.M) {
 	time.Local = time.UTC
+	update.SetSource(noNetworkUpdateSource{})
 	os.Exit(m.Run())
 }
 

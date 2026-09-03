@@ -11,10 +11,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
 	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 	"github.com/yshah-aromatech/scriptorium/internal/secret"
+	"github.com/yshah-aromatech/scriptorium/internal/update"
 )
 
 // The Run view's action keys (inventory §1.3), each with the overlay or task it
@@ -199,18 +201,44 @@ func aptUpgrade(ctx context.Context, reg *secret.Registry, emit func(string)) bo
 	return streamCmd(ctx, reg, emit, "bash", "-c", deps.AptUpgradeScript)
 }
 
-// selfUpdate is `U`: git pull --ff-only in the app directory, streamed — the
-// same command assembly as the MCP update_app op (deps.GitPullFFOnlyArgs),
-// not a second copy of it.
+// selfUpdate is `U`. A dev build (buildinfo.Version=="dev" — every build
+// that isn't a goreleaser release) keeps the original git pull --ff-only in
+// the app directory, streamed — the same command assembly as the MCP
+// update_app op (deps.GitPullFFOnlyArgs), not a second copy of it. A
+// stamped release binary instead downloads and installs the latest GitHub
+// release over itself (internal/update), since there is no git checkout to
+// pull in that case.
 func (r *runModel) selfUpdate(m *Model) tea.Cmd {
-	appDir := m.app.Paths.AppDir
-	return r.startTask(m, "self-update (git pull --ff-only)", func(ctx context.Context, emit func(string)) bool {
-		return streamCmd(ctx, m.app.Sec, emit, "git", deps.GitPullFFOnlyArgs(appDir)...)
-	}, func(m *Model, ok bool) tea.Cmd {
-		if ok {
-			return status(StatusOK, "app updated — restart scriptorium to apply")
+	if buildinfo.Version == "dev" {
+		appDir := m.app.Paths.AppDir
+		return r.startTask(m, "self-update (git pull --ff-only)", func(ctx context.Context, emit func(string)) bool {
+			return streamCmd(ctx, m.app.Sec, emit, "git", deps.GitPullFFOnlyArgs(appDir)...)
+		}, func(m *Model, ok bool) tea.Cmd {
+			if ok {
+				return status(StatusOK, "app updated — restart scriptorium to apply")
+			}
+			return status(StatusErr, "app update failed — see the output pane")
+		})
+	}
+
+	var installed string
+	return r.startTask(m, "self-update (checking latest release)", func(ctx context.Context, emit func(string)) bool {
+		emit("checking github.com/yshah-aromatech/scriptorium for a newer release...")
+		v, err := update.Apply(buildinfo.Version)
+		if err != nil {
+			emit(err.Error())
+			return false
 		}
-		return status(StatusErr, "app update failed — see the output pane")
+		installed = v
+		return true
+	}, func(m *Model, ok bool) tea.Cmd {
+		if !ok {
+			return status(StatusErr, "self-update failed — see the output pane")
+		}
+		if installed == buildinfo.Version {
+			return status(StatusOK, "already up to date ("+buildinfo.Version+")")
+		}
+		return status(StatusOK, "updated to "+installed+" — restart scriptorium to apply")
 	})
 }
 
