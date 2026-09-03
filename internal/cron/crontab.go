@@ -153,6 +153,34 @@ func (c *Crontab) schedules() map[string]string {
 	return schedulesFromLines(lines)
 }
 
+// SchedulesFromLines is schedulesFromLines, exported for --migrate's preview
+// (internal/migrate.Preview): it derives the planned block from the SAME
+// lines snapshot the wipe-guard read already produced, rather than reading
+// the crontab a second time.
+func SchedulesFromLines(lines []string) map[string]string { return schedulesFromLines(lines) }
+
+// BlockLines returns the managed block's own lines (both markers inclusive,
+// either marker generation), or nil if lines has no block at all. Read-only,
+// no I/O — --migrate's preview uses this to show "the current managed
+// block" from an already-read snapshot.
+func BlockLines(lines []string) []string {
+	var block []string
+	inBlock := false
+	for _, line := range lines {
+		switch {
+		case isBlockStart(line):
+			inBlock = true
+			block = append(block, line)
+		case isBlockEnd(line):
+			block = append(block, line)
+			inBlock = false
+		case inBlock:
+			block = append(block, line)
+		}
+	}
+	return block
+}
+
 // schedulesFromLines is Schedules'/schedules' parser, extracted so Set/Remove
 // can derive the current map from a snapshot they already hold — reading the
 // crontab a second time to do it is exactly the single-read fix below
@@ -201,6 +229,44 @@ func (c *Crontab) save(schedules map[string]string) error {
 	return c.saveFromLines(lines, schedules)
 }
 
+// RenderBlock previews the block Save(schedules) would write — both
+// markers plus one line per schedule, or nil for an empty map — without
+// touching the crontab at all. --migrate's preview uses this (via
+// internal/migrate.Preview) to show "the block it would write" from a
+// schedule map it already derived from one read, so the rendering can never
+// drift from what an actual Save/Set/Remove call produces: both go through
+// this exact function.
+func (c *Crontab) RenderBlock(schedules map[string]string) []string {
+	return c.renderedBlock(schedules)
+}
+
+// renderedBlock is RenderBlock's implementation, shared with saveFromLines.
+func (c *Crontab) renderedBlock(schedules map[string]string) []string {
+	if len(schedules) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(schedules))
+	for name := range schedules {
+		names = append(names, name)
+	}
+	// Ordinal sort. PS's Sort-Object is culture-aware; for the
+	// [A-Za-z0-9._-] names Set-StoSchedule permits, the two orders differ
+	// only in how case and punctuation weight against each other, which
+	// changes line order inside the block and nothing else.
+	sort.Strings(names)
+
+	block := []string{BlockStart}
+	for _, name := range names {
+		log := filepath.Join(c.LogsDir, "cron-"+name+".log")
+		cmd := fmt.Sprintf("cd '%s' && '%s' --run '%s' --cron >> '%s' 2>&1", c.AppDir, c.BinPath, name, log)
+		// % is crontab's command terminator, so it is escaped in the
+		// COMMAND portion only (Cron.psm1:74) — an expression keeps its
+		// bytes, whatever they are.
+		block = append(block, schedules[name]+" "+strings.ReplaceAll(cmd, "%", `\%`))
+	}
+	return append(block, BlockEnd)
+}
+
 // saveFromLines writes schedules against an ALREADY-READ lines snapshot —
 // no read happens here. Set/Remove call this directly with the one snapshot
 // they read at the top, so the whole read-mutate-write sequence touches the
@@ -220,29 +286,7 @@ func (c *Crontab) saveFromLines(lines []string, schedules map[string]string) err
 		}
 	}
 
-	out := kept
-	if len(schedules) > 0 {
-		names := make([]string, 0, len(schedules))
-		for name := range schedules {
-			names = append(names, name)
-		}
-		// Ordinal sort. PS's Sort-Object is culture-aware; for the
-		// [A-Za-z0-9._-] names Set-StoSchedule permits, the two orders differ
-		// only in how case and punctuation weight against each other, which
-		// changes line order inside the block and nothing else.
-		sort.Strings(names)
-
-		out = append(out, BlockStart)
-		for _, name := range names {
-			log := filepath.Join(c.LogsDir, "cron-"+name+".log")
-			cmd := fmt.Sprintf("cd '%s' && '%s' --run '%s' --cron >> '%s' 2>&1", c.AppDir, c.BinPath, name, log)
-			// % is crontab's command terminator, so it is escaped in the
-			// COMMAND portion only (Cron.psm1:74) — an expression keeps its
-			// bytes, whatever they are.
-			out = append(out, schedules[name]+" "+strings.ReplaceAll(cmd, "%", `\%`))
-		}
-		out = append(out, BlockEnd)
-	}
+	out := append(kept, c.renderedBlock(schedules)...)
 
 	text := strings.Join(out, "\n")
 	if text != "" {

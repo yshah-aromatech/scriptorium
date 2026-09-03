@@ -82,6 +82,31 @@ func shimCrontab(t *testing.T, block string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+// writeMutableShim drops an executable fake `crontab` that, unlike
+// writeShim's write-proof baseline, actually accepts a write: `-l` reads
+// the spool, `-` (over stdin) replaces it, everything else fails. --migrate
+// is the one place in this package a crontab write is EXPECTED to succeed.
+func writeMutableShim(dir, block string) error {
+	spool := filepath.Join(dir, "crontab.txt")
+	if err := os.WriteFile(spool, []byte(block), 0o644); err != nil {
+		return err
+	}
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"-l\" ]; then exec cat " + spool + "; fi\n" +
+		"if [ \"$1\" = \"-\" ]; then cat > " + spool + "; exit 0; fi\n" +
+		"exit 1\n"
+	return os.WriteFile(filepath.Join(dir, "crontab"), []byte(script), 0o755)
+}
+
+func shimMutableCrontab(t *testing.T, block string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := writeMutableShim(dir, block); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // psManagedBlock renders a managed block in the PowerShell app's spelling,
 // so the PS reader and the Go reader both parse it (the compat mandate).
 func psManagedBlock(name, expr string) string {
@@ -579,4 +604,98 @@ func TestResolveAppDirFallbackChain(t *testing.T) {
 			t.Errorf("ResolveAppDir() = %q, want %q", got, cwd)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------
+// --migrate — the ONLY crontab-rewrite entry point (ruling 3)
+// ---------------------------------------------------------------------
+
+func TestMigrateFlow(t *testing.T) {
+	_, dataDir := setupApp(t)
+	shimMutableCrontab(t, psManagedBlock("fast-job", "*/10 * * * *"))
+
+	var out, errw bytes.Buffer
+	if code := cli.Main([]string{"--migrate"}, &out, &errw); code != 0 {
+		t.Fatalf("exit = %d, stderr: %s", code, errw.String())
+	}
+	got := out.String()
+	for _, want := range []string{
+		"current managed block:",
+		"block to write:",
+		"crontab backed up to: " + dataDir,
+		"migrated: the managed block now invokes this binary directly",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout missing %q:\ngot:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "-NoProfile -File") {
+		t.Errorf("current block should still show the pre-migration PS spelling:\n%s", got)
+	}
+	if idx := strings.Index(got, "block to write:"); idx < 0 || strings.Contains(got[idx:], "-NoProfile -File") {
+		t.Errorf("planned block should no longer show PS spelling:\n%s", got)
+	}
+
+	backups, err := filepath.Glob(filepath.Join(dataDir, "crontab.bak.*"))
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backup files = %v, %v, want exactly one", backups, err)
+	}
+
+	// idempotent second run
+	out.Reset()
+	errw.Reset()
+	if code := cli.Main([]string{"--migrate"}, &out, &errw); code != 0 {
+		t.Fatalf("second run: exit = %d, stderr: %s", code, errw.String())
+	}
+	if !strings.Contains(out.String(), "already migrated — nothing to do") {
+		t.Errorf("second run stdout = %q, want \"already migrated\"", out.String())
+	}
+	backups2, err := filepath.Glob(filepath.Join(dataDir, "crontab.bak.*"))
+	if err != nil || len(backups2) != 1 {
+		t.Errorf("backup files after second run = %v, %v, want still exactly one", backups2, err)
+	}
+}
+
+func TestMigrateFailedReadIsWipeGuardError(t *testing.T) {
+	setupApp(t)
+	dir := t.TempDir()
+	// exits nonzero WITH stdout content — cron.Crontab.Read's genuine
+	// read-failure shape (empty stdout + nonzero exit reads as "no crontab
+	// for user" instead, which is not what this test is proving).
+	script := "#!/bin/sh\necho 'crontab: permission denied'\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "crontab"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var out, errw bytes.Buffer
+	if code := cli.Main([]string{"--migrate"}, &out, &errw); code != 1 {
+		t.Fatalf("exit = %d, want 1; stdout: %s, stderr: %s", code, out.String(), errw.String())
+	}
+	want := "crontab read failed — refusing to migrate (unmanaged entries would be destroyed)"
+	if !strings.Contains(errw.String(), want) {
+		t.Errorf("stderr = %q, want to contain %q", errw.String(), want)
+	}
+	if out.String() != "" {
+		t.Errorf("stdout = %q, want nothing printed on a wipe-guard failure", out.String())
+	}
+}
+
+func TestMigrateWithNoManagedBlockReportsAlreadyMigrated(t *testing.T) {
+	_, dataDir := setupApp(t)
+	shimMutableCrontab(t, "MAILTO=someone@example.com\n15 3 * * * /usr/local/bin/certbot renew\n")
+
+	var out, errw bytes.Buffer
+	if code := cli.Main([]string{"--migrate"}, &out, &errw); code != 0 {
+		t.Fatalf("exit = %d, stderr: %s", code, errw.String())
+	}
+	if !strings.Contains(out.String(), "already migrated — nothing to do") {
+		t.Errorf("stdout = %q, want \"already migrated\"", out.String())
+	}
+	if !strings.Contains(out.String(), "current managed block:\n  (none)") {
+		t.Errorf("stdout = %q, want the current block shown as (none)", out.String())
+	}
+	if backups, _ := filepath.Glob(filepath.Join(dataDir, "crontab.bak.*")); len(backups) != 0 {
+		t.Errorf("backup files = %v, want none — nothing to migrate", backups)
+	}
 }

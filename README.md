@@ -1,92 +1,85 @@
 # Scriptorium
 
-A terminal UI (pure PowerShell 7, zero other runtime dependencies) for running **PowerShell and Python** scripts on an Ubuntu server. Scripts live in one or more private GitHub repos, each script gets its own isolated environment (a module directory for PowerShell, a venv for Python), and every run is reported to an n8n webhook with logs and resource usage.
+A terminal UI — a single static Go binary, zero required runtime dependencies — for running **PowerShell and Python** scripts on an Ubuntu server. Scripts live in one or more private GitHub repos, each script gets its own isolated environment (a module directory for PowerShell, a venv for Python), and every run is reported to an n8n webhook with logs and resource usage.
 
-Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/dark/) color scheme.
+Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/dark/) color scheme by default; Catppuccin, Gruvbox and Tokyo Night ship alongside it (`theme` in `config.json`).
 
 ## Features
 
-- **Script list with status badges** — synced from your private GitHub scripts repo (✓ success, ✗ failure, ⊘ killed, ◷ timeout, ◇ skipped on last run; `@` marks scheduled scripts; a muted column shows how long ago each script last ran)
-- **Two runtimes, one pipeline** — folders with a `.ps1` entry run under pwsh with a per-script module dir prepended to `PSModulePath`; folders with a `.py` entry run under a per-script venv (created automatically, `PYTHONUNBUFFERED=1`, cwd = script folder so `python-dotenv` finds `.env` natively). Locks, logs, history, secret redaction, timeouts and the webhook are identical for both. A muted `ps`/`py` tag in the list shows each script's runtime
-- **Multiple script repos** — the `repos` config key syncs any number of repos (e.g. `powershell-scripts` + `python-scripts`) side by side; the legacy single `scriptsRepo` key keeps working unchanged
-- **Automatic dependency detection** — no manifest needed. PowerShell: the source is scanned with the AST (`#Requires -Modules` with version constraints honored, `using module`, `Import-Module` calls; built-in and local modules excluded) and missing modules are installed from the PowerShell Gallery. Python: imports are scanned with the Python AST inside the script's venv (stdlib and local modules excluded), missing packages are pip-installed with common import→pip name mismatches mapped (`cv2`→`opencv-python`, `PIL`→`pillow`, …); a `requirements.txt` in the script folder takes precedence over import scanning. Either way you're prompted (`y` install & run / `n` run anyway / `esc` cancel)
-- **Live output** — stdout/stderr streamed into the TUI (word-wrapped to the panel, wide-character aware, tabs expanded, keyboard- and mouse-wheel-scrollable with a scrollbar, sticky-follow) and saved to a timestamped log file per run; `y` copies the whole buffer to your clipboard (wl-copy/xclip/xsel or OSC 52 over SSH)
-- **Mouse text selection** — drag over the output panel to select text (live highlight); releasing copies it to the clipboard with a "copied" indicator. Because the TUI owns the mouse, the selection stays inside the panel — it never bleeds into a neighboring tmux pane. Wrapped long lines are rejoined on copy. In tmux, OSC 52 copy needs `set -g allow-passthrough on`
-- **Resource monitoring** — CPU % and RSS memory sampled across the whole process tree every second via `/proc`; average and peak reported, plus a per-run series that renders as a sparkline in the history view. CPU is relative to the whole machine (all cores = 100%), so a multi-threaded script never reads as >100%
-- **n8n webhook reporting** — success/failure, exit code, duration, avg/max CPU & memory, host, and a log tail POSTed after every run. Delivery is retried, and reports that still can't be delivered are queued on disk and re-sent after the next successful delivery — cron-run reports survive n8n downtime
-- **Cron scheduling** — press `e` on any script to set a cron expression (`*/15 * * * *`, `@daily`, …) or plain English. Schedules are written into your user crontab (in a managed block that leaves your other entries alone) and scheduled runs go through the exact same pipeline: own module dir, auto-installed deps, logging, resource stats, and n8n webhook (payload carries `"trigger": "cron"`). The status bar shows when the selected script fires next
-- **Overlap protection** — a per-script lock prevents a cron run and a manual run (or two stacked cron runs) from executing concurrently; the losing run is reported as `skipped`
-- **Missed-run detection** — the failure plain cron can't see: a schedule that silently stops firing (crontab lost, cron dead, VM was off). When a scheduled fire comes and goes with no matching cron run and no live lock (grace: `missedGraceMinutes`), the script gets a red `⚠` badge in the list, a `missed 12m ago` note in the details card, and a one-time `{"event":"missed"}` webhook per missed fire. The sweep runs every minute in the TUI and at every headless boot (each cron run is one), so alerts flow with no TUI open. New/changed schedules aren't judged until their first post-change fire
-- **Run queue** — starting a script while another is running queues it; runs drain in order (`X` clears the queue)
-- **Linting** — `l` runs PSScriptAnalyzer against the selected script (installed automatically on first use)
-- **System maintenance** — update PowerShell via apt, upgrade all modules in every script's module dir, and update this app itself (`U` = git pull), from inside the TUI
-- **Activity & recent-runs cards** — two cards under the output panel: *activity* shows every script running right now (detected via the per-script locks, so cron/MCP/other-session runs appear too, live), and *recent runs* lists the app's latest runs (script, runtime, success/failure/stopped)
-- **Extras** — per-script run history viewer (open any past run's log, `f` switches to all scripts), kill running script, webhook test event, global + per-script run timeout, output scrollback, secret redaction in all output, live script filtering, run with ad-hoc arguments (quote-aware), mouse support, log/history retention, 256-color fallback for terminals without truecolor
+- **Fleet / Run / History / Schedules views** — a home screen showing every script's status at a glance, a two-pane run view (script list + live output), full-width run history, and a schedules agenda — switch with `1`-`4` or the command palette (`ctrl+p` / `:`)
+- **Two runtimes, one pipeline** — folders with a `.ps1` entry run under `pwsh` with a per-script module dir prepended to `PSModulePath`; folders with a `.py` entry run under a per-script venv (created automatically, cwd = script folder). Locks, logs, history, secret redaction, timeouts and the webhook are identical for both
+- **Multiple script repos** — the `repos` config key syncs any number of repos side by side; the legacy single `scriptsRepo` key keeps working unchanged
+- **Automatic dependency detection** — no manifest needed. PowerShell scripts are scanned with a real AST (via `pwsh`, when present — see [PowerShell is optional](#powershell-is-optional) below) or a degraded regex fallback otherwise; missing modules install from the PowerShell Gallery. Python imports are scanned inside the script's venv; missing packages are pip-installed, with a `requirements.txt` taking precedence when present
+- **Live output** — streamed into the TUI (word-wrapped, wide-character aware, mouse-scrollable), saved to a timestamped log file per run; `y` copies the buffer to your clipboard (OSC 52, tmux-aware)
+- **Resource monitoring** — CPU % and RSS memory sampled across the whole process tree every second via `/proc`; average and peak reported, with a per-run sparkline in history
+- **n8n webhook reporting** — success/failure, exit code, duration, avg/max CPU & memory, host, and a log tail POSTed after every run. Delivery is retried, and undelivered reports are queued on disk and re-sent after the next successful delivery
+- **Cron scheduling** — set a cron expression or plain English on any script from the Schedules view; schedules live in a managed block in your user crontab that leaves every other entry alone
+- **Overlap protection + missed-run detection** — a per-script lock prevents concurrent runs of the same script (the loser is reported `skipped`); a schedule that silently stops firing gets a red badge and a one-time `missed` webhook
+- **MCP server + REST API** — a built-in [MCP](https://modelcontextprotocol.io) server and a co-hosted REST surface so an AI agent (e.g. an n8n AI Agent node) can list/run scripts and manage schedules — see [MCP server](#mcp-server-ai-agents--n8n) below
+- **Self-update** — `U` in the TUI updates the app in place (binary self-update for a released build, `git pull` for a source checkout); a startup notice tells you when a newer release exists either way
 
-## Keybindings
+## Keybindings (Run view)
 
 | Key | Action |
 | --- | --- |
-| `↑`/`↓` or `k`/`j` | navigate scripts |
-| `g` / `G` | jump to the top / bottom of the list |
-| `Tab` | switch pane focus — with the output pane focused, `↑`/`↓`/`j`/`k`/`g`/`G` scroll it (focused pane's title is highlighted) |
-| `Enter` / `r` | run selected script (deps checked first, prompt if missing; queued if something is already running) |
-| `a` | run selected script with extra arguments (quotes group words: `-Msg "hello world"`) |
-| `e` | set/edit/remove the cron schedule for the selected script |
-| `v` | edit the selected script's `.env` file (`ctrl+s` save, `esc` cancel — warns about unsaved changes) |
-| `s` | sync scripts repo (clone or hard-reset to origin; runs in the background) |
-| `i` | scan the selected script's imports and install missing modules |
-| `l` | lint the selected script (PSScriptAnalyzer for `.ps1`, pyflakes — auto-installed — for `.py`) |
-| `u` | update PowerShell + Python (apt) + upgrade all module dirs and venvs |
-| `U` | update this app (`git pull --ff-only`; restart to apply) |
-| `h` | run history for the selected script: `↑`/`↓` select, `Enter` opens that run's log, `r` re-runs that script, `f` toggles all scripts |
+| `↑`/`↓`/`j`/`k`, `g`/`G` | navigate / jump to top / bottom |
+| `Enter` / `r` | run the selected script (deps checked first; queued if something is already running) |
+| `a` | run with extra arguments (quote-aware) |
+| `e` | set/edit/remove the cron schedule |
+| `v` | edit the script's `.env` file |
+| `s` | sync scripts repos |
+| `i` | scan + install missing dependencies |
+| `l` | lint the script |
+| `u` | update PowerShell + Python (apt) and every module dir / venv |
+| `U` | self-update this app (see [Updating](#updating)) |
+| `h` | this script's run history |
 | `t` | send a test event to the n8n webhook |
-| `x` / `X` | kill the running script / clear the run queue |
-| `y` | copy the whole output to the clipboard |
-| `c` | clear output panel |
-| `/` | filter the script list (live as you type; `esc` restores) |
-| `Ctrl+F` | search the output panel (case-insensitive, matches highlighted); `n` / `N` jump to the next / previous match, empty search clears |
-| `?` | help overlay with all keybindings |
-| `PgUp` / `PgDn` / `Home` / `End` | scroll output (scrollbar shows position; auto-follows new output until you scroll up, `End` re-engages follow) |
-| mouse | wheel scrolls the pane under the pointer, click selects a script (or a history row) and focuses the clicked pane; drag over the output panel selects text and copies it on release (stays inside the pane, even in tmux); clicking a device-login code (e.g. Microsoft device sign-in) in the output copies it to the clipboard |
-| `q` / `Ctrl+C` | quit |
+| `x` / `X` | kill the running script / clear the queue |
+| `y` / `c` | copy output / clear the output pane |
+| `/` | filter the script list |
+| `ctrl+f`, `n`/`N` | search the output pane, jump matches |
+| `1`-`4` | Fleet / Run / History / Schedules |
+| `ctrl+p` / `:` | command palette |
+| `?` | help overlay |
+| `q` / `ctrl+c` | quit |
+
+Mouse: wheel scrolls the hovered pane; click focuses/selects; drag over the output pane selects and copies text.
 
 ## Installation
-
-1. Install (one-liner — no credentials needed):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yshah-aromatech/scriptorium/main/install.sh | bash
 ```
 
-`install.sh` installs missing prerequisites (git, PowerShell 7 via the Microsoft apt repo), clones the app to `~/scriptorium` (override with `SCRIPTORIUM_APP_DIR`), creates `config.json` + `.env` from the examples, and adds a `scriptorium` launcher to `~/.local/bin`. Prefer to inspect first? Clone and run it from the checkout instead:
+This downloads the latest release for your architecture (linux amd64/arm64), verifies its checksum, and installs it to `~/.local/bin/scriptorium`, creating `config.json` + `.env` from the examples in `~/scriptorium` (override with `SCRIPTORIUM_APP_DIR`). Prefer to build from source instead:
 
 ```bash
 git clone https://github.com/yshah-aromatech/scriptorium.git && cd scriptorium && ./install.sh
 ```
 
-2. If your *scripts* repo is private, create a fine-grained PAT for it (github.com → Settings → Developer settings → Fine-grained tokens):
-   - Repository access: select your scripts repo(s)
-   - Permissions: **Contents: Read-only**
+(needs a Go toolchain — `go build ./cmd/scriptorium` under the hood; this mode also keeps the checkout tracking the repo on every re-run).
 
-3. Configure:
-   - `config.json` — set `scriptsRepo` (HTTPS URL of your private scripts repo) and `n8nWebhookUrl`
-   - `.env` — if the scripts repo is private, set `GITHUB_TOKEN=` to the PAT (used to clone/pull the scripts repo; redacted in all TUI output). `SCRIPTS_REPO=` can also be set here and overrides `scriptsRepo` in `config.json`
+Then:
 
-4. Run: `scriptorium`
+1. If your *scripts* repo is private, create a fine-grained PAT for it (github.com → Settings → Developer settings → Fine-grained tokens) with **Contents: Read-only** on that repo.
+2. Configure `config.json` (`scriptsRepo`, `n8nWebhookUrl`) and `.env` (`GITHUB_TOKEN` if the scripts repo is private).
+3. Run: `scriptorium`
+
+### PowerShell is optional
+
+The app itself has no PowerShell dependency — only *running PowerShell scripts* needs `pwsh` on the machine, same as needing Python for Python scripts. Without `pwsh`, PowerShell scripts still run, just with a degraded (regex-based) dependency scan instead of the real AST scan; install.sh warns about this rather than installing it for you:
+
+```bash
+# optional, recommended — adjust the ubuntu/24.04 path for your release
+curl -fsSL https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb
+sudo dpkg -i /tmp/packages-microsoft-prod.deb && sudo apt-get update && sudo apt-get install -y powershell
+```
 
 ## Updating
 
-Everything updates from inside the TUI:
-
-- **`U` — update this app**: `git pull --ff-only` on the install directory; restart `scriptorium` to apply.
-- **`u` — update PowerShell + modules**: upgrades PowerShell via apt (needs passwordless sudo for `apt-get`, or it prints the command to run manually), then upgrades every script's module dir.
-
-Or from the shell — rerunning the install one-liner is also safe (it pulls instead of recloning):
-
-```bash
-cd ~/scriptorium && git pull
-```
+- **`U` in the TUI** updates the app in place: a released binary downloads and installs the latest GitHub release over itself; a source checkout runs `git pull --ff-only` instead. Either way, restart `scriptorium` to run the new code. A startup notice (`update available: vX.Y.Z — press U`) tells you when one is available.
+- **Re-running `install.sh`** is always safe (it never touches `config.json`/`.env`) and is the only path that also picks up new prerequisites — worth doing occasionally even if `U` looks up to date.
+- `scriptorium --version` prints the running build.
 
 ## Scripts repo layout
 
@@ -95,27 +88,23 @@ One folder per script; PowerShell and Python folders can live in the same repo o
 ```
 your-scripts-repo/
 ├── backup-db/
-│   ├── main.ps1        # PowerShell entry point (see resolution order below)
+│   ├── main.ps1        # PowerShell entry point
 │   └── script.json     # optional: {"entry": "...", "description": "...", "args": ["-Flag"], "timeoutMinutes": 30}
 └── pull-metrics/
-    ├── main.py         # Python entry point — this folder runs in its own venv
-    └── requirements.txt  # optional: takes precedence over import scanning
+    ├── main.py         # Python entry point — runs in its own venv
+    └── requirements.txt
 ```
 
-`script.json` keys (all optional, same for both runtimes): `entry` (relative path to the entry file — its extension decides the runtime), `description` (shown in the status bar), `args` (default arguments for every run), `timeoutMinutes` (per-script run timeout; overrides the global `runTimeoutMinutes`).
-
-The entry point for each folder is resolved in this order: `script.json`'s `"entry"`; then the conventional PowerShell names `main.ps1`, `<folder>.ps1`, `run.ps1` (case-insensitive); then the conventional Python names `main.py`, `<folder>.py`, `run.py`, `__main__.py`; then the sole (or first alphabetical) `.ps1`, else `.py`, in the folder. A folder containing both runtimes with no `script.json` resolves to PowerShell — set `"entry"` to disambiguate. Loose `.ps1`/`.py` files in a repo root also work. `__pycache__`, `.venv`, and `node_modules` folders are ignored.
+The entry point resolves in this order: `script.json`'s `"entry"`; then `main.ps1`/`<folder>.ps1`/`run.ps1`; then `main.py`/`<folder>.py`/`run.py`/`__main__.py`; then the sole (or first alphabetical) `.ps1`, else `.py`, in the folder.
 
 ### Multiple repos
-
-The quickest way to add a second (third, …) scripts repo:
 
 ```bash
 scriptorium --add-repo https://github.com/YOUR_ORG/python-scripts --name python
 scriptorium --sync
 ```
 
-`--add-repo` updates `config.json` for you (a legacy `scriptsRepo` config is converted to a `repos` entry first, so the existing repo keeps syncing); `--name` and `--branch` are optional — the name defaults to the URL's basename, the branch to `main`. `scriptorium --repos` lists what's configured. Or edit the `repos` array in `config.json` directly:
+`scriptorium --repos` lists what's configured, or edit `repos` in `config.json` directly:
 
 ```json
 "repos": [
@@ -124,197 +113,86 @@ scriptorium --sync
 ]
 ```
 
-Each repo clones into `~/.scriptorium/scripts/<name>/` (an existing single-repo clone is migrated into its subfolder automatically on the next sync). One `GITHUB_TOKEN` covers all repos — the fine-grained PAT needs Contents:Read on each. Script names must be unique across repos; a folder name that appears in more than one repo gets qualified as `<repoName>-<folder>` in **every** repo (deterministic — the name never depends on repo order), so keep folder names unique to avoid renames: the name keys locks, history, log files and the crontab entry. With only the legacy `scriptsRepo` key set, everything works exactly as before.
+Script names must be unique across repos; a folder name appearing in more than one repo is qualified as `<repoName>-<folder>` everywhere.
+
+## Headless mode
+
+| Command | Effect |
+| --- | --- |
+| `scriptorium --run <script> [--args "..."] [--cron]` | run one script through the full pipeline (exit: 0 success, 1 failure, 3 skipped) |
+| `scriptorium --list` / `--history [script]` | list scripts with status/schedule, or print recent runs |
+| `scriptorium --sync` | sync all scripts repos and exit |
+| `scriptorium --migrate` | one-shot: adopt the crontab's managed block under this binary (owner-run once, at cutover — see `docs/CUTOVER.md`) |
+| `scriptorium --version` / `--help` | print the build / usage |
 
 ## Per-script .env files
 
-Each script folder can have a `.env` file (`KEY=VALUE` lines, `#` comments). Press `v` in the TUI to edit it in place. The vars are injected into the script's environment on every run (manual and cron) — read them in your script with `$env:MY_VAR`.
-
-Every per-script `.env` value (8+ characters) is treated as a secret and replaced with `***` in TUI output, log files, and webhook payloads — these are exactly the values you chose to keep out of git, so they stay out of logs too.
-
-Keep `.env` gitignored in the scripts repo and commit a `.env.example` instead — when a script has no `.env` yet, the editor opens pre-filled from `.env.example`. Local `.env` files survive repo syncs (the hard-reset/clean excludes them), but a tracked `.env` would be overwritten by sync on every change from the repo.
-
-Module dirs, the scripts clone, logs, history, per-script locks, the webhook retry queue, and tools (PSScriptAnalyzer) are stored under `~/.scriptorium/` (configurable via `dataDir`). Retention is time-based and runs at startup (throttled to once an hour): history keeps a rolling `historyDays` (default 30) window — except that **scripts cron-scheduled every 10 minutes or tighter keep success rows only 1 day** (failures/killed/timeout/skipped keep the full window, and each script's newest row always survives so status badges stay truthful). A pruned history row deletes its log file with it; other logs age out after `logRetentionDays`. Note: changing a script's schedule to ≤10-minute cadence reclassifies its whole success backlog on the next sweep.
+Each script folder can have a `.env` file (`KEY=VALUE`, `#` comments) — press `v` in the Run view to edit it in place. Every value (8+ characters) is treated as a secret and redacted (`***`) in TUI output, log files, and webhook payloads. Keep `.env` gitignored in the scripts repo; a `.env.example` there pre-fills the editor when no `.env` exists yet.
 
 ## n8n webhook payload
 
-POSTed as JSON after every run (and `{"event":"test"}` for webhook tests):
+POSTed as JSON after every run (`{"event":"script_run", ...}`; `{"event":"test"}` for `t`; `{"event":"missed"}` for a missed schedule):
 
 ```json
 {
-  "event": "script_run",
-  "script": "backup-db",
-  "runtime": "powershell",
-  "repo": "powershell",
-  "trigger": "manual",
-  "status": "success",
-  "success": true,
-  "exitCode": 0,
-  "startedAt": "2026-06-10T12:00:00.000Z",
-  "finishedAt": "2026-06-10T12:03:24.000Z",
-  "durationSec": 204.1,
-  "host": "ubuntu-vm-01",
-  "resources": {
-    "cpuAvgPercent": 23.4,
-    "cpuMaxPercent": 87.1,
-    "memAvgMb": 145.2,
-    "memMaxMb": 312.8,
-    "samples": 204,
-    "cpuSeries": [12.1, 45.0, 87.1, "..."],
-    "memSeries": [80.2, 145.0, 312.8, "..."]
-  },
+  "event": "script_run", "script": "backup-db", "runtime": "powershell", "trigger": "manual",
+  "status": "success", "success": true, "exitCode": 0,
+  "startedAt": "2026-06-10T12:00:00.000Z", "durationSec": 204.1, "host": "ubuntu-vm-01",
+  "resources": { "cpuAvgPercent": 23.4, "cpuMaxPercent": 87.1, "memAvgMb": 145.2, "memMaxMb": 312.8 },
   "logFile": "/home/user/.scriptorium/logs/backup-db-2026-06-10T12-00-00-000Z.log",
   "log": "...last 64KB of output..."
 }
 ```
 
-`status` is one of `success`, `failure`, `killed`, `timeout`, `skipped` (a run that didn't start because the same script was already running). `cpuSeries`/`memSeries` are the per-second samples downsampled to at most 60 points. Every payload carries a `runId` (GUID) you can dedupe on.
-
-A missed scheduled fire additionally POSTs (once per missed fire):
-
-```json
-{ "event": "missed", "script": "backup-db", "schedule": "*/15 * * * *",
-  "expectedAt": "2026-06-10T12:00:00Z", "detectedAt": "2026-06-10T12:06:02Z", "host": "ubuntu-vm-01" }
-```
-
-Delivery is attempted twice; if both attempts fail the payload is appended to `~/.scriptorium/webhook-queue.jsonl` and re-sent (in order) right after the next successful delivery.
-
-## Scheduling
-
-Press `e` on a script and type either a 5-field cron expression (or `@hourly` / `@daily` / `@weekly` / `@monthly` / `@reboot`) or plain English — "every 5 minutes", "8pm on saturdays". Natural language is converted to cron by `google/gemini-3.1-flash-lite` via OpenRouter (set `OPENROUTER_API_KEY` in `.env`; model configurable via `openRouterModel` in `config.json`). The generated expression is shown for confirmation before saving. Enter on an empty field removes the schedule.
-
-The app maintains a marked block in your user crontab; everything outside the block is untouched. Each scheduled entry runs:
-
-```
-cd <app-dir> && pwsh -NoProfile -File scriptorium.ps1 --run <script> --cron >> ~/.scriptorium/logs/cron-<script>.log 2>&1
-```
-
-Headless mode also works manually:
-
-| Command | Effect |
-| --- | --- |
-| `scriptorium --run <script>` | run one script with the full dep-check/webhook pipeline, missing modules auto-installed without prompting (exit code: 0 success, 1 failure, 3 skipped/already running) |
-| `scriptorium --run <script> --args "-Flag 'a b'"` | same, with extra arguments (quote-aware splitting) |
-| `scriptorium --list` | list discovered scripts with last status and schedule |
-| `scriptorium --sync` | sync all scripts repos and exit (useful from cron) |
-| `scriptorium --repos` | list configured scripts repos |
-| `scriptorium --add-repo <url> [--name <n>] [--branch <b>]` | add a scripts repo to config.json |
-| `scriptorium --history [script]` | print recent runs, optionally for one script |
-| `scriptorium --mcp [--port <n>]` | serve the built-in MCP server so AI agents (e.g. n8n) can list/run scripts — see below |
-
-A cron or manual run of a script that is already running elsewhere is **skipped** (per-script lock under `~/.scriptorium/locks/`), recorded in history, and reported to the webhook with `"status": "skipped"` — long runs never stack.
+`status` is one of `success`, `failure`, `killed`, `timeout`, `skipped`. Delivery is retried twice; a payload that still fails is queued on disk and re-sent after the next successful delivery.
 
 ## MCP server (AI agents / n8n)
 
-`scriptorium --mcp` starts a built-in [MCP](https://modelcontextprotocol.io) server so an AI agent — e.g. an n8n **AI Agent** node with the built-in **MCP Client Tool** — can operate the app over the LAN. It speaks the streamable-HTTP transport (plain JSON responses, stateless, no SSE) on `POST /mcp`, with `GET /healthz` for liveness.
+`scriptorium --mcp` starts an MCP server (streamable-HTTP, `POST /mcp`, `GET /healthz`) plus a co-hosted REST API under `/api/v1/*` — same listener, same Bearer token, same 1MB body cap. Both surfaces call the identical tool implementations.
 
-**Tools exposed:**
+**Tools:** `list_scripts`, `get_script_details`, `run_script`, `get_history`, `get_run_log`, `sync_repos`, `get_schedules`/`set_schedule`/`remove_schedule`, `install_deps`, `update_app`, `update_packages`.
 
-| Tool | What it does |
-| --- | --- |
-| `list_scripts` | every script with runtime (ps/py), repo, description, whether it's running now, last run status/duration and cron schedule |
-| `get_script_details` | everything an agent needs to call a script correctly: README, documented `.env.example` variables, default args, and — for PowerShell — the parsed `param()` block (names, types, mandatory, defaults, `ValidateSet` values, per-parameter comment-based help) |
-| `run_script` | run a script to completion — supports extra `args` (quote-aware string), per-run `env` vars (override the script's `.env`, values redacted like any secret), and a `timeout_minutes` override. Returns status, exit code, duration, redacted output tail and resource stats |
-| `get_history` | recent runs, newest first, optionally filtered to one script; each row has a `logId` for `get_run_log` |
-| `get_run_log` | fetch the redacted log of any past run by `logId` (default 64KB tail, up to 256KB) |
-| `sync_repos` | git-sync all configured scripts repos |
-| `get_schedules` / `set_schedule` / `remove_schedule` | read and manage cron schedules (5-field expressions or `@daily` etc., validated before writing to the crontab managed block) |
-| `install_deps` | scan + install a script's missing PowerShell modules or python packages into its module dir / venv |
-| `update_app` | `git pull --ff-only` this app (restart the MCP service afterwards) |
-| `update_packages` | upgrade all module dirs + venvs (and apt packages when passwordless sudo is available) — can take minutes, raise the n8n tool timeout for it |
+Setup:
 
-MCP-triggered runs go through the exact same pipeline as manual/cron runs: per-script lock (an already-running script returns `"status": "skipped"`), dep auto-install, log file, history, secret redaction, and the n8n run-report webhook (payload carries `"trigger": "mcp"`).
+1. `MCP_AUTH_TOKEN=$(openssl rand -hex 32)` in `.env` — the server refuses to start without one.
+2. `scriptorium --install-mcp-service` installs it as a systemd service (root → system unit; non-root → user unit + lingering, so it survives logout/reboot). `scriptorium --mcp` runs it in the foreground instead.
+3. In n8n: an **AI Agent** node with an **MCP Client Tool** sub-node, Endpoint `http://<server-ip>:8765/mcp`, Server Transport **HTTP Streamable**, Bearer credential holding the token.
 
-**Setup:**
-
-1. Generate a token and put it in `.env` next to the app: `MCP_AUTH_TOKEN=$(openssl rand -hex 32)`. The server refuses to start without one; every request must send it as a Bearer token.
-2. Optionally set `mcpPort` (default `8765`) and `mcpBind` (`all` = LAN-reachable, `localhost`) in `config.json`.
-3. Install it as a systemd service so it runs at boot, with no terminal open:
-
-```bash
-scriptorium --install-mcp-service
-```
-
-Run as root this writes a system unit (`/etc/systemd/system/scriptorium-mcp.service`); as a normal user it writes a user unit + enables lingering, so it survives logout and reboots either way. Check with `systemctl status scriptorium-mcp` (add `--user` for the user variant); logs via `journalctl -u scriptorium-mcp -f`. Re-run the command after changing `mcpPort`/`mcpBind`. For a quick foreground session instead, `scriptorium --mcp` works too. (Don't put `--mcp` in the crontab managed block — that block is regenerated from schedules and foreign lines are dropped.)
-
-4. In n8n: add an **AI Agent** node, attach an **MCP Client Tool** sub-node with Endpoint `http://<server-ip>:8765/mcp`, Server Transport **HTTP Streamable**, and a **Bearer** credential holding the token. The agent will discover the three tools automatically.
-
-Smoke test with curl:
-
-```bash
-curl -s http://<server>:8765/mcp -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_script","arguments":{"script":"backup-db","args":"-DryRun"}}}'
-```
-
-Notes: tool calls execute one at a time (a long run blocks the next request — matching how an agent awaits a tool). If the client times out and disconnects mid-run, the run still completes and is recorded/webhooked. The server is LAN-only plain HTTP guarded by the token — keep it off untrusted networks, or set `mcpBind: "localhost"` if n8n runs on the same host.
-
-## System updates without a sudo password
-
-The `u` key runs `sudo -n apt-get ...` (non-interactive). To allow it without a password prompt, add a sudoers rule:
-
-```bash
-echo "$USER ALL=(root) NOPASSWD: /usr/bin/apt-get" | sudo tee /etc/sudoers.d/scriptorium-apt
-```
-
-Otherwise the TUI prints the exact commands to run manually (and still upgrades the script module dirs, which need no sudo).
+MCP/API-triggered runs go through the same pipeline as manual/cron runs (lock, dep install, log, history, webhook with `"trigger": "mcp"`).
 
 ## Configuration reference (config.json)
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `scriptsRepo` | HTTPS URL of the private scripts repo (or set `SCRIPTS_REPO` in `.env`) | — |
-| `branch` | branch to sync | `main` |
+| `scriptsRepo` | HTTPS URL of the private scripts repo (or `SCRIPTS_REPO` in `.env`) | — |
+| `repos` | array of `{name, url, branch}` scripts repos (overrides `scriptsRepo`) | `[]` |
 | `dataDir` | where scripts/module dirs/logs/history live | `~/.scriptorium` |
-| `n8nWebhookUrl` | n8n webhook endpoint (or set `N8N_WEBHOOK_URL` in `.env`) | — |
-| `repos` | array of `{name, url, branch}` scripts repos (overrides `scriptsRepo`/`branch`) | `[]` |
-| `pwshBin` | pwsh used to run PowerShell scripts | `pwsh` |
-| `pythonBin` | python used to create venvs (scripts run on the venv's own python) | `python3` |
-| `monitorIntervalMs` | resource sampling interval | `1000` |
-| `logTailKb` | how much log to include in the webhook | `64` |
-| `runTimeoutMinutes` | kill runs longer than this (0 = no limit; per-script `timeoutMinutes` in `script.json` overrides) | `0` |
-| `maxOutputLines` | TUI scrollback size | `5000` |
-| `openRouterModel` | model for plain-English → cron | `google/gemini-3.1-flash-lite` |
-| `syncOnLaunch` | sync the scripts repo automatically when the TUI starts | `false` |
-| `logRetentionDays` | delete run logs older than this at startup (0 = keep forever) | `30` |
-| `historyMaxLines` | safety cap on `history.jsonl` rows — retention is time-based, this only guards pathological growth (0 = uncapped) | `50000` |
-| `historyDays` | rolling history retention window in days; also the history tab's view window (0 = tab shows last 200 runs, retention stays 30 days) | `30` |
-| `webhookTimeoutSec` | per-attempt webhook timeout | `15` |
+| `n8nWebhookUrl` | n8n webhook endpoint (or `N8N_WEBHOOK_URL` in `.env`) | — |
+| `pwshBin` / `pythonBin` | interpreters used to run scripts | `pwsh` / `python3` |
+| `runTimeoutMinutes` | kill runs longer than this (0 = no limit; `script.json`'s `timeoutMinutes` overrides) | `0` |
+| `openRouterModel` | model for plain-English → cron (`OPENROUTER_API_KEY` in `.env`) | `google/gemini-3.1-flash-lite` |
+| `logRetentionDays` / `historyDays` / `historyMaxLines` | log/history retention | `30` / `30` / `50000` |
 | `missedGraceMinutes` | how late a scheduled fire may be before it's reported missed | `5` |
-| `colorMode` | `auto` (truecolor if `$COLORTERM` says so, else 256-color), `truecolor`, or `256` | `auto` |
-| `theme` | TUI palette: `night-owl`, `catppuccin-mocha`, `gruvbox-dark`, `tokyo-night`. **Go build only** — the PowerShell app reports it as an unknown key | `night-owl` |
-| `mcpPort` | MCP server port (`--mcp`; `--port` overrides per run) | `8765` |
-| `mcpBind` | `all` (LAN-reachable) or `localhost` | `all` |
+| `colorMode` | `auto`, `truecolor`, or `256` | `auto` |
+| `theme` | `night-owl`, `catppuccin-mocha`, `gruvbox-dark`, `tokyo-night` | `night-owl` |
+| `mcpPort` / `mcpBind` | MCP/API server port and bind (`all` or `localhost`) | `8765` / `all` |
 
-Unknown keys and non-numeric values for numeric keys are reported as warnings at startup instead of being silently ignored.
+See `config.json.example` for the full set. Unknown keys and bad values for numeric keys are reported as warnings at startup, never silently ignored.
 
 ## Troubleshooting
 
-- **clone/fetch fails** — check `GITHUB_TOKEN` in `.env`; the token needs Contents: Read on the scripts repo. Tokens expire — generate a new one and just rerun sync (`s`); the remote URL is refreshed automatically.
-- **module install fails** — check the module name exists on the [PowerShell Gallery](https://www.powershellgallery.com); corporate networks may need a proxy (`$env:HTTPS_PROXY`).
-- **webhook not firing** — press `t` to send a test event; check the n8n workflow is active and the URL is the production webhook URL, not the test one.
-- **garbled UI** — the TUI needs UTF-8 and truecolor for best results; terminals without truecolor get an automatic 256-color fallback (`colorMode` forces either). Mouse reporting is enabled — drag inside the output panel to select & copy through the app, or hold Shift while dragging for the terminal's native selection.
-- **copy does nothing over SSH/tmux** — the clipboard falls back to OSC 52, which tmux blocks by default: add `set -g allow-passthrough on` (and ideally `set -g set-clipboard on`) to `~/.tmux.conf`. Very large copies are capped at 72KB over OSC 52.
-- **wrong duplicate-run skip** — if a run was killed hard (host reboot) a stale lock may linger in `~/.scriptorium/locks/`; it's reclaimed automatically when the owning PID is dead, or delete the file manually.
+- **clone/fetch fails** — check `GITHUB_TOKEN` in `.env` (needs Contents: Read on the scripts repo); rerun sync (`s`) after rotating it.
+- **webhook not firing** — press `t` to send a test event; check the n8n workflow is active and the URL is the production one.
+- **copy does nothing over SSH/tmux** — add `set -g allow-passthrough on` to `~/.tmux.conf` (OSC 52 copies are capped at 72KB).
+- **a run is stuck "skipped"** — a stale lock under `~/.scriptorium/locks/` is reclaimed automatically once its owning PID is dead; delete the file manually to force it sooner.
 
 ## Development
 
-Run the test suite (Pester 5):
-
 ```bash
-pwsh -NoProfile -Command "Invoke-Pester -Path tests -Output Detailed"
+go build ./... && go vet ./... && go test -race ./...
 ```
 
-CI (GitHub Actions) runs the tests plus PSScriptAnalyzer on every push. See `CLAUDE.md` for the module layout and the run-handle contract.
-
-## Ideas / suggested future features
-
-Not implemented yet — natural next steps:
-
-- **Side-by-side diff on sync** — show what changed in each script since the last sync
-- **Per-script default arguments UI** — edit `script.json` args from inside the TUI like the `.env` editor
-- **Notifications** — optional ntfy/Slack/Telegram ping on failure (n8n can do this today from the webhook)
-- **Windows support** — Task Scheduler instead of crontab, winget instead of apt (the rest is already cross-platform PowerShell; runs already work without `/proc`, just without resource stats)
-- **Secret store integration** — pull per-script secrets from `Microsoft.PowerShell.SecretManagement` instead of plaintext `.env` files
+`hack/gen-fixtures.ps1` regenerates the PS-parity fixtures under `testdata/psfixtures/`; `docs/CUTOVER.md` is the owner's cutover runbook.
 
 ## License
 

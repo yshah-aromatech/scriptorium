@@ -250,3 +250,61 @@ func TestAlreadyGoSpellingUnderCurrentMarkersIsANoOp(t *testing.T) {
 		t.Errorf("backup files = %v, want none", b)
 	}
 }
+
+// ---------------------------------------------------------------------
+// Preview + LatestBackup — --migrate's own print-before-you-touch-anything
+// surface.
+// ---------------------------------------------------------------------
+
+func TestPreviewShowsCurrentAndPlannedBlocks(t *testing.T) {
+	r := &statefulRunner{spool: psBlock(true), readOK: true}
+	current, planned, err := migrate.Preview(newCT(r))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.writes != 0 {
+		t.Errorf("Preview wrote %d times, want 0 (read-only)", r.writes)
+	}
+	wantCurrentContains := "'pwsh' -NoProfile -File scriptorium.ps1 --run 'fast-job'"
+	if !strings.Contains(strings.Join(current, "\n"), wantCurrentContains) {
+		t.Errorf("current block =\n%s\nwant it to contain %q", strings.Join(current, "\n"), wantCurrentContains)
+	}
+	wantPlanned := strings.Join([]string{
+		cron.BlockStart,
+		"*/10 * * * * cd '/app' && '/bin/scriptorium' --run 'fast-job' --cron >> '/logs/cron-fast-job.log' 2>&1",
+		"0 2 * * * cd '/app' && '/bin/scriptorium' --run 'nightly' --cron >> '/logs/cron-nightly.log' 2>&1",
+		cron.BlockEnd,
+	}, "\n")
+	if strings.Join(planned, "\n") != wantPlanned {
+		t.Errorf("planned block =\n%q\nwant\n%q", strings.Join(planned, "\n"), wantPlanned)
+	}
+}
+
+func TestPreviewFailedReadIsWipeGuardError(t *testing.T) {
+	r := &statefulRunner{readOK: true, readFail: "crontab: permission denied"}
+	current, planned, err := migrate.Preview(newCT(r))
+	if err != migrate.ErrReadFailed {
+		t.Errorf("err = %v, want migrate.ErrReadFailed", err)
+	}
+	if current != nil || planned != nil {
+		t.Errorf("current=%v planned=%v on error, want nil, nil", current, planned)
+	}
+}
+
+func TestLatestBackupReturnsTheNewestOne(t *testing.T) {
+	dataDir := t.TempDir()
+	if got := migrate.LatestBackup(dataDir); got != "" {
+		t.Errorf("LatestBackup on an empty dir = %q, want \"\"", got)
+	}
+
+	older := filepath.Join(dataDir, "crontab.bak.2026-01-01T00:00:00Z")
+	newer := filepath.Join(dataDir, "crontab.bak.2026-06-01T00:00:00Z")
+	for _, p := range []string{older, newer} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := migrate.LatestBackup(dataDir); got != newer {
+		t.Errorf("LatestBackup() = %q, want %q", got, newer)
+	}
+}
