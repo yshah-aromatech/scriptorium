@@ -16,11 +16,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
 	"github.com/yshah-aromatech/scriptorium/internal/cli"
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
 	"github.com/yshah-aromatech/scriptorium/internal/pwshtest"
 )
+
+// stubBuildinfo overrides the package-level buildinfo vars for one test —
+// they are link-time globals, not something Main takes as a parameter.
+func stubBuildinfo(version, commit, date string) func() {
+	oldV, oldC, oldD := buildinfo.Version, buildinfo.Commit, buildinfo.Date
+	buildinfo.Version, buildinfo.Commit, buildinfo.Date = version, commit, date
+	return func() { buildinfo.Version, buildinfo.Commit, buildinfo.Date = oldV, oldC, oldD }
+}
 
 // ---------------------------------------------------------------------
 // 0. NOTHING in this package may reach the real crontab.
@@ -509,5 +518,24 @@ func TestAddRepoFlow(t *testing.T) {
 	code = cli.Main([]string{"--add-repo", "https://example.invalid/foo.git"}, &out, &errw)
 	if code != 1 {
 		t.Fatalf("duplicate add-repo: exit = %d, want 1; stdout: %s", code, out.String())
+	}
+}
+
+// ---------------------------------------------------------------------
+// --version (Go-only; no PS counterpart)
+// ---------------------------------------------------------------------
+
+func TestVersionFlag(t *testing.T) {
+	setupApp(t)
+	restore := stubBuildinfo("v1.2.3", "abcdef1", "2026-09-02T00:00:00Z")
+	defer restore()
+
+	var out, errw bytes.Buffer
+	if code := cli.Main([]string{"--version"}, &out, &errw); code != 0 {
+		t.Fatalf("exit = %d, stderr: %s", code, errw.String())
+	}
+	want := "scriptorium v1.2.3 (commit abcdef1, built 2026-09-02T00:00:00Z)\n"
+	if out.String() != want {
+		t.Errorf("stdout = %q, want %q", out.String(), want)
 	}
 }

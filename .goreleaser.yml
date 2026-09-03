@@ -1,0 +1,42 @@
+version: 2
+
+project_name: scriptorium
+
+builds:
+  - id: scriptorium
+    main: ./cmd/scriptorium
+    binary: scriptorium
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/yshah-aromatech/scriptorium/internal/buildinfo.Version={{ .Tag }}
+      - -X github.com/yshah-aromatech/scriptorium/internal/buildinfo.Commit={{ .ShortCommit }}
+      - -X github.com/yshah-aromatech/scriptorium/internal/buildinfo.Date={{ .Date }}
+
+# Archive filenames MUST match internal/buildinfo.AssetName's convention —
+# install.sh's download URL is built from that same function. See
+# TestGoreleaserArchiveNameMatches (internal/buildinfo) and the install.sh
+# cross-check test (hack/install-test).
+archives:
+  - id: scriptorium
+    formats: [tar.gz]
+    name_template: "scriptorium_{{ .Os }}_{{ .Arch }}"
+    files:
+      - config.json.example
+      - .env.example
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  draft: false
+
+changelog:
+  disable: true

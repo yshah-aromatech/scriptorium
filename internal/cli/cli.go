@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/yshah-aromatech/scriptorium/internal/app"
+	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
 	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/format"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
@@ -75,6 +76,7 @@ var helpLines = []string{
 	"  scriptorium --mcp [--port <n>]      serve the MCP server (for n8n AI agents)",
 	"  scriptorium --install-mcp-service   install + start the MCP server as a systemd service",
 	"  scriptorium --help",
+	"  scriptorium --version",
 	"",
 }
 
@@ -96,6 +98,7 @@ type flags struct {
 	addRepoBranch   string
 	listRepos       bool
 	showHelp        bool
+	showVersion     bool
 }
 
 // argAt returns args[i], or "" when i is out of range — matching PS's
@@ -153,6 +156,8 @@ func parseFlags(args []string) flags {
 			}
 		case "--help", "-h":
 			f.showHelp = true
+		case "--version":
+			f.showVersion = true
 		}
 	}
 	return f
@@ -172,6 +177,9 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch {
+	case f.showVersion:
+		fmt.Fprintln(stdout, buildinfo.String())
+		return 0
 	case f.showHelp:
 		for _, l := range helpLines {
 			fmt.Fprintln(stdout, l)

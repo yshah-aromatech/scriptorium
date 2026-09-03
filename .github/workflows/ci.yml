@@ -52,3 +52,9 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.13.2
+      - name: goreleaser check (snapshot build)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean
