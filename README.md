@@ -122,7 +122,6 @@ Script names must be unique across repos; a folder name appearing in more than o
 | `scriptorium --run <script> [--args "..."] [--cron]` | run one script through the full pipeline (exit: 0 success, 1 failure, 3 skipped) |
 | `scriptorium --list` / `--history [script]` | list scripts with status/schedule, or print recent runs |
 | `scriptorium --sync` | sync all scripts repos and exit |
-| `scriptorium --migrate` | one-shot: adopt the crontab's managed block under this binary (owner-run once, at cutover — see `docs/CUTOVER.md`) |
 | `scriptorium --version` / `--help` | print the build / usage |
 
 ## Per-script .env files
@@ -192,7 +191,7 @@ See `config.json.example` for the full set. Unknown keys and bad values for nume
 go build ./... && go vet ./... && go test -race ./...
 ```
 
-`hack/gen-fixtures.ps1` regenerates the PS-parity fixtures under `testdata/psfixtures/`; `docs/CUTOVER.md` is the owner's cutover runbook.
+`hack/gen-fixtures.ps1` regenerates the PS-parity fixtures under `testdata/psfixtures/`.
 
 ## License
 

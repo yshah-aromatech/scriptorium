@@ -12,15 +12,9 @@
 #   git clone https://github.com/yshah-aromatech/scriptorium.git && cd scriptorium && ./install.sh
 #
 # Set SCRIPTORIUM_APP_DIR to control where config.json/.env/scripts live
-# (default: ~/scriptorium). PSSCRIPTS_APP_DIR, the pre-rename env var, is
-# still honored as a fallback.
+# (default: ~/scriptorium).
 set -euo pipefail
 
-# SCRIPTORIUM_TEST_REPO_URL is an internal seam for hack/install-test's
-# hermetic harness ONLY — it points checkout-mode's git tracking at a local
-# sandboxed repo instead of the real GitHub URL so the test suite never
-# touches the network. Never set this yourself.
-REPO_URL="${SCRIPTORIUM_TEST_REPO_URL:-https://github.com/yshah-aromatech/scriptorium.git}"
 RELEASE_BASE="https://github.com/yshah-aromatech/scriptorium/releases/latest/download"
 
 say() { printf '\033[38;2;130;170;255m==>\033[0m %s\n' "$*"; }
@@ -44,7 +38,7 @@ if ! command -v pwsh >/dev/null 2>&1; then
 fi
 
 # --- app dir + mode detection ------------------------------------------------
-APP_DIR="${SCRIPTORIUM_APP_DIR:-${PSSCRIPTS_APP_DIR:-$HOME/scriptorium}}"
+APP_DIR="${SCRIPTORIUM_APP_DIR:-$HOME/scriptorium}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/dev/null}")" 2>/dev/null && pwd || true)"
 CHECKOUT_MODE=0
@@ -70,28 +64,15 @@ if [ "$CHECKOUT_MODE" = "1" ]; then
   fi
 
   # Repo tracking/self-update runs every invocation, even on an
-  # already-installed checkout — same safety asymmetry as before: a repo
-  # whose origin was already correct is NEVER reset (local work survives a
-  # re-run); a repo being converted from a foreign/repointed origin has no
-  # shared history to preserve, so a hard reset onto scriptorium main is
-  # safe there and nowhere else.
+  # already-installed checkout — never destructive: local work always
+  # survives a re-run, so a failed fast-forward is just left as is.
   if [ -d "$APP_DIR/.git" ]; then
     (
       cd "$APP_DIR"
-      OLD_URL="$(git remote get-url origin 2>/dev/null || true)"
-      if [ "$OLD_URL" != "$REPO_URL" ]; then
-        say "repointing origin -> $REPO_URL"
-        git remote set-url origin "$REPO_URL"
-      fi
       say "updating from scriptorium..."
       git fetch origin
       if ! git pull --ff-only origin main 2>/dev/null; then
-        if [ "$OLD_URL" != "$REPO_URL" ]; then
-          say "old install history diverged — resetting to scriptorium main"
-          git reset --hard origin/main
-        else
-          say "NOTE: could not fast-forward (local changes or commits?) — left as is"
-        fi
+        say "NOTE: could not fast-forward (local changes or commits?) — left as is"
       fi
     )
   fi
@@ -144,13 +125,6 @@ say "installed: $LAUNCHER"
 mkdir -p "$APP_DIR"
 [ -f "$APP_DIR/config.json" ] || { cp "$EXAMPLES_DIR/config.json.example" "$APP_DIR/config.json"; say "created config.json — set scriptsRepo and n8nWebhookUrl"; }
 [ -f "$APP_DIR/.env" ]        || { cp "$EXAMPLES_DIR/.env.example" "$APP_DIR/.env";               say "created .env — set GITHUB_TOKEN"; }
-
-# --- legacy cleanup ----------------------------------------------------------
-# the pre-rename 'psscripts' launcher is retired — remove it if present
-if [ -e "$HOME/.local/bin/psscripts" ] || [ -L "$HOME/.local/bin/psscripts" ]; then
-  rm -f "$HOME/.local/bin/psscripts"
-  say "removed legacy 'psscripts' launcher"
-fi
 
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;

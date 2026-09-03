@@ -193,99 +193,6 @@ func TestSyncRedactsInjectedTokenURL(t *testing.T) {
 	}
 }
 
-// Ported from tests/Scripts.Tests.ps1 'migrates a legacy root-level clone
-// into the first repo subdir', extended to prove remote-URL matching (not
-// just "the first repo") picks the right target.
-func TestMigrateLayoutMatchesByRemoteURL(t *testing.T) {
-	remoteA := newFixtureRemote(t)
-	remoteB := newFixtureRemote(t)
-	cfg, paths := loadWithDataDir(t, `,"repos":[{"name":"repoa","url":"`+remoteA+`"},{"name":"repob","url":"`+remoteB+`"}]`)
-
-	// simulate a pre-migration root-level clone whose origin is remoteB —
-	// migration must pick repob, not the first configured repo (repoa).
-	if err := os.MkdirAll(paths.ScriptsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, paths.ScriptsDir, "init", "-b", "main")
-	runGit(t, paths.ScriptsDir, "remote", "add", "origin", remoteB)
-	writeFile(t, filepath.Join(paths.ScriptsDir, "oldscript", "main.ps1"), "x")
-
-	repos := scripts.Repos(cfg, paths)
-	var lines []string
-	scripts.MigrateLayout(repos, paths, func(l string) { lines = append(lines, l) })
-
-	if _, err := os.Stat(filepath.Join(paths.ScriptsDir, ".git")); !os.IsNotExist(err) {
-		t.Fatalf("root .git should be gone after migration, err=%v", err)
-	}
-	if _, err := os.Stat(filepath.Join(paths.ScriptsDir, "repob", ".git")); err != nil {
-		t.Fatalf("expected migrated clone under repob (remote-url match): %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(paths.ScriptsDir, "repob", "oldscript", "main.ps1")); err != nil {
-		t.Fatalf("expected oldscript to move with the clone: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(paths.ScriptsDir, "repoa")); !os.IsNotExist(err) {
-		t.Fatalf("repoa must not be used (remote matched repob), err=%v", err)
-	}
-	if !containsLine(lines, "migrating scripts clone to multi-repo layout: scripts/ -> scripts/repob/") {
-		t.Errorf("missing migration line: %v", lines)
-	}
-}
-
-// I2: remote-URL matching is case-insensitive, matching PS's default `-eq`
-// string comparison in Update-StoRepoLayout.
-func TestMigrateLayoutMatchesByRemoteURLCaseInsensitive(t *testing.T) {
-	remote := newFixtureRemote(t)
-	upper := strings.ToUpper(remote)
-	cfg, paths := loadWithDataDir(t, `,"repos":[{"name":"repoa","url":"`+upper+`"}]`)
-
-	if err := os.MkdirAll(paths.ScriptsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, paths.ScriptsDir, "init", "-b", "main")
-	runGit(t, paths.ScriptsDir, "remote", "add", "origin", remote) // lower-case remote; configured repo URL is upper-cased
-	writeFile(t, filepath.Join(paths.ScriptsDir, "oldscript", "main.ps1"), "x")
-
-	repos := scripts.Repos(cfg, paths)
-	var lines []string
-	scripts.MigrateLayout(repos, paths, func(l string) { lines = append(lines, l) })
-
-	if _, err := os.Stat(filepath.Join(paths.ScriptsDir, "repoa", ".git")); err != nil {
-		t.Fatalf("expected migrated clone under repoa (case-insensitive remote-url match): %v", err)
-	}
-	if !containsLine(lines, "migrating scripts clone to multi-repo layout: scripts/ -> scripts/repoa/") {
-		t.Errorf("missing migration line: %v", lines)
-	}
-}
-
-// M8: a stale ".migrating" sibling (left over from a prior failed
-// migration) makes the rename-aside fail; MigrateLayout must report FAILED
-// via onLine and leave the original clone untouched (sync will re-clone).
-func TestMigrateLayoutFailedWithStaleMigratingSibling(t *testing.T) {
-	remote := newFixtureRemote(t)
-	cfg, paths := loadWithDataDir(t, `,"repos":[{"name":"repoa","url":"`+remote+`"}]`)
-
-	if err := os.MkdirAll(paths.ScriptsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, paths.ScriptsDir, "init", "-b", "main")
-	runGit(t, paths.ScriptsDir, "remote", "add", "origin", remote)
-	writeFile(t, filepath.Join(paths.ScriptsDir, "oldscript", "main.ps1"), "x")
-
-	// a non-empty stale sibling forces os.Rename(ScriptsDir, tmp) to fail
-	writeFile(t, filepath.Join(paths.ScriptsDir+".migrating", "leftover.txt"), "stale")
-
-	repos := scripts.Repos(cfg, paths)
-	var lines []string
-	scripts.MigrateLayout(repos, paths, func(l string) { lines = append(lines, l) })
-
-	if !containsLine(lines, "layout migration FAILED") {
-		t.Fatalf("expected a FAILED line: %v", lines)
-	}
-	if _, err := os.Stat(filepath.Join(paths.ScriptsDir, ".git")); err != nil {
-		t.Fatalf("original clone should be left in place after a failed migration: %v", err)
-	}
-}
-
 // M8: the sync clean-exclude list survives a ROOT-level .env and a
 // __pycache__ dir, while a stray untracked file elsewhere is still cleaned.
 func TestSyncCleanSurvivesRootEnvAndPycacheStrayFileCleaned(t *testing.T) {
@@ -314,22 +221,6 @@ func TestSyncCleanSurvivesRootEnvAndPycacheStrayFileCleaned(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "junk.txt")); !os.IsNotExist(err) {
 		t.Errorf("junk.txt should have been cleaned, err=%v", err)
-	}
-}
-
-func TestMigrateLayoutSkippedForLegacy(t *testing.T) {
-	cfg, paths := loadWithDataDir(t, "")
-	repos := scripts.Repos(cfg, paths)
-	if !repos[0].Legacy {
-		t.Fatal("expected legacy repo")
-	}
-	if err := os.MkdirAll(filepath.Join(paths.ScriptsDir, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	var lines []string
-	scripts.MigrateLayout(repos, paths, func(l string) { lines = append(lines, l) })
-	if len(lines) != 0 {
-		t.Fatalf("expected no migration for a legacy layout: %v", lines)
 	}
 }
 

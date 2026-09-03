@@ -1,5 +1,5 @@
 // Package scripts ports src/Scripts.psm1: multi-repo sync (clone / hard
-// reset), the legacy-layout migration, and script discovery/detail.
+// reset) and script discovery/detail.
 package scripts
 
 import (
@@ -51,8 +51,8 @@ func sanitizeRepoName(s string) string {
 
 // normalizeRepoURL strips embedded credentials, a trailing .git, and
 // trailing slashes, so two spellings of the same remote compare equal
-// (src/Core.psm1's `$normalize` scriptblock, shared by AddRepoConfig's
-// duplicate check and Update-StoRepoLayout's remote match).
+// (src/Core.psm1's `$normalize` scriptblock, used by AddRepoConfig's
+// duplicate check).
 func normalizeRepoURL(u string) string {
 	u = credentialsPattern.ReplaceAllString(u, "//")
 	u = gitSuffixPattern.ReplaceAllString(u, "")

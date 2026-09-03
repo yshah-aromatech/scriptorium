@@ -23,29 +23,22 @@ import (
 	"sync"
 )
 
-// Block markers. The current pair is what this app writes; the legacy
-// (pre-rename) pair is still recognized on read, so an existing block keeps
-// showing its schedules and is rewritten under the current markers on the
-// next save. The separator is an em-dash (U+2014) — byte-identical with
+// Block markers. The separator is an em-dash (U+2014) — byte-identical with
 // Cron.psm1 and testdata/psfixtures/crontab/*.txt.
 const (
 	BlockStart = "# >>> scriptorium managed block — do not edit by hand >>>"
 	BlockEnd   = "# <<< scriptorium managed block <<<"
-
-	// Exported so internal/migrate can tell an adopted block from one still
-	// wearing the pre-rename markers.
-	LegacyBlockStart = "# >>> psscripts managed block — do not edit by hand >>>"
-	LegacyBlockEnd   = "# <<< psscripts managed block <<<"
 )
 
-func isBlockStart(line string) bool { return line == BlockStart || line == LegacyBlockStart }
-func isBlockEnd(line string) bool   { return line == BlockEnd || line == LegacyBlockEnd }
+func isBlockStart(line string) bool { return line == BlockStart }
+func isBlockEnd(line string) bool   { return line == BlockEnd }
 
 // Reader regexes, copied verbatim from Get-StoSchedules. They deliberately
 // match BOTH spellings of a managed line — the PowerShell app's
 // `'<pwsh>' -NoProfile -File scriptorium.ps1 --run '<name>'` and this
-// binary's `'<bin>' --run '<name>'` — so the two apps can read each other's
-// block during the migration window.
+// binary's `'<bin>' --run '<name>'` — so a block written by either app's
+// scriptorium.ps1/scriptorium reads correctly on the other, per the
+// pwsh-gated parity tests.
 var (
 	runNameRe = regexp.MustCompile(`--run '([^']+)'`)
 	exprRe    = regexp.MustCompile(`^(@\S+|(?:\S+\s+){4}\S+)\s+cd `)
@@ -139,9 +132,8 @@ func (c *Crontab) Lines() []string {
 	return lines
 }
 
-// Schedules maps script name -> cron expression for every managed line, under
-// either marker generation and in either spelling. A line whose expression
-// does not parse is skipped.
+// Schedules maps script name -> cron expression for every managed line, in
+// either spelling. A line whose expression does not parse is skipped.
 func (c *Crontab) Schedules() map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -151,34 +143,6 @@ func (c *Crontab) Schedules() map[string]string {
 func (c *Crontab) schedules() map[string]string {
 	lines, _ := c.Read()
 	return schedulesFromLines(lines)
-}
-
-// SchedulesFromLines is schedulesFromLines, exported for --migrate's preview
-// (internal/migrate.Preview): it derives the planned block from the SAME
-// lines snapshot the wipe-guard read already produced, rather than reading
-// the crontab a second time.
-func SchedulesFromLines(lines []string) map[string]string { return schedulesFromLines(lines) }
-
-// BlockLines returns the managed block's own lines (both markers inclusive,
-// either marker generation), or nil if lines has no block at all. Read-only,
-// no I/O — --migrate's preview uses this to show "the current managed
-// block" from an already-read snapshot.
-func BlockLines(lines []string) []string {
-	var block []string
-	inBlock := false
-	for _, line := range lines {
-		switch {
-		case isBlockStart(line):
-			inBlock = true
-			block = append(block, line)
-		case isBlockEnd(line):
-			block = append(block, line)
-			inBlock = false
-		case inBlock:
-			block = append(block, line)
-		}
-	}
-	return block
 }
 
 // schedulesFromLines is Schedules'/schedules' parser, extracted so Set/Remove
@@ -211,10 +175,10 @@ func schedulesFromLines(lines []string) map[string]string {
 	return m
 }
 
-// Save rewrites the managed block. Every line outside the block (either
-// marker generation) is kept in its original order and written FIRST; the
-// block is appended at the END with one line per schedule, names sorted.
-// An empty map removes the block entirely.
+// Save rewrites the managed block. Every line outside the block is kept in
+// its original order and written FIRST; the block is appended at the END
+// with one line per schedule, names sorted. An empty map removes the block
+// entirely.
 func (c *Crontab) Save(schedules map[string]string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -229,18 +193,9 @@ func (c *Crontab) save(schedules map[string]string) error {
 	return c.saveFromLines(lines, schedules)
 }
 
-// RenderBlock previews the block Save(schedules) would write — both
-// markers plus one line per schedule, or nil for an empty map — without
-// touching the crontab at all. --migrate's preview uses this (via
-// internal/migrate.Preview) to show "the block it would write" from a
-// schedule map it already derived from one read, so the rendering can never
-// drift from what an actual Save/Set/Remove call produces: both go through
-// this exact function.
-func (c *Crontab) RenderBlock(schedules map[string]string) []string {
-	return c.renderedBlock(schedules)
-}
-
-// renderedBlock is RenderBlock's implementation, shared with saveFromLines.
+// renderedBlock renders the block Save(schedules) writes — both markers
+// plus one line per schedule, or nil for an empty map. Shared with
+// saveFromLines so every write path produces byte-identical output.
 func (c *Crontab) renderedBlock(schedules map[string]string) []string {
 	if len(schedules) == 0 {
 		return nil

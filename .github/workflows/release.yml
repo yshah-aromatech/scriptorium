@@ -1,8 +1,7 @@
 name: Release
 
-# Dormant until a tag is pushed. Nothing in this repo pushes one — cutover
-# (docs/CUTOVER.md step 7) is the only place a `v*` tag is meant to land, and
-# that is an owner action.
+# Dormant until a tag is pushed. Nothing in this repo pushes one — pushing a
+# `v*` tag to cut a release is an owner action.
 on:
   push:
     tags:

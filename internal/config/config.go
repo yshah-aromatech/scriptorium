@@ -2,8 +2,7 @@
 // warning strings, and path layout of the PowerShell app (src/Core.psm1
 // Initialize-Sto). Unknown keys and non-numeric values for numeric keys
 // warn (byte-identical strings) instead of failing; invalid JSON is a
-// hard error. Load also performs the one-time default-dataDir migration
-// (~/.psscripts -> ~/.scriptorium) and creates the data directories.
+// hard error. Load also creates the data directories.
 package config
 
 import (
@@ -199,8 +198,7 @@ func defaultConfig() *Config {
 }
 
 // Load parses <appDir>/config.json (a missing file is not an error — the
-// defaults apply), resolves paths, performs the one-time default-dataDir
-// migration, and creates the data directories.
+// defaults apply), resolves paths, and creates the data directories.
 func Load(appDir string) (*Config, Paths, []string, error) {
 	cfg := defaultConfig()
 	var warnings []string
@@ -223,22 +221,6 @@ func Load(appDir string) (*Config, Paths, []string, error) {
 	dataDir := cfg.DataDir
 	if strings.HasPrefix(dataDir, "~") {
 		dataDir = home + dataDir[1:]
-	}
-
-	// one-time migration from the pre-rename data dir (~/.psscripts). Only
-	// when dataDir is the default — an explicit dataDir is never
-	// second-guessed.
-	if cfg.DataDir == defaultDataDir {
-		if _, err := os.Stat(dataDir); os.IsNotExist(err) {
-			legacy := filepath.Join(home, ".psscripts")
-			if _, err := os.Stat(legacy); err == nil {
-				if err := os.Rename(legacy, dataDir); err != nil {
-					warnings = append(warnings, fmt.Sprintf("could not migrate %s to %s: %v — using the new (empty) dir", legacy, dataDir, err))
-				} else {
-					warnings = append(warnings, fmt.Sprintf("migrated data dir: %s -> %s", legacy, dataDir))
-				}
-			}
-		}
 	}
 
 	paths := newPaths(appDir, dataDir)

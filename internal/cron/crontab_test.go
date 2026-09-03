@@ -91,8 +91,8 @@ func TestSchedulesParseGoldens(t *testing.T) {
 	if err := json.Unmarshal([]byte(fixture(t, "expected-schedules.json")), &want); err != nil {
 		t.Fatal(err)
 	}
-	if len(want) != 3 {
-		t.Fatalf("expected-schedules.json has %d files, want 3", len(want))
+	if len(want) != 2 {
+		t.Fatalf("expected-schedules.json has %d files, want 2", len(want))
 	}
 	for name, exp := range want {
 		t.Run(name, func(t *testing.T) {
@@ -159,10 +159,10 @@ func TestSaveFreshCrontabWritesSortedBlock(t *testing.T) {
 }
 
 // PS's Save-StoSchedules appends the block at the END: kept lines first, in
-// their original order, then the current-marker block. A legacy block is
-// stripped and re-emitted under the current markers.
+// their original order (even a line that appeared AFTER the block on read),
+// then the block.
 func TestSaveKeepsUnmanagedLinesFirstThenBlock(t *testing.T) {
-	f := &fakeRunner{out: fixture(t, "legacy.txt"), ok: true}
+	f := &fakeRunner{out: fixture(t, "current.txt"), ok: true}
 	ct := newCT(f)
 	if err := ct.Save(ct.Schedules()); err != nil {
 		t.Fatal(err)

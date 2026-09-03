@@ -242,19 +242,18 @@ func hostGoEnv(t *testing.T) []string {
 // needs it for checkout-mode detection to see or not see) under a fully
 // explicit, sandboxed environment: HOME, PATH (stubBin first), and extra
 // carries everything else the script or its stubs read (SCRIPTORIUM_APP_DIR,
-// FAKE_RELEASE_DIR, FAKE_UNAME_M, SCRIPTORIUM_TEST_REPO_URL, ...). Nothing
-// from the test process's own ambient environment leaks in except PATH's
-// tail (so real git/go/tar/grep/sha256sum are found) and Go's build cache.
+// FAKE_RELEASE_DIR, FAKE_UNAME_M, ...). Nothing from the test process's own
+// ambient environment leaks in except PATH's tail (so real
+// git/go/tar/grep/sha256sum are found) and Go's build cache.
 func runInstall(t *testing.T, scriptPath, home, stubBin string, extra map[string]string) runResult {
 	t.Helper()
 	env := []string{
 		"HOME=" + home,
 		"PATH=" + stubBin + string(os.PathListSeparator) + os.Getenv("PATH"),
-		// SCRIPTORIUM_APP_DIR/PSSCRIPTS_APP_DIR default to unset (bash's
-		// ${VAR:-default} treats "" identically to unset), so a test that
-		// wants the real chain default just omits them from extra.
+		// SCRIPTORIUM_APP_DIR defaults to unset (bash's ${VAR:-default}
+		// treats "" identically to unset), so a test that wants the real
+		// default just omits it from extra.
 		"SCRIPTORIUM_APP_DIR=",
-		"PSSCRIPTS_APP_DIR=",
 	}
 	env = append(env, hostGoEnv(t)...)
 	for k, v := range extra {
@@ -462,10 +461,10 @@ func TestArchDetectTable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// 5. legacy launcher + psscripts cleanup
+// 5. old script-based launcher gets replaced by the binary
 // ---------------------------------------------------------------------
 
-func TestLegacyLauncherAndPsscriptsCleanup(t *testing.T) {
+func TestOldLauncherScriptReplaced(t *testing.T) {
 	home := t.TempDir()
 	stubBin := newStubBin(t)
 	pipeDir := t.TempDir()
@@ -477,9 +476,6 @@ func TestLegacyLauncherAndPsscriptsCleanup(t *testing.T) {
 	}
 	oldLauncher := filepath.Join(localBin, "scriptorium")
 	if err := os.WriteFile(oldLauncher, []byte("#!/usr/bin/env bash\nexec pwsh -File scriptorium.ps1 \"$@\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(localBin, "psscripts"), []byte("#!/usr/bin/env bash\nexec scriptorium \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -496,13 +492,7 @@ func TestLegacyLauncherAndPsscriptsCleanup(t *testing.T) {
 	if !strings.Contains(res.combined(), "replacing the old launcher script") {
 		t.Errorf("output missing the old-launcher announcement:\n%s", res.combined())
 	}
-	if !strings.Contains(res.combined(), "removed legacy 'psscripts' launcher") {
-		t.Errorf("output missing the psscripts cleanup announcement:\n%s", res.combined())
-	}
 	assertFileContent(t, oldLauncher, "fake-binary-v1")
-	if _, err := os.Stat(filepath.Join(localBin, "psscripts")); err == nil {
-		t.Error("psscripts launcher was not removed")
-	}
 }
 
 // ---------------------------------------------------------------------
@@ -548,7 +538,7 @@ func TestNoPathWarningWhenAlreadyOnPath(t *testing.T) {
 	cmd.Env = []string{
 		"HOME=" + home,
 		"PATH=" + localBin + string(os.PathListSeparator) + stubBin + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"SCRIPTORIUM_APP_DIR=", "PSSCRIPTS_APP_DIR=",
+		"SCRIPTORIUM_APP_DIR=",
 		"FAKE_RELEASE_DIR=" + release, "FAKE_UNAME_M=x86_64",
 	}
 	var out bytes.Buffer
@@ -648,11 +638,12 @@ func newBareRepoWithCommit(t *testing.T, root, name, marker string) (bareURL str
 }
 
 // ---------------------------------------------------------------------
-// 7. checkout mode: correct origin, local history diverged -> NOTE only,
-//    tree untouched
+// 7. checkout mode: a failed fast-forward is never destructive — NOTE
+//    only, tree left exactly as it was. Checkout-mode git handling is
+//    just `fetch` + `pull --ff-only`; there is no other branch to test.
 // ---------------------------------------------------------------------
 
-func TestCheckoutModeCorrectOriginDivergenceLeavesTreeUntouched(t *testing.T) {
+func TestCheckoutModeFastForwardFailureLeavesTreeUntouched(t *testing.T) {
 	root := t.TempDir()
 	canonical := newBareRepoWithCommit(t, root, "canonical", "canonical")
 
@@ -681,20 +672,13 @@ func TestCheckoutModeCorrectOriginDivergenceLeavesTreeUntouched(t *testing.T) {
 	stubBin := newStubBin(t)
 	script := copyInstallSh(t, appDir)
 
-	res := runInstall(t, script, home, stubBin, map[string]string{
-		"SCRIPTORIUM_TEST_REPO_URL": canonical,
-	})
+	res := runInstall(t, script, home, stubBin, nil)
 	if res.exitCode != 0 {
 		t.Fatalf("exit = %d, output:\n%s", res.exitCode, res.combined())
 	}
 
 	if !strings.Contains(res.combined(), "NOTE: could not fast-forward") {
 		t.Errorf("output missing the ff-failure NOTE:\n%s", res.combined())
-	}
-	for _, unwanted := range []string{"repointing origin", "resetting to scriptorium main"} {
-		if strings.Contains(res.combined(), unwanted) {
-			t.Errorf("output contains %q — the correct-origin path must never reset\n%s", unwanted, res.combined())
-		}
 	}
 
 	if got := strings.TrimSpace(runGit(t, appDir, nil, "rev-parse", "HEAD")); got != localHead {
@@ -705,57 +689,6 @@ func TestCheckoutModeCorrectOriginDivergenceLeavesTreeUntouched(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(appDir, "REMOTE_ADVANCE.txt")); err == nil {
 		t.Error("the remote's file appeared — a merge/reset happened when it must not have")
-	}
-	assertExecutable(t, filepath.Join(home, ".local", "bin", "scriptorium"))
-}
-
-// ---------------------------------------------------------------------
-// 8. checkout mode: repointed (foreign) origin -> hard reset onto canonical
-// ---------------------------------------------------------------------
-
-func TestCheckoutModeRepointedOriginResets(t *testing.T) {
-	root := t.TempDir()
-	canonical := newBareRepoWithCommit(t, root, "canonical", "canonical")
-	foreign := newBareRepoWithCommit(t, root, "foreign", "foreign")
-
-	appDir := filepath.Join(root, "appdir")
-	runGit(t, root, nil, "clone", foreign, appDir)
-	if got := strings.TrimSpace(runGit(t, appDir, nil, "remote", "get-url", "origin")); got != foreign {
-		t.Fatalf("test setup: origin = %q, want %q", got, foreign)
-	}
-
-	home := t.TempDir()
-	stubBin := newStubBin(t)
-	script := copyInstallSh(t, appDir)
-
-	res := runInstall(t, script, home, stubBin, map[string]string{
-		"SCRIPTORIUM_TEST_REPO_URL": canonical,
-	})
-	if res.exitCode != 0 {
-		t.Fatalf("exit = %d, output:\n%s", res.exitCode, res.combined())
-	}
-
-	for _, want := range []string{"repointing origin -> " + canonical, "old install history diverged — resetting to scriptorium main"} {
-		if !strings.Contains(res.combined(), want) {
-			t.Errorf("output missing %q\ngot:\n%s", want, res.combined())
-		}
-	}
-	if strings.Contains(res.combined(), "NOTE: could not fast-forward") {
-		t.Errorf("output contains the ff-failure NOTE — the repointed path must reset, not note\n%s", res.combined())
-	}
-
-	if got := strings.TrimSpace(runGit(t, appDir, nil, "remote", "get-url", "origin")); got != canonical {
-		t.Errorf("origin = %q, want repointed to %q", got, canonical)
-	}
-	if _, err := os.Stat(filepath.Join(appDir, "MARKER.txt")); err != nil {
-		t.Fatal(err)
-	}
-	marker, err := os.ReadFile(filepath.Join(appDir, "MARKER.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(marker)) != "canonical" {
-		t.Errorf("MARKER.txt = %q after reset, want the canonical repo's content", marker)
 	}
 	assertExecutable(t, filepath.Join(home, ".local", "bin", "scriptorium"))
 }

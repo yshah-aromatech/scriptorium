@@ -37,9 +37,8 @@ type App struct {
 
 // Open loads config.json and the app .env, wires the stores and the webhook
 // client, and runs the best-effort startup prune. Warnings collects every
-// non-fatal problem found along the way (config.json key/type warnings, the
-// legacy data-dir migration note); the caller prints them, it never fails
-// the open.
+// non-fatal problem found along the way (config.json key/type warnings); the
+// caller prints them, it never fails the open.
 func Open(appDir string) (*App, error) { return OpenWith(appDir, nil) }
 
 // OpenWith is Open with the crontab command injected — a nil runner means the

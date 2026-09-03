@@ -107,6 +107,14 @@ below 14 body rows (as today); History drops to when/status/script/duration; bel
 
 ## 5. Parity & migration strategy
 
+> **2026-09-02:** migration machinery removed — fresh-install cutover chosen by the
+> owner. The first-run migration bullet below (and decisions #1/#6 above) describe
+> what was actually built and shipped through P7; none of it survives now that the
+> owner ruled out ever transitioning an existing PowerShell-era install. This doc is
+> left as the historical record — see `docs/superpowers/specs/2026-09-01-go-rebuild-parity-inventory.md`
+> §3.13 for the retired inventory and `.superpowers/sdd/cutover-removal-report.md`
+> for the removal itself.
+
 - `hack/gen-fixtures.ps1` (run once against the PS app) freezes: mixed-era
   history.jsonl, webhook-queue.jsonl, missed-state.json, three crontab fixtures,
   config corpus, .env corpus, run log, recorded MCP request/response pairs, the cron

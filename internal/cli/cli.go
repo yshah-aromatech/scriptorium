@@ -24,7 +24,6 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/format"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/mcp"
-	"github.com/yshah-aromatech/scriptorium/internal/migrate"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 	"github.com/yshah-aromatech/scriptorium/internal/tui"
@@ -37,25 +36,21 @@ import (
 // config.json/.env live without any extra ceremony:
 //
 //  1. $SCRIPTORIUM_APP_DIR, when set (explicit override, either mode).
-//  2. $PSSCRIPTS_APP_DIR, the pre-rename env var (install.sh still honors it).
-//  3. the executable's own directory, when a config.json lives there (an
+//  2. the executable's own directory, when a config.json lives there (an
 //     installed binary shipped beside its config).
-//  4. the current working directory, when a config.json lives there — this
+//  3. the current working directory, when a config.json lives there — this
 //     is what makes a cron line's `cd "$APP_DIR" && scriptorium --run ...`
 //     resolve correctly, and it's also the dev-checkout convenience of
 //     running `./scriptorium` from a repo root.
-//  5. install.sh's own default, ~/scriptorium — so a bare `scriptorium`
+//  4. install.sh's own default, ~/scriptorium — so a bare `scriptorium`
 //     typed from anywhere after a fresh install finds what install.sh just
 //     bootstrapped there.
-//  6. the current working directory, unconditionally, as the last resort.
+//  5. the current working directory, unconditionally, as the last resort.
 //
 // Tests drive step 1 via the env var; nothing here needs config.json to
 // exist for a fresh install (config.Load's own defaults apply either way).
 func ResolveAppDir() string {
 	if d := os.Getenv("SCRIPTORIUM_APP_DIR"); d != "" {
-		return d
-	}
-	if d := os.Getenv("PSSCRIPTS_APP_DIR"); d != "" {
 		return d
 	}
 	if exe, err := os.Executable(); err == nil {
@@ -102,7 +97,6 @@ var helpLines = []string{
 	"  scriptorium --history [name]        print recent runs (optionally one script)",
 	"  scriptorium --mcp [--port <n>]      serve the MCP server (for n8n AI agents)",
 	"  scriptorium --install-mcp-service   install + start the MCP server as a systemd service",
-	"  scriptorium --migrate       one-shot: adopt the crontab's managed block under this binary (cutover)",
 	"  scriptorium --help",
 	"  scriptorium --version",
 	"",
@@ -127,7 +121,6 @@ type flags struct {
 	listRepos       bool
 	showHelp        bool
 	showVersion     bool
-	migrate         bool
 }
 
 // argAt returns args[i], or "" when i is out of range — matching PS's
@@ -177,8 +170,6 @@ func parseFlags(args []string) flags {
 			i++
 		case "--install-mcp-service":
 			f.mcpInstall = true
-		case "--migrate":
-			f.migrate = true
 		case "--history":
 			f.historyOnly = true
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
@@ -222,8 +213,6 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return runListRepos(a, stdout)
 	case f.mcpInstall:
 		return runInstallMcpService(a, stdout, stderr)
-	case f.migrate:
-		return runMigrate(a, stdout, stderr)
 	case f.mcpOnly:
 		return runMcp(a, f, stdout, stderr)
 	case f.listOnly:
@@ -376,52 +365,6 @@ func runInstallMcpService(a *app.App, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
-}
-
-// runMigrate is --migrate: the ONLY entry point that ever rewrites the
-// managed crontab block (ruling 3 — never invoked implicitly by anything
-// else). It always prints the current block and the block it would write
-// before doing anything, then runs migrate.Crontab. A failed read is the
-// wipe guard: the exact error, to stderr, exit 1, nothing printed or
-// touched beyond the preview above. A second run against an
-// already-adopted block reports "already migrated" and changes nothing —
-// migrate.Crontab itself is what makes that true, this just reports it.
-func runMigrate(a *app.App, stdout, stderr io.Writer) int {
-	ct := a.Cron
-	current, planned, err := migrate.Preview(ct)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	fmt.Fprintln(stdout, "current managed block:")
-	printBlock(stdout, current)
-	fmt.Fprintln(stdout, "block to write:")
-	printBlock(stdout, planned)
-
-	changed, err := migrate.Crontab(ct, a.Paths.DataDir)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	if !changed {
-		fmt.Fprintln(stdout, "already migrated — nothing to do")
-		return 0
-	}
-	fmt.Fprintln(stdout, "crontab backed up to: "+migrate.LatestBackup(a.Paths.DataDir))
-	fmt.Fprintln(stdout, "migrated: the managed block now invokes this binary directly")
-	return 0
-}
-
-// printBlock renders a managed block (or its absence) the way --migrate's
-// preview shows both the current and planned blocks.
-func printBlock(w io.Writer, lines []string) {
-	if len(lines) == 0 {
-		fmt.Fprintln(w, "  (none)")
-		return
-	}
-	for _, l := range lines {
-		fmt.Fprintln(w, "  "+l)
-	}
 }
 
 // runHistory is --history [name]. Rendering matches Get-StoDuration.

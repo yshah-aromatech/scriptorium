@@ -79,9 +79,9 @@ func SyncOne(ctx context.Context, repo Repo, reg *secret.Registry, onLine func(s
 	return ok
 }
 
-// Sync is the port of Sync-StoRepo: migrates the legacy single-repo layout
-// if needed, then syncs every URL-configured repo, each step continuing
-// past a prior repo's failure (the caller sees the aggregate result).
+// Sync is the port of Sync-StoRepo: syncs every URL-configured repo, each
+// step continuing past a prior repo's failure (the caller sees the
+// aggregate result).
 func Sync(ctx context.Context, cfg *config.Config, paths config.Paths, reg *secret.Registry, onLine func(string)) bool {
 	all := Repos(cfg, paths)
 
@@ -96,8 +96,6 @@ func Sync(ctx context.Context, cfg *config.Config, paths config.Paths, reg *secr
 		return false
 	}
 
-	MigrateLayout(all, paths, onLine)
-
 	allOk := true
 	for _, repo := range withURL {
 		if !SyncOne(ctx, repo, reg, onLine) {
@@ -105,47 +103,6 @@ func Sync(ctx context.Context, cfg *config.Config, paths config.Paths, reg *secr
 		}
 	}
 	return allOk
-}
-
-// MigrateLayout is the port of Update-StoRepoLayout: the legacy layout
-// keeps the single clone at ScriptsDir itself; multi-repo clones live at
-// ScriptsDir/<name>. When repos are configured (non-legacy) and an old
-// root-level clone exists, move it into the subdir of the repo it matches
-// by normalized remote URL, else the first configured repo.
-func MigrateLayout(repos []Repo, paths config.Paths, onLine func(string)) {
-	if len(repos) == 0 || repos[0].Legacy {
-		return
-	}
-	if _, err := os.Stat(filepath.Join(paths.ScriptsDir, ".git")); err != nil {
-		return
-	}
-
-	target := repos[0]
-	remote := gitRemoteURL(paths.ScriptsDir)
-	for _, r := range repos {
-		if strings.EqualFold(normalizeRepoURL(remote), normalizeRepoURL(r.URL)) {
-			target = r
-			break
-		}
-	}
-
-	onLine(fmt.Sprintf("migrating scripts clone to multi-repo layout: scripts/ -> scripts/%s/", target.Name))
-	tmp := paths.ScriptsDir + ".migrating"
-	fail := func(err error) {
-		onLine(fmt.Sprintf("layout migration FAILED: %v — sync will re-clone instead", err))
-	}
-	if err := os.Rename(paths.ScriptsDir, tmp); err != nil {
-		fail(err)
-		return
-	}
-	if err := os.MkdirAll(paths.ScriptsDir, 0o755); err != nil {
-		fail(err)
-		return
-	}
-	if err := os.Rename(tmp, filepath.Join(paths.ScriptsDir, target.Name)); err != nil {
-		fail(err)
-		return
-	}
 }
 
 // LastSyncTime is the port of Get-StoLastSyncTime: the newest of every
@@ -165,16 +122,6 @@ func LastSyncTime(repos []Repo) time.Time {
 		}
 	}
 	return latest
-}
-
-// gitRemoteURL returns origin's URL, or "" on any error (no repo, no
-// remote, git not found) — mirrors PS's try/catch-swallowed lookup.
-func gitRemoteURL(dir string) string {
-	out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // emitLines splits git's combined output into non-empty lines, matching PS

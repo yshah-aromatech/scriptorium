@@ -92,14 +92,8 @@ func (in *Installer) println(s string) {
 	}
 }
 
-func (in *Installer) exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 // Install ports Install-StoMcpService: writes the unit (root path:
-// /etc/systemd/system; non-root: ~/.config/systemd/user + linger),
-// retiring the pre-rename psscripts-mcp unit first if present, then
+// /etc/systemd/system; non-root: ~/.config/systemd/user + linger), then
 // daemon-reload/enable/restart (never enable --now, so re-running the
 // command after a config change actually applies it).
 func (in *Installer) Install(appDir, execPath, token string) error {
@@ -114,13 +108,6 @@ func (in *Installer) Install(appDir, execPath, token string) error {
 }
 
 func (in *Installer) installSystem(unit string) error {
-	legacyUnit := filepath.Join(in.Root, "/etc/systemd/system/psscripts-mcp.service")
-	if in.exists(legacyUnit) {
-		_ = in.run("systemctl", "disable", "--now", "psscripts-mcp")
-		_ = os.Remove(legacyUnit)
-		in.println("removed pre-rename service: psscripts-mcp")
-	}
-
 	unitFile := filepath.Join(in.Root, "/etc/systemd/system/scriptorium-mcp.service")
 	if err := os.MkdirAll(filepath.Dir(unitFile), 0o755); err != nil {
 		return err
@@ -154,13 +141,6 @@ func (in *Installer) installUser(unit string) error {
 	unitDir := filepath.Join(in.Root, home, ".config", "systemd", "user")
 	if err := os.MkdirAll(unitDir, 0o755); err != nil {
 		return err
-	}
-
-	legacyUnit := filepath.Join(unitDir, "psscripts-mcp.service")
-	if in.exists(legacyUnit) {
-		_ = in.run("systemctl", "--user", "disable", "--now", "psscripts-mcp")
-		_ = os.Remove(legacyUnit)
-		in.println("removed pre-rename user service: psscripts-mcp")
 	}
 
 	unitFile := filepath.Join(unitDir, "scriptorium-mcp.service")

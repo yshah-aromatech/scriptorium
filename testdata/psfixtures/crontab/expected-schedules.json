@@ -3,10 +3,6 @@
     "fast-job": "*/10 * * * *",
     "nightly": "0 2 * * *"
   },
-  "legacy.txt": {
-    "fast-job": "*/10 * * * *",
-    "nightly": "0 2 * * *"
-  },
   "interleaved.txt": {
     "solo": "5 5 * * *"
   }

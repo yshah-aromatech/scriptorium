@@ -65,7 +65,7 @@ func TestRequiredFixturesExist(t *testing.T) {
 		"webhook-queue.jsonl", "missed-state.json", "run.log",
 		"cron-validate.csv",
 		"env-corpus/expected.json", "config-corpus/warnings.txt",
-		"crontab/current.txt", "crontab/legacy.txt", "crontab/interleaved.txt",
+		"crontab/current.txt", "crontab/interleaved.txt",
 		"crontab/expected-schedules.json",
 		"mcp/01-initialize.response.json", "mcp/04-notification.response.json",
 		"mcp/10-unauthorized.response.json", "mcp/11-batch-rejected.response.json",

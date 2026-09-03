@@ -160,54 +160,6 @@ func TestMissingConfigUsesDefaultsAndTildeExpansion(t *testing.T) {
 	}
 }
 
-func TestLegacyDataDirMigration(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	legacy := filepath.Join(home, ".psscripts")
-	if err := os.MkdirAll(filepath.Join(legacy, "logs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "history.jsonl"), []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, paths, warns, err := config.Load(appDirWith(t, ""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(paths.DataDir, "history.jsonl")); err != nil {
-		t.Fatalf("migrated history missing: %v", err)
-	}
-	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
-		t.Fatalf("legacy dir still present: %v", err)
-	}
-	found := false
-	for _, w := range warns {
-		if strings.HasPrefix(w, "migrated data dir: ") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("migration warning missing: %v", warns)
-	}
-}
-
-func TestExplicitDataDirNeverMigrates(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	legacy := filepath.Join(home, ".psscripts")
-	if err := os.MkdirAll(legacy, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data := filepath.Join(t.TempDir(), "explicit")
-	_, _, _, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(legacy); err != nil {
-		t.Fatalf("explicit dataDir must not trigger migration: %v", err)
-	}
-}
-
 func TestLoadAppEnv(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("PHASE1_TEST_VAR=fromfile\nPHASE1_TEST_TOKEN=filesecret99\n"), 0o644); err != nil {
@@ -384,10 +336,10 @@ func TestConfigKeyMatchingIsCaseInsensitive(t *testing.T) {
 }
 
 // Phase 4 carry: config.Load's repos entry validation warnings, appended
-// AFTER the migration warning (PS order: key warnings -> migration ->
-// repos), ported from src/Core.psm1's Initialize-Sto repos-sanity block.
-// Entries stay in cfg.Repos — normalization skipping is scripts.Repos'
-// concern; these warnings are advisory PS parity only.
+// after key warnings (PS order: key warnings -> repos), ported from
+// src/Core.psm1's Initialize-Sto repos-sanity block. Entries stay in
+// cfg.Repos — normalization skipping is scripts.Repos' concern; these
+// warnings are advisory PS parity only.
 func TestReposWarningMissingURL(t *testing.T) {
 	data := filepath.Join(t.TempDir(), "data")
 	_, _, warns, err := config.Load(appDirWith(t, `{"dataDir":"`+data+`","repos":[{"name":"a"}]}`))
@@ -423,28 +375,6 @@ func TestReposWarningNullReposWarnsOnce(t *testing.T) {
 	want := "config.json: repos entry missing 'url' — skipped"
 	if len(warns) != 1 || warns[0] != want {
 		t.Fatalf("warns = %v, want [%q]", warns, want)
-	}
-}
-
-func TestReposWarningOrderAfterMigration(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	legacy := filepath.Join(home, ".psscripts")
-	if err := os.MkdirAll(legacy, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_, _, warns, err := config.Load(appDirWith(t, `{"repos":[{"url":""}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(warns) != 2 {
-		t.Fatalf("warns = %v, want 2 (migration + repos)", warns)
-	}
-	if !strings.HasPrefix(warns[0], "migrated data dir: ") {
-		t.Fatalf("warns[0] = %q, want the migration warning first", warns[0])
-	}
-	if warns[1] != "config.json: repos entry missing 'url' — skipped" {
-		t.Fatalf("warns[1] = %q", warns[1])
 	}
 }
 
