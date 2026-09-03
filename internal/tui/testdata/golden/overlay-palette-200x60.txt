@@ -6,7 +6,7 @@
 │  ✓ heartbeat      ping the uptime endpoint                                                                                      py ▄█▆▅▃▂ ↻ */10 * * * *    40s │ │    11h  backup-db                │
 │  ✓ nightly-report assemble and mail the ops digest                                                                              ps ▂▄▇█▆▃ ⚠ */5 * * * *      5h │ ╰──────────────────────────────────╯
 │  ▶ sync-orders    pull orders from the ERP into postgres                                                                        py ▃▆█▅▂▁                   12m │ ╭─ live now ───────────────────────╮
-│                                                                                                                                                                 │ │ ⠋ sync-orders↗    1m ·4242       │
+│                                                                                                                                                                 │ │ ⠼ sync-orders↗    1m ·4242       │
 │                                                                                                                                                                 │ ╰──────────────────────────────────╯
 │                                                                                                                                                                 │ ╭─ recent ─────────────────────────╮
 │                                                                                                                                                                 │ │ ✓ heartbe… py success ▄█▆▅▃▂  41s│

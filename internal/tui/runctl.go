@@ -127,12 +127,13 @@ func (r *runModel) onRunStarted(m *Model, msg RunStartedMsg) tea.Cmd {
 	r.startedAt = msg.StartedAt
 	r.etaSec = msg.EtaSec
 	r.doneRow = nil
+	r.etaFrom, r.etaAnchor = 0, msg.StartedAt // the ETA bar glides up from empty
 
 	r.out.begin("run: " + msg.Script.Name)
 	r.out.append("", banner("▶ "+msg.Script.Name+" · started "+
 		msg.StartedAt.Format("15:04:05"), r.out.contentWidth()))
 	r.selectByName(m, msg.Script.Name)
-	return tea.Batch(drainRun(msg.Handle), m.kickSpinner())
+	return drainRun(msg.Handle) // the root arms the animation clock
 }
 
 // onRunEvents appends one drained batch and re-issues the drain until the

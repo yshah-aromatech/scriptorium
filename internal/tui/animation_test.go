@@ -31,7 +31,7 @@ func clockedModel(t *testing.T) (*Model, func(time.Duration)) {
 const longName = "very-long-nightly-reconciliation-and-reporting-job"
 
 // withLongName adds a script whose name cannot fit the list column.
-func withLongName(t *testing.T, m *Model) {
+func withLongName(t testing.TB, m *Model) {
 	t.Helper()
 	m.scripts = append(m.scripts, scripts.Script{
 		Name: longName, Runtime: "powershell", Entry: "/tmp/x.ps1",
@@ -115,32 +115,37 @@ func TestMarqueeIsWiredToTheSelectedRowOnly(t *testing.T) {
 	}
 }
 
-// The beat is only scheduled while something actually scrolls — an idle list
-// must cost nothing (§12.10's budget rule).
-func TestMarqueeTicksOnlyWhenSomethingScrolls(t *testing.T) {
+// DELIBERATE FLIP (v1.1.0 task 2): this test used to prove the marquee's own
+// standalone 165 ms tick was scheduled and stopped. That tick is dead — the
+// marquee now arms the SHARED 16 ms animation clock (anim.go), and this
+// proves the arming: an idle list arms nothing, a scrolling name arms the
+// clock exactly once, and the clock disarms itself when the scroll stops.
+func TestMarqueeArmsTheSharedFrameClock(t *testing.T) {
 	m, _ := clockedModel(t)
+	m.Update(LiveRunsMsg{})    // drop the fixture's live run: the marquee alone decides
+	m.Update(FrameMsg(frozen)) // one beat lets the clock notice and disarm
 	m.run.selectByName(m, "backup-db")
 	if m.run.marqueeRunning(m) {
 		t.Error("a name that fits its column is reported as scrolling")
 	}
-	if cmd := m.run.kickMarquee(m); cmd != nil {
-		t.Error("the marquee beat was scheduled with nothing to animate")
+	if cmd := m.kickAnim(); cmd != nil {
+		t.Error("the frame clock was armed with nothing to animate")
 	}
 
 	withLongName(t, m)
 	if !m.run.marqueeRunning(m) {
 		t.Fatal("an overflowing selected name is not reported as scrolling")
 	}
-	if cmd := m.run.kickMarquee(m); cmd == nil {
-		t.Fatal("no marquee beat was scheduled for a scrolling name")
+	if cmd := m.kickAnim(); cmd == nil {
+		t.Fatal("the frame clock was not armed for a scrolling name")
 	}
-	if cmd := m.run.kickMarquee(m); cmd != nil {
-		t.Error("a second beat was scheduled while one was already running")
+	if cmd := m.kickAnim(); cmd != nil {
+		t.Error("the clock was armed a second time while already running")
 	}
-	// and it stops itself once the selection moves back to a short name
+	// and it disarms itself once the selection moves back to a short name
 	m.run.selectByName(m, "backup-db")
-	if cmd := m.run.onMarqueeTick(m); cmd != nil || m.run.marqueeOn {
-		t.Error("the beat kept running with nothing left to animate")
+	if cmd := m.onFrame(); cmd != nil || m.animOn {
+		t.Error("the clock kept running with nothing left to animate")
 	}
 }
 
@@ -186,20 +191,27 @@ func TestStatusFadeWindow(t *testing.T) {
 		t.Error("the message outlived its window")
 	}
 
-	// the 1 Hz beat schedules the dissolve only when one is nearly due, and
-	// the tick clears the message at the end of it
-	advance(0)
-	if cmd := m.fadeCmd(); cmd != nil {
-		t.Error("a fresh message scheduled fade frames it does not need yet")
+	// DELIBERATE FLIP (v1.1.0 task 2): the 100 ms standalone fade tick
+	// (StatusFadeMsg/fadeCmd) is dead. The 1 Hz beat arms the SHARED 16 ms
+	// animation clock only when a dissolve is nearly due, and the clock both
+	// clears the message at the end and then disarms itself.
+	m.Update(LiveRunsMsg{})    // drop the fixture's live run: the fade alone decides
+	advance(0)                 // rewind to the message's fresh instant
+	m.Update(FrameMsg(frozen)) // one beat lets the clock notice and disarm
+	if cmd := m.kickAnim(); cmd != nil {
+		t.Error("a fresh message armed the frame clock it does not need yet")
 	}
 	advance(statusFadeAt)
-	if cmd := m.fadeCmd(); cmd == nil {
-		t.Error("no fade frames were scheduled inside the window")
+	if cmd := m.kickAnim(); cmd == nil {
+		t.Error("the frame clock was not armed inside the fade window")
 	}
 	advance(statusTTL)
-	m.Update(StatusFadeMsg(m.now()))
+	m.Update(FrameMsg(m.now()))
 	if m.statusText != "" {
-		t.Errorf("the fade tick left the message up: %q", m.statusText)
+		t.Errorf("the frame beat left an expired message up: %q", m.statusText)
+	}
+	if m.animOn {
+		t.Error("the clock stayed armed after the fade finished")
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
 
-func runAt(t *testing.T, w, h int) *Model {
+func runAt(t testing.TB, w, h int) *Model {
 	t.Helper()
 	m := newFixtureModel(t, truecolorEnv)
 	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
@@ -296,7 +296,9 @@ func TestFramesRenderUnderAHostileEnvironment(t *testing.T) {
 }
 
 // The ETA bar follows the INJECTED theme, not the one New picked up from the
-// environment — the ordering bug that let the ambient profile leak in.
+// environment — the ordering bug that let the ambient profile leak in. Since
+// v1.1.0 the bar is anim.go's etaBar: styled from the theme at render time,
+// so a swapped theme takes effect on the very next frame.
 func TestProgressBarFollowsTheInjectedTheme(t *testing.T) {
 	m := runAt(t, 120, 40)
 	m.run.handle = fakeHandle("backup-db")
@@ -313,8 +315,8 @@ func TestProgressBarFollowsTheInjectedTheme(t *testing.T) {
 	if strings.Contains(plain, "\x1b[") {
 		t.Errorf("an ascii theme still emitted colour: %q", plain)
 	}
-	if m.run.prog.Width() != etaBarWidth {
-		t.Errorf("bar width = %d, want the layout's %d", m.run.prog.Width(), etaBarWidth)
+	if got := textkit.VisibleWidth(textkit.StripANSI(etaBar(m.th, 0.5, etaBarWidth))); got != etaBarWidth {
+		t.Errorf("bar width = %d, want the layout's %d", got, etaBarWidth)
 	}
 }
 

@@ -298,26 +298,27 @@ func TestActivityCard(t *testing.T) {
 	}
 }
 
-// The spinner only ticks while something is live, so an idle TUI is idle.
-func TestSpinnerOnlyRunsWhileSomethingIs(t *testing.T) {
+// The animation clock only runs while something is live — an idle TUI is idle
+// (v1.1.0 task 2: the spinner rides the shared 16 ms clock, anim.go).
+func TestAnimClockOnlyRunsWhileSomethingIs(t *testing.T) {
 	m := fleetAt(t, 120, 40)
-	if !m.animating() || !m.spinOn {
-		t.Fatal("a live lock did not start the spinner")
+	if !m.animLive() || !m.animOn {
+		t.Fatal("a live lock did not arm the animation clock")
 	}
 	m.Update(LiveRunsMsg(nil))
-	if m.animating() {
+	if m.animLive() {
 		t.Fatal("no locks, still animating")
 	}
-	if _, cmd := m.Update(m.spin.Tick()); cmd != nil {
-		t.Error("the spinner kept ticking with nothing running")
+	if _, cmd := m.Update(FrameMsg(frozen)); cmd != nil {
+		t.Error("the clock kept ticking with nothing running")
 	}
-	if m.spinOn {
-		t.Error("the spinner did not release its ticker")
+	if m.animOn {
+		t.Error("the clock did not release its ticker")
 	}
-	// and it restarts when something becomes live again
+	// and it re-arms when something becomes live again
 	m.Update(LiveRunsMsg{{Name: "backup-db", OwnerPID: 7, StartedAt: frozen}})
-	if !m.spinOn {
-		t.Error("a new live run did not restart the spinner")
+	if !m.animOn {
+		t.Error("a new live run did not re-arm the clock")
 	}
 }
 

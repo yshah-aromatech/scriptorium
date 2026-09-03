@@ -9,7 +9,6 @@ import (
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -63,16 +62,10 @@ const (
 	// A transient status line holds for statusFadeAt, then dissolves into the
 	// background over the remaining statusTTL-statusFadeAt (inventory §1.12 and
 	// Get-TuiStatusLine: visible while age < 6s, blending from 5.2s over 0.8s).
-	// The PS main loop keeps redrawing across a slightly wider 5.2-6.3s window
-	// so the last frame of the fade is never the one left on screen; the
-	// equivalent here is statusFadeStep, which keeps ticking to the end.
+	// The dissolve itself is per-frame on the animation clock (anim.go): true
+	// color interpolation under truecolor, stepped below it.
 	statusFadeAt = 5200 * time.Millisecond
 	statusTTL    = 6 * time.Second
-
-	// statusFadeStep is the fade's frame rate — fast enough to read as a
-	// dissolve, slow enough that a status message costs eight frames, not
-	// eighty. Nothing schedules it until a message is nearly due to fade.
-	statusFadeStep = 100 * time.Millisecond
 )
 
 // Model is the root. It owns the terminal size, the current view, pane focus
@@ -110,11 +103,10 @@ type Model struct {
 	missed    map[string]missed.Miss
 	syncedAt  time.Time
 
-	// spin is the shared run spinner. It only ticks while something is
-	// actually running (§12.10's budget rule: an idle TUI should cost nothing),
-	// so an idle session is genuinely idle.
-	spin   spinner.Model
-	spinOn bool
+	// animOn is whether the 16 ms animation clock (anim.go) is armed. It only
+	// runs while something on screen is actually moving (§12.10's budget rule:
+	// an idle TUI costs nothing), so an idle session is genuinely idle.
+	animOn bool
 
 	// historyScope is the script the History view is scoped to, "" for all of
 	// them. It lives here because two things set it: the Run view's `h`
@@ -136,26 +128,9 @@ type Model struct {
 	aiConvert func(text string) (string, error)
 }
 
-// spinnerFrame is the glyph any view showing "this is running" should use.
-func (m *Model) spinnerFrame() string { return m.spin.View() }
-
-// pulseTitleStyle is the live-now card's title voice: nil (the default panel
-// voice) while idle; the activity pulse animates it while anything runs
-// (task 2 wires the breathing — until then it stays the default).
-func (m *Model) pulseTitleStyle() *lipgloss.Style { return nil }
-
-// animating is true while there is something worth animating for.
-func (m *Model) animating() bool { return len(m.live) > 0 || m.run.active() }
-
-// kickSpinner starts the spinner ticking if something just became live, and
-// lets it stop otherwise.
-func (m *Model) kickSpinner() tea.Cmd {
-	if !m.animating() || m.spinOn {
-		return nil
-	}
-	m.spinOn = true
-	return m.spin.Tick
-}
+// spinnerFrame is the glyph any view showing "this is running" should use —
+// the braille spinner stepped off the clock (anim.go).
+func (m *Model) spinnerFrame() string { return spinnerGlyph(m.now()) }
 
 // New builds the root model. now is injectable for determinism; pass time.Now.
 func New(a *app.App, now func() time.Time) *Model {
@@ -165,17 +140,12 @@ func New(a *app.App, now func() time.Time) *Model {
 	host, _ := os.Hostname()
 	name := themeName(a)
 	m := &Model{
-		app:     a,
-		keys:    defaultKeys(),
-		help:    help.New(),
-		now:     now,
-		host:    host,
-		version: buildinfo.Version,
-		spin: spinner.New(spinner.WithSpinner(spinner.Spinner{
-			// the PS app's braille spinner, verbatim (inventory §1.12)
-			Frames: []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
-			FPS:    time.Second / 10,
-		})),
+		app:       a,
+		keys:      defaultKeys(),
+		help:      help.New(),
+		now:       now,
+		host:      host,
+		version:   buildinfo.Version,
 		statuses:  map[string]history.Last{},
 		schedules: map[string]string{},
 		missed:    map[string]missed.Miss{},
@@ -241,7 +211,6 @@ func (m *Model) useTheme(th theme.Theme) {
 	m.help.Styles.ShortSeparator = th.S.Border
 	m.help.Styles.Ellipsis = th.S.Muted
 	m.help.ShortSeparator = " · "
-	m.run.applyTheme(th)
 }
 
 // Init starts the three tickers and the first data load. Every command here
@@ -296,17 +265,6 @@ func missedTickCmd() tea.Cmd {
 	return tea.Tick(60*time.Second, func(t time.Time) tea.Msg { return MissedTickMsg(t) })
 }
 
-// fadeCmd schedules the next fade frame, and only while one is due: a status
-// message is repainted at 10 Hz for the last ~2 s of its life and not one frame
-// before that. It is spawned from the 1 Hz beat rather than from the message
-// itself, so posting a status never commits the program to a timer.
-func (m *Model) fadeCmd() tea.Cmd {
-	if m.statusText == "" || m.now().Sub(m.statusAt) < statusFadeAt-time.Second {
-		return nil
-	}
-	return tea.Tick(statusFadeStep, func(t time.Time) tea.Msg { return StatusFadeMsg(t) })
-}
-
 // loadFleet gathers everything the Fleet view reads, off the update loop.
 func (m *Model) loadFleet() tea.Cmd {
 	a := m.app
@@ -347,12 +305,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		// the marquee restarts on every selection move, whatever moved it, so
-		// the beat is (re)started after the key rather than inside each handler
-		return m, tea.Batch(m.onKey(msg), m.run.kickMarquee(m))
+		// a key can start anything moving — a selection move restarts the
+		// marquee, r starts a run — so the animation clock is (re)armed after
+		// the key rather than inside each handler
+		return m, tea.Batch(m.onKey(msg), m.kickAnim())
 
-	case MarqueeTickMsg:
-		return m, m.run.onMarqueeTick(m)
+	case FrameMsg:
+		return m, m.onFrame()
 
 	case TickMsg:
 		if m.statusText != "" && m.now().Sub(m.statusAt) > statusTTL {
@@ -360,22 +319,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// the 1 Hz beat is also the queue's second chance: RunDoneMsg drains it
 		// first, and this catches an entry that was queued while the gate said
-		// no (inventory §4.11 drains one per loop iteration).
-		return m, tea.Batch(tickCmd(), m.run.dequeue(m), m.fadeCmd())
-
-	case StatusFadeMsg:
-		if m.statusText != "" && m.now().Sub(m.statusAt) >= statusTTL {
-			m.statusText = ""
-			return m, nil
-		}
-		return m, m.fadeCmd()
+		// no (inventory §4.11 drains one per loop iteration). And it is what
+		// arms the animation clock when a status message comes due to fade.
+		return m, tea.Batch(tickCmd(), m.run.dequeue(m), m.kickAnim())
 
 	case RunStartedMsg, RunQueuedMsg, RunEventsMsg, RunDoneMsg, TaskEventsMsg,
 		DepsScannedMsg, LogLoadedMsg, ClipboardMsg:
 		// run and sync traffic belongs to the Run view wherever the user is
 		// standing: a run started from Fleet must keep draining while they read
 		// the History screen.
-		return m, m.run.update(m, msg)
+		return m, tea.Batch(m.run.update(m, msg), m.kickAnim())
 
 	case LockPollMsg:
 		return m, tea.Batch(m.scanLocks(), lockPollCmd())
@@ -385,16 +338,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case LiveRunsMsg:
 		m.live = msg
-		return m, m.kickSpinner()
-
-	case spinner.TickMsg:
-		if !m.animating() {
-			m.spinOn = false // nothing is running: stop burning frames
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.spin, cmd = m.spin.Update(msg)
-		return m, cmd
+		return m, m.kickAnim()
 
 	case MissedMsg:
 		return m, m.onMissed(msg)
@@ -404,7 +348,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.schedules, m.recent, m.syncedAt = msg.Schedules, msg.Recent, msg.SyncedAt
 		m.fleet.reload(m)
 		m.run.reload(m)
-		return m, m.run.kickMarquee(m)
+		return m, m.kickAnim()
 
 	case HistoryLoadedMsg:
 		m.history.onLoaded(m, msg)

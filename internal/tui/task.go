@@ -67,7 +67,7 @@ func (r *runModel) startTask(m *Model, name string,
 	}()
 
 	r.task = &task{name: name, ch: ch, cancel: cancel, after: after}
-	return tea.Batch(drainTask(name, ch), m.kickSpinner())
+	return tea.Batch(drainTask(name, ch), m.kickAnim())
 }
 
 func drainTask(name string, ch <-chan taskEvent) tea.Cmd {

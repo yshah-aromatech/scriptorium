@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 	teatest "github.com/charmbracelet/x/exp/teatest/v2"
@@ -279,8 +278,8 @@ func pump(t *testing.T, m *Model, first tea.Cmd, budget time.Duration, each func
 			pending = append(pending, batch...)
 			continue
 		}
-		if _, isSpin := msg.(spinner.TickMsg); isSpin {
-			continue
+		if _, isFrame := msg.(FrameMsg); isFrame {
+			continue // executing the 16 ms clock would sleep and self-perpetuate
 		}
 		_, next := m.Update(msg)
 		pending = append(pending, next)

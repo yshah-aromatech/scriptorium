@@ -3,8 +3,6 @@ package tui
 import (
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 )
 
@@ -15,21 +13,15 @@ import (
 //
 // The step is taken off the CLOCK, not off the frame counter, so the speed does
 // not change with the redraw cadence (the PS app's own rule) and an injected
-// clock makes it exactly reproducible in a test.
+// clock makes it exactly reproducible in a test. Since v1.1.0 the redraws come
+// from the shared 16 ms animation clock (anim.go) — the marquee's old
+// standalone 165 ms tick is gone, and the rune boundary is crossed on the
+// exact frame it falls in.
 const (
 	marqueePause = time.Second
 	marqueeStep  = 165 * time.Millisecond
 	marqueeLoop  = "   ·   " // what separates the end of the name from its head
 )
-
-// MarqueeTickMsg is the marquee's own beat. It is scheduled only while a
-// marquee is actually running, so an idle list costs nothing (§12.10's budget
-// rule).
-type MarqueeTickMsg time.Time
-
-func marqueeTickCmd() tea.Cmd {
-	return tea.Tick(marqueeStep, func(t time.Time) tea.Msg { return MarqueeTickMsg(t) })
-}
 
 // marqueeName is the visible slice of a name at the current instant: the name
 // itself until the pause is over, then the loop rotated one step per
@@ -58,7 +50,7 @@ func (r *runModel) noteSelection(m *Model) {
 }
 
 // marqueeRunning reports whether the selected row's name actually overflows its
-// column — the only condition under which the tick is worth scheduling.
+// column — the marquee's contribution to animLive (anim.go).
 func (r *runModel) marqueeRunning(m *Model) bool {
 	if m.mode != modeRun {
 		return false
@@ -68,23 +60,4 @@ func (r *runModel) marqueeRunning(m *Model) bool {
 		return false
 	}
 	return textkit.Width(it.s.Name) > nameColWidth(r.list.Width())
-}
-
-// kickMarquee starts the beat if something is scrolling and it is not already
-// running.
-func (r *runModel) kickMarquee(m *Model) tea.Cmd {
-	if r.marqueeOn || !r.marqueeRunning(m) {
-		return nil
-	}
-	r.marqueeOn = true
-	return marqueeTickCmd()
-}
-
-// onMarqueeTick keeps the beat going only while there is something to animate.
-func (r *runModel) onMarqueeTick(m *Model) tea.Cmd {
-	if !r.marqueeRunning(m) {
-		r.marqueeOn = false
-		return nil
-	}
-	return marqueeTickCmd()
 }

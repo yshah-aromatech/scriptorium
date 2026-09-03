@@ -259,22 +259,56 @@ func (t Theme) GroundRow(row string, w int) string {
 // status line's dissolve. amount 0 is the colour itself; 1 is invisible.
 //
 // The nil guard is the no-colour profile's whole shape: under NO_COLOR or
-// TERM=dumb every token resolves to nil, and lipgloss.Blend1D cannot build a
-// ramp from nil stops (it returns an empty slice, and the caller indexes it —
-// the phase-10 crash class). A profile with no colours has nothing to fade, so
-// it gets the unstyled text it asked for.
+// TERM=dumb every token resolves to nil, and there is nothing to fade, so it
+// gets the unstyled text it asked for.
 func (t Theme) Fade(c color.Color, amount float64) lipgloss.Style {
 	if c == nil || t.C.Bg == nil {
 		return lipgloss.NewStyle()
 	}
-	amount = min(max(amount, 0), 1)
-	const steps = 17
-	ramp := lipgloss.Blend1D(steps, c, t.C.Bg)
-	if len(ramp) == 0 {
-		return lipgloss.NewStyle().Foreground(c)
+	return t.Mix(c, t.C.Bg, amount)
+}
+
+// mixSteps quantizes a blend below truecolor: five stops over a fade or a
+// pulse means an SGR change only at a stop boundary instead of every frame —
+// the 60 fps engine's churn guard for 256/16-color terminals (v1.1.0 task 2).
+const mixSteps = 5
+
+// Mix blends a → b by amount (0..1). Truecolor interpolates continuously —
+// one exact color per frame; every other profile snaps amount to mixSteps
+// stops first, then converts through the profile. ANSI-basic endpoints (the
+// `terminal` palette, whose tokens must stay 0-15) never interpolate at all:
+// a blend would fabricate a truecolor SGR on a palette whose whole point is
+// inheriting the user's 16-color scheme, so it snaps to the nearer end.
+func (t Theme) Mix(a, b color.Color, amount float64) lipgloss.Style {
+	if a == nil || b == nil {
+		return lipgloss.NewStyle()
 	}
-	i := min(int(amount*float64(len(ramp)-1)+0.5), len(ramp)-1)
-	return lipgloss.NewStyle().Foreground(t.Profile.Convert(ramp[i]))
+	amount = min(max(amount, 0), 1)
+	if _, basicA := a.(ansi.BasicColor); basicA {
+		amount = math.Round(amount)
+	} else if _, basicB := b.(ansi.BasicColor); basicB {
+		amount = math.Round(amount)
+	}
+	if t.Profile != colorprofile.TrueColor {
+		amount = math.Round(amount*(mixSteps-1)) / (mixSteps - 1)
+	}
+	switch amount {
+	case 0:
+		return lipgloss.NewStyle().Foreground(a)
+	case 1:
+		return lipgloss.NewStyle().Foreground(b)
+	}
+	return lipgloss.NewStyle().Foreground(t.Profile.Convert(lerpColor(a, b, amount)))
+}
+
+// lerpColor mixes two resolved colors channel-wise in RGB.
+func lerpColor(a, b color.Color, amount float64) color.Color {
+	ar, ag, ab, _ := a.RGBA()
+	br, bg, bb, _ := b.RGBA()
+	mix := func(x, y uint32) uint8 {
+		return uint8(math.Round((float64(x) + (float64(y)-float64(x))*amount) / 257))
+	}
+	return color.RGBA{R: mix(ar, br), G: mix(ag, bg), B: mix(ab, bb), A: 0xff}
 }
 
 // conv resolves a token through the profile. "" is the `terminal` palette's

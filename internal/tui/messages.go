@@ -29,8 +29,9 @@ import (
 // silently dropped.
 //
 // Idiom 2, self-rescheduling tick: periodic work is a tea.Tick whose handler
-// does the work and returns the next tea.Tick. Three run here — 1 Hz for ages
-// and fades, 2 s for the live-lock scan, 60 s for the missed-fire sweep.
+// does the work and returns the next tea.Tick. Four run here — 1 Hz for ages
+// and expiries, 2 s for the live-lock scan, 60 s for the missed-fire sweep,
+// and the 16 ms animation clock (anim.go), armed only while anything moves.
 //
 // BANNED: Program.Send from a background goroutine, and any bare `go func()`
 // that reaches into the model. Both re-enter the update loop from outside The
@@ -85,10 +86,6 @@ type LockPollMsg time.Time
 
 // MissedTickMsg is the 60 s beat: run app.MissedSweep.
 type MissedTickMsg time.Time
-
-// StatusFadeMsg is the status line's dissolve frame (10 Hz, and only for the
-// last seconds of a message's life).
-type StatusFadeMsg time.Time
 
 // ---------------------------------------------------------------------------
 // Data loads

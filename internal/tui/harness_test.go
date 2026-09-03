@@ -120,7 +120,7 @@ var fixtureSchedules = map[string]string{
 	"nightly-report": "*/5 * * * *",
 }
 
-func seedApp(t *testing.T) *app.App {
+func seedApp(t testing.TB) *app.App {
 	t.Helper()
 	t.Setenv("N8N_WEBHOOK_URL", "")
 	appDir := t.TempDir()
@@ -159,7 +159,7 @@ func seedApp(t *testing.T) *app.App {
 	return a
 }
 
-func write(t *testing.T, path, body string) {
+func write(t testing.TB, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func write(t *testing.T, path, body string) {
 
 // fakeCrontab serves the fixture's managed block and fails any write. No test
 // in this package is allowed near the user's real crontab.
-func fakeCrontab(t *testing.T) cron.CrontabRunner {
+func fakeCrontab(t testing.TB) cron.CrontabRunner {
 	t.Helper()
 	lines := []string{cron.BlockStart}
 	for _, name := range []string{"backup-db", "heartbeat", "nightly-report"} {
@@ -189,7 +189,7 @@ func fakeCrontab(t *testing.T) cron.CrontabRunner {
 
 // newFixtureModel is a root model on the seeded app, with the machine-specific
 // bits pinned and the data the tickers would have loaded already fed in.
-func newFixtureModel(t *testing.T, env []string) *Model {
+func newFixtureModel(t testing.TB, env []string) *Model {
 	t.Helper()
 	m := New(seedApp(t), fixedNow)
 	m.useTheme(theme.New(theme.Default, theme.Profile("auto", env)))

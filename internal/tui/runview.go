@@ -9,7 +9,6 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
-	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
@@ -21,7 +20,6 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
-	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
 
 // Run is the working view (design §4.2): pick a script on the left, watch it
@@ -47,7 +45,6 @@ type runModel struct {
 
 	list list.Model
 	out  outputPane
-	prog progress.Model
 
 	// live run
 	handle     *runner.Handle
@@ -55,6 +52,12 @@ type runModel struct {
 	etaSec     float64
 	doneRow    *history.Row
 	lastSample procstat.Sample
+
+	// etaFrom/etaAnchor let the ETA bar glide instead of snap: the fraction
+	// the bar showed when the target last jumped, and when that was (anim.go's
+	// etaFrac eases from there over etaEase).
+	etaFrom   float64
+	etaAnchor time.Time
 
 	queue []queued
 
@@ -64,7 +67,6 @@ type runModel struct {
 	// marquee state for the selected row's name (marquee.go)
 	marqueeSel int
 	marqueeAt  time.Time
-	marqueeOn  bool
 
 	// filter is the live script-list substring filter (`/`, floor item):
 	// applied on every keystroke, esc restores it. scriptsLen is the last
@@ -82,7 +84,6 @@ type runModel struct {
 
 func (r *runModel) init(m *Model) {
 	r.list = newScriptList(m)
-	r.prog = progress.New(progress.WithWidth(etaBarWidth), progress.WithoutPercentage())
 	r.out.reset("output", m.app.Cfg.MaxOutputLines)
 
 	// An empty pane on first open says nothing, and config.json's complaints
@@ -94,38 +95,6 @@ func (r *runModel) init(m *Model) {
 		r.out.append("⚠ " + w)
 	}
 	r.out.append("", "  r run · s sync · tab focus · 1-4 views", "")
-}
-
-// applyTheme re-derives everything this view keeps a COPY of from the theme.
-// It is called from Model.useTheme, never from init, so the ETA bar follows the
-// injected profile rather than whatever the process environment happened to say
-// when the model was built.
-//
-// The ETA bar is a solid Primary fill over a Muted empty half (v1.0.1 task 2).
-// The released gradient did two wrong things at once: it painted background
-// colors across the status line (bubbles/progress's half-block mode pairs a
-// bg with every fg step — the "teal gradient bg" defect), and below truecolor
-// it emitted interpolated 24-bit SGRs the profile never saw. Solid full-block
-// fill has neither problem, on any profile.
-//
-// The nil check is not defensive padding: under a no-colour profile (NO_COLOR,
-// TERM=dumb, an explicit colorMode) every token resolves to nil — correctly,
-// that is what "no colour" means — and the bar should render unstyled blocks.
-func (r *runModel) applyTheme(th theme.Theme) {
-	r.prog.SetWidth(etaBarWidth)
-	progress.WithFillCharacters('█', '░')(&r.prog)
-
-	if th.C.Primary == nil {
-		// WithColors() alone would fall back to the component's OWN default
-		// palette — a 24-bit fill, on a terminal that just said it wants
-		// none. Clearing the fields as well leaves the bar unstyled, which is
-		// what a no-colour profile is asking for.
-		progress.WithColors()(&r.prog)
-		r.prog.FullColor, r.prog.EmptyColor = nil, nil
-		return
-	}
-	progress.WithColors(th.C.Primary)(&r.prog)
-	r.prog.EmptyColor = th.C.Muted
 }
 
 // initCmd is the root's startup hook for this view. Nothing to schedule yet —
@@ -739,7 +708,7 @@ func (r *runModel) statusLine(m *Model, w int) (string, bool) {
 		if left < 0 {
 			note = "+" + format.RelativeTime(-left) + " over"
 		}
-		tail = "  " + r.prog.ViewAs(min(elapsed.Seconds()/r.etaSec, 1)) + " " + th.S.Muted.Render(note)
+		tail = "  " + etaBar(th, r.etaFrac(m.now()), etaBarWidth) + " " + th.S.Muted.Render(note)
 	}
 	if n := len(r.queue); n > 0 {
 		tail += th.S.Border.Render(" · ") + th.S.Info.Render(strconv.Itoa(n)+" queued")
