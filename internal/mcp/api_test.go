@@ -3,8 +3,12 @@ package mcp_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -286,5 +290,29 @@ func TestAPIAndMCPShareTheSameOpsResult(t *testing.T) {
 				t.Errorf("API and MCP disagree:\n API: %s\n MCP: %s", apiJSON, mcpJSON)
 			}
 		})
+	}
+}
+
+func TestAPIRunKeepsPersistenceWarningAlongsideLogTail(t *testing.T) {
+	pwshtest.RequirePython(t)
+	srv, a := newTestServer(t)
+	dir := filepath.Join(a.Paths.ScriptsDir, "persist")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('completed')\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.Runner.Hist = history.NewStore(a.Paths.DataDir)
+	resp := doAPI(t, srv.Handler(), http.MethodPost, "/api/v1/scripts/persist/run", testToken, []byte("{}"))
+	body := decodeAPIBody(t, resp)
+	if resp.StatusCode != 200 || body["status"] != "success" {
+		t.Fatalf("execution result changed: %v", body)
+	}
+	if body["persistenceWarnings"] == nil || !strings.Contains(fmt.Sprint(body["persistenceWarnings"]), "history write failed") {
+		t.Fatalf("warning lost when log tail replaced output: %v", body)
+	}
+	if !strings.Contains(fmt.Sprint(body["output"]), "completed") {
+		t.Fatalf("log output lost: %v", body)
 	}
 }

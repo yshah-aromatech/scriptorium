@@ -7,7 +7,9 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/yshah-aromatech/scriptorium/internal/config"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
+	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
 
 // paletteOverlay is `:` / ctrl+p — every action in the app, fuzzy-searchable,
@@ -181,4 +183,132 @@ func replay(b key.Binding) tea.Cmd {
 		return status(StatusWarn, "cannot replay the key '"+keys[0]+"'")
 	}
 	return func() tea.Msg { return press }
+}
+
+// themeOverlay deliberately shares the palette's small filtering and windowing
+// rules without turning two short pickers into a generic framework.
+type themeOverlay struct {
+	ti        textinput.Model
+	items     []string
+	shown     []int
+	sel, top  int
+	original  string
+	saving    bool
+	settled   bool
+	completed bool
+}
+
+func newThemeOverlay(m *Model) *themeOverlay {
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.Focus()
+	st := ti.Styles()
+	st.Cursor.Blink = false
+	st.Cursor.Color = m.th.C.Accent
+	st.Focused.Text = m.th.S.Base
+	ti.SetStyles(st)
+	p := &themeOverlay{ti: ti, items: theme.CycleNames(), original: m.th.Name}
+	p.filter()
+	for i, name := range p.items {
+		if name == p.original {
+			p.sel = i
+			break
+		}
+	}
+	return p
+}
+
+func (p *themeOverlay) kind() overlayKind {
+	// Theme selection owns its query and preview until the user applies or
+	// dismisses it; queued preparation must not replace that state after a
+	// failed save.
+	return overlayInput
+}
+func (p *themeOverlay) title() string { return "theme" }
+func (p *themeOverlay) height(_ *Model, _, h int) int {
+	return min(len(p.shown)+1, max(h-6, 3))
+}
+func (p *themeOverlay) hints(m *Model) []key.Binding {
+	return []key.Binding{m.keys.Up, m.keys.Down,
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "use")),
+		m.keys.Save, m.keys.Close}
+}
+func (p *themeOverlay) filter() {
+	q := strings.ToLower(strings.TrimSpace(p.ti.Value()))
+	p.shown = p.shown[:0]
+	for i, name := range p.items {
+		if q == "" || subsequence(strings.ToLower(name), q) {
+			p.shown = append(p.shown, i)
+		}
+	}
+	p.sel = min(p.sel, max(len(p.shown)-1, 0))
+}
+func (p *themeOverlay) selected() string {
+	if len(p.shown) == 0 {
+		return ""
+	}
+	return p.items[p.shown[p.sel]]
+}
+func (p *themeOverlay) preview(m *Model) {
+	if name := p.selected(); name != "" {
+		m.useTheme(theme.New(name, m.th.Profile))
+	}
+}
+func (p *themeOverlay) rows(m *Model, w, h int) []string {
+	th := m.th
+	p.ti.SetWidth(max(w-4, 4))
+	rows := []string{th.S.Info.Render("❯ ") + p.ti.View()}
+	body := max(h-1, 1)
+	p.top = scrollWindow(p.top, p.sel, len(p.shown), body)
+	if len(p.shown) == 0 {
+		return append(rows, th.S.Muted.Render("no theme matches"))
+	}
+	for i := p.top; i < len(p.shown) && len(rows) < h; i++ {
+		name := p.items[p.shown[i]]
+		mark, style := "  ", th.S.Key
+		if i == p.sel {
+			mark, style = th.S.Accent.Render("▎")+" ", th.S.Sel
+		}
+		rows = append(rows, textkit.Truncate(mark+style.Render(name), w))
+	}
+	return rows
+}
+func (p *themeOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if p.saving {
+		return nil, false
+	}
+	if key.Matches(msg, m.keys.Close) {
+		m.useTheme(theme.New(p.original, m.th.Profile))
+		return nil, true
+	}
+	if key.Matches(msg, m.keys.Save) {
+		if p.saving || p.selected() == "" {
+			return nil, false
+		}
+		p.saving = true
+		p.preview(m)
+		picker, appDir, name := p, m.app.Paths.AppDir, m.th.Name
+		return func() tea.Msg { return ThemeSavedMsg{Picker: picker, Name: name, Err: config.SaveTheme(appDir, name)} }, false
+	}
+	switch msg.Code {
+	case tea.KeyUp:
+		p.sel = max(p.sel-1, 0)
+		p.preview(m)
+		return nil, false
+	case tea.KeyDown:
+		p.sel = min(p.sel+1, max(len(p.shown)-1, 0))
+		p.preview(m)
+		return nil, false
+	case tea.KeyEnter:
+		if p.selected() == "" {
+			return nil, false
+		}
+		p.preview(m)
+		return nil, true
+	}
+	var cmd tea.Cmd
+	p.ti, cmd = p.ti.Update(msg)
+	p.filter()
+	p.preview(m)
+	return cmd, false
 }

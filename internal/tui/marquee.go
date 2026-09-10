@@ -28,6 +28,9 @@ const (
 // marqueeStep. Rotation is by RUNE — rotating by byte would slice a multi-byte
 // character in half and shear the row.
 func (r *runModel) marqueeName(m *Model, name string, w int) string {
+	if m.app.Cfg.ReducedMotion {
+		return name
+	}
 	if textkit.Width(name) <= w {
 		return name
 	}
@@ -52,7 +55,13 @@ func (r *runModel) noteSelection(m *Model) {
 // marqueeRunning reports whether the selected row's name actually overflows its
 // column — the marquee's contribution to animLive (anim.go).
 func (r *runModel) marqueeRunning(m *Model) bool {
+	if m.app.Cfg.ReducedMotion {
+		return false
+	}
 	if m.mode != modeRun {
+		return false
+	}
+	if runLayoutFor(m.w, m.bodyHeight()).single && m.focus == focusOutput {
 		return false
 	}
 	it, ok := r.list.SelectedItem().(scriptItem)

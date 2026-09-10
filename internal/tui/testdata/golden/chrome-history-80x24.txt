@@ -21,4 +21,4 @@
 
 
  ⚠ missed run: nightly-report — the scheduled fire never arrived
-q quit · ↑/k up · ↓/j down · ↵ open · r run script · f failures / scope …
+q quit · ↑/↓/j/k move · : commands · ? help · ↵ open · r run script · f scope

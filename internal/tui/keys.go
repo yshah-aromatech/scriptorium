@@ -73,8 +73,9 @@ type keyMap struct {
 	ScheduleEdit key.Binding
 
 	// session
-	ThemeNext key.Binding
-	ThemePrev key.Binding
+	ThemeNext   key.Binding
+	ThemePrev   key.Binding
+	ThemeChoose key.Binding
 
 	// overlays
 	Palette key.Binding
@@ -137,8 +138,9 @@ func defaultKeys() keyMap {
 		// the live theme cycler (v1.0.1): session-only, the status line says
 		// how to keep one. Advertised as "theme: next/previous" so the
 		// command palette finds both under ":theme".
-		ThemeNext: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "theme: next")),
-		ThemePrev: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "theme: previous")),
+		ThemeNext:   key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "theme: next")),
+		ThemePrev:   key.NewBinding(key.WithKeys("["), key.WithHelp("[", "theme: previous")),
+		ThemeChoose: key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "theme: choose")),
 
 		Palette: key.NewBinding(key.WithKeys(":", "ctrl+p"), key.WithHelp(":", "commands")),
 		Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
@@ -188,7 +190,7 @@ func (k keyMap) groups() []keyGroup {
 		// at 120x40 (TestHelpOverlayShowsTheWholeKeySet caught it).
 		{Title: "tools", Owner: modeRun, Keys: []key.Binding{k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}},
 		{Title: "schedules", Owner: modeSchedules, Keys: []key.Binding{k.ScheduleEdit}},
-		{Title: "session", Owner: modeAny, Keys: []key.Binding{k.Palette, k.Help, k.ThemeNext, k.ThemePrev, k.Quit}},
+		{Title: "session", Owner: modeAny, Keys: []key.Binding{k.Palette, k.Help, k.ThemeNext, k.ThemePrev, k.ThemeChoose, k.Quit}},
 		{Title: "overlays", Owner: modeAny, Modal: true, Keys: []key.Binding{k.Accept, k.Deny, k.Save, k.Close}},
 	}
 }
@@ -221,14 +223,14 @@ func (m *Model) primaryHints(md mode, fc focus) []key.Binding {
 	k := m.keys
 	switch md {
 	case modeFleet:
-		return []key.Binding{k.Up, k.Down, k.Open, k.FailFilter, k.Start, k.Sync}
+		return []key.Binding{k.Up, k.Down, k.Open, displayBinding(k.FailFilter, "failures"), k.Start, k.Sync}
 	case modeRun:
 		if fc == focusOutput {
 			return []key.Binding{k.Up, k.Down, k.PageUp, k.Follow, k.Focus, k.Start, k.Kill}
 		}
 		return []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
 	case modeHistory:
-		return []key.Binding{k.Up, k.Down, k.Open, k.Start, k.FailFilter}
+		return []key.Binding{k.Up, k.Down, k.Open, k.Start, displayBinding(k.FailFilter, "scope")}
 	case modeSchedules:
 		return []key.Binding{k.Up, k.Down, k.ScheduleEdit}
 	}
@@ -240,15 +242,30 @@ func (m *Model) primaryHints(md mode, fc focus) []key.Binding {
 // on screen.
 func (m *Model) viewHints(md mode, fc focus) []key.Binding {
 	k := m.keys
+	move := key.NewBinding(key.WithKeys("up", "down", "j", "k"), key.WithHelp("↑/↓/j/k", "move"))
 	var secondary []key.Binding
 	if md == modeRun && fc != focusOutput {
 		secondary = []key.Binding{k.Env, k.Deps, k.Lint, k.ViewLog, k.Copy, k.ClearOut,
 			k.Scoped, k.ClearQueue, k.Filter, k.SearchOutput, k.SelfUpdate, k.WebhookTest}
 	}
-	out := append([]key.Binding{k.Quit}, m.primaryHints(md, fc)...)
+	out := []key.Binding{k.Quit, move}
+	if md == modeRun {
+		out = append(out, k.Focus)
+	}
 	out = append(out, k.Palette, k.Help)
-	out = append(out, secondary...)
-	return append(out, k.Fleet, k.Run, k.History, k.Schedules)
+	if !paneled(m.w) {
+		for _, b := range append(m.primaryHints(md, fc), secondary...) {
+			id := strings.Join(b.Keys(), ",")
+			if id != strings.Join(k.Up.Keys(), ",") && id != strings.Join(k.Down.Keys(), ",") && id != strings.Join(k.Focus.Keys(), ",") {
+				out = append(out, b)
+			}
+		}
+	}
+	return out
+}
+
+func displayBinding(b key.Binding, desc string) key.Binding {
+	return key.NewBinding(key.WithKeys(b.Keys()...), key.WithHelp(b.Help().Key, desc))
 }
 
 // tailHints is what a panel's bottom border carries: the view-owned subset of
@@ -286,7 +303,7 @@ func (m *Model) tailHints(md mode, fc focus) []key.Binding {
 func (m *Model) bindsInView(b key.Binding, md mode) bool {
 	id := strings.Join(b.Keys(), ",")
 	for _, fc := range []focus{focusList, focusOutput} {
-		for _, h := range m.viewHints(md, fc) {
+		for _, h := range append(m.viewHints(md, fc), m.primaryHints(md, fc)...) {
 			if strings.Join(h.Keys(), ",") == id {
 				return true
 			}

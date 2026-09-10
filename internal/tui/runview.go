@@ -47,6 +47,8 @@ type runModel struct {
 	out  outputPane
 
 	// live run
+	attempt    *runAttempt
+	quitting   bool
 	handle     *runner.Handle
 	startedAt  time.Time
 	etaSec     float64
@@ -155,7 +157,7 @@ func (r *runModel) selectByName(m *Model, name string) {
 	}
 }
 
-func (r *runModel) active() bool    { return r.handle != nil || r.task != nil }
+func (r *runModel) active() bool    { return r.attempt != nil || r.handle != nil || r.task != nil }
 func (r *runModel) queueDepth() int { return len(r.queue) }
 
 func (r *runModel) isRunning(n string) bool { return r.handle != nil && r.handle.Name == n }
@@ -175,6 +177,8 @@ func (r *runModel) isQueued(name string) bool {
 
 func (r *runModel) update(m *Model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case RunStartFailedMsg:
+		return r.onRunStartFailed(m, msg)
 	case RunStartedMsg:
 		return r.onRunStarted(m, msg)
 	case RunQueuedMsg:
@@ -215,6 +219,9 @@ func (r *runModel) outputCell(m *Model, mouse tea.Mouse) (row, col int, ok bool)
 	// content: one column of frame (plus padding) on the left, one row of
 	// frame at the bottom — the drag must never select a border cell.
 	maxBody, x0 := m.bodyHeight()-1, lay.listW+1
+	if lay.single {
+		x0 = 0
+	}
 	if lay.paneled {
 		maxBody, x0 = m.bodyHeight()-2, lay.listW+1+lay.pad
 	}
@@ -233,7 +240,8 @@ func (r *runModel) onClick(m *Model, mouse tea.Mouse) tea.Cmd {
 	if row < 0 || row >= m.bodyHeight() {
 		return nil
 	}
-	if mouse.X >= runLayoutFor(m.w, m.bodyHeight()).listW {
+	lay := runLayoutFor(m.w, m.bodyHeight())
+	if lay.single && m.focus == focusOutput || !lay.single && mouse.X >= lay.listW {
 		m.focus = focusOutput
 		r.out.clearSelection()
 		if br, bc, ok := r.outputCell(m, mouse); ok && mouse.Button == tea.MouseLeft {
@@ -294,7 +302,8 @@ func (r *runModel) onWheel(m *Model, mouse tea.Mouse) tea.Cmd {
 	if mouse.Button == tea.MouseWheelUp {
 		delta = -3
 	}
-	if mouse.X >= runLayoutFor(m.w, m.bodyHeight()).listW {
+	lay := runLayoutFor(m.w, m.bodyHeight())
+	if lay.single && m.focus == focusOutput || !lay.single && mouse.X >= lay.listW {
 		r.out.scrollBy(delta)
 		return nil
 	}
@@ -320,7 +329,7 @@ func (r *runModel) onKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, k.Focus):
 		if m.focus == focusList {
 			m.focus = focusOutput
-			return status(StatusInfo, "focus: output — ↑↓ scroll, end follows")
+			return status(StatusInfo, "focus: output")
 		}
 		m.focus = focusList
 		return status(StatusInfo, "focus: scripts")
@@ -431,12 +440,17 @@ type runLayout struct {
 	listW, outW  int
 	listH, cardH int
 	paneled      bool
+	single       bool
 	pad          int
 }
 
 func runLayoutFor(w, h int) runLayout {
 	l := runLayout{listW: min(max(w/3, listMinWidth), listMaxWidth),
-		paneled: paneled(w), pad: panelPad(w)}
+		paneled: paneled(w), single: w < 80, pad: panelPad(w)}
+	if l.single {
+		l.listW, l.outW, l.listH = w, w, max(h, 1)
+		return l
+	}
 	if l.paneled {
 		// the panels' side borders take the column the floor spent on a
 		// separator rule, so the two frames abut
@@ -457,6 +471,9 @@ func runLayoutFor(w, h int) runLayout {
 // listInnerW is the width the bubbles list renders at: inside the panel's
 // borders and padding when paneled, the full column at the floor.
 func (l runLayout) listInnerW() int {
+	if l.single {
+		return l.listW
+	}
 	if l.paneled {
 		return max(l.listW-2-2*l.pad, 4)
 	}
@@ -467,6 +484,14 @@ func (r *runModel) resize(m *Model, w, h int) {
 	r.w, r.h = w, h
 	l := runLayoutFor(w, h)
 	r.list.SetWidth(l.listInnerW())
+	if l.single {
+		r.list.SetHeight(max(h-1, 1))
+		r.out.resize(l.outW, max(h-1, 1))
+		if r.scriptsLen != len(m.scripts) {
+			r.reload(m)
+		}
+		return
+	}
 	if l.paneled {
 		r.list.SetHeight(max(l.listH-2, 1)) // the panel borders take two rows
 		r.out.resize(max(l.outW-2-2*l.pad, 10), max(h-2, 1))
@@ -499,6 +524,13 @@ func (r *runModel) view(m *Model, w, h int) []string {
 	th := m.th
 	if l.paneled {
 		return r.viewPaneled(m, l, h)
+	}
+	if l.single {
+		if m.focus == focusOutput {
+			return fitRows(r.out.view(th, r.spinFor(m), true), h)
+		}
+		rows := append([]string{sectionRule(th, r.listTitle()+" · list", w, true)}, r.listRows(m)...)
+		return fitRows(rows, h)
 	}
 
 	left := []string{sectionRule(th, r.listTitle(), l.listW, m.focus == focusList)}
@@ -601,7 +633,7 @@ func (r *runModel) detailsBody(m *Model, w int) []string {
 		" "+th.S.Success.Render("●")+" "+textkit.Truncate(
 			th.S.Base.Render(s.Name)+th.S.Muted.Render(" · "+s.Runtime+repo), max(w-3, 4)),
 		line("▸", "entry", entryLabel(m, *s)),
-		line("⚙", "env", envLabel(*s)),
+		line("⚙", "env", m.envLabels[s.Name]),
 		line("↻", "cron", m.cronLabel(s.Name)),
 	)
 	return append(rows, r.lastRunLines(m, s.Name, w)...)
@@ -691,9 +723,16 @@ func (r *runModel) lastRunLines(m *Model, name string, w int) []string {
 func (r *runModel) statusLine(m *Model, w int) (string, bool) {
 	th := m.th
 	if r.handle == nil {
+		if r.attempt != nil {
+			label := "preparing " + r.attempt.name
+			if r.attempt.ctx.Err() != nil {
+				label = "cancelling " + r.attempt.name
+			}
+			return textkit.Truncate(" "+th.S.Pulse.Render(m.spinnerFrame())+" "+th.S.Base.Render(label)+r.queueLabel(m), w), true
+		}
 		if r.task != nil {
 			return " " + th.S.Pulse.Render(m.spinnerFrame()) + " " +
-				th.S.Base.Render(r.task.name+"…"), true
+				th.S.Base.Render(r.task.name+"…") + r.queueLabel(m), true
 		}
 		return "", false
 	}
@@ -710,13 +749,20 @@ func (r *runModel) statusLine(m *Model, w int) (string, bool) {
 		if left < 0 {
 			note = "+" + format.RelativeTime(-left) + " over"
 		}
-		tail = "  " + etaBar(th, r.etaFrac(m.now()), etaBarWidth) + " " + th.S.Muted.Render(note)
+		tail = "  " + etaBar(th, r.etaFrac(m, m.now()), etaBarWidth) + " " + th.S.Muted.Render(note)
 	}
 	if n := len(r.queue); n > 0 {
-		tail += th.S.Border.Render(" · ") + th.S.Info.Render(strconv.Itoa(n)+" queued")
+		tail += r.queueLabel(m)
 	}
 	if r.lastSample.CPU > 0 {
 		tail += th.S.Border.Render(" · ") + th.S.Muted.Render("cpu "+trim1(r.lastSample.CPU)+"%")
 	}
 	return textkit.Truncate(head+tail, w), true
+}
+
+func (r *runModel) queueLabel(m *Model) string {
+	if len(r.queue) == 0 {
+		return ""
+	}
+	return m.th.S.Border.Render(" · ") + m.th.S.Info.Render(strconv.Itoa(len(r.queue))+" queued · next "+r.queue[0].Name)
 }

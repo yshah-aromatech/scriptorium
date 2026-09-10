@@ -95,13 +95,15 @@ type Model struct {
 	statusAt   time.Time
 
 	// shared fleet data, refreshed by the tickers and by run completion
-	scripts   []scripts.Script
-	statuses  map[string]history.Last
-	schedules map[string]string
-	recent    []history.Row
-	live      []lockfile.Live
-	missed    map[string]missed.Miss
-	syncedAt  time.Time
+	scripts    []scripts.Script
+	statuses   map[string]history.Last
+	schedules  map[string]string
+	recent     []history.Row
+	envLabels  map[string]string
+	live       []lockfile.Live
+	missed     map[string]missed.Miss
+	syncedAt   time.Time
+	historySig historySignature
 
 	// animOn is whether the 16 ms animation clock (anim.go) is armed. It only
 	// runs while something on screen is actually moving (§12.10's budget rule:
@@ -130,7 +132,12 @@ type Model struct {
 
 // spinnerFrame is the glyph any view showing "this is running" should use —
 // the braille spinner stepped off the clock (anim.go).
-func (m *Model) spinnerFrame() string { return spinnerGlyph(m.now()) }
+func (m *Model) spinnerFrame() string {
+	if m.app.Cfg.ReducedMotion {
+		return "▶"
+	}
+	return spinnerGlyph(m.now())
+}
 
 // New builds the root model. now is injectable for determinism; pass time.Now.
 func New(a *app.App, now func() time.Time) *Model {
@@ -148,6 +155,7 @@ func New(a *app.App, now func() time.Time) *Model {
 		version:   buildinfo.Version,
 		statuses:  map[string]history.Last{},
 		schedules: map[string]string{},
+		envLabels: map[string]string{},
 		missed:    map[string]missed.Miss{},
 	}
 	// Sub-models first, then the theme: useTheme re-derives everything they
@@ -270,15 +278,48 @@ func (m *Model) loadFleet() tea.Cmd {
 	a := m.app
 	return func() tea.Msg {
 		repos := scripts.Repos(a.Cfg, a.Paths)
-		rows, _ := a.Hist.Last(200)
+		all := scripts.Discover(repos, a.Paths)
+		labels := make(map[string]string, len(all))
+		for _, s := range all {
+			labels[s.Name] = envLabel(s)
+		}
+		// Capture before rows: an append during this load either appears in rows
+		// or leaves this older signature for the next poll to detect.
+		historySig := historyFileSignature(a.Paths.HistoryFile)
+		rows, _ := a.Hist.Last(0)
+		recent := rows
+		if len(recent) > 200 {
+			recent = recent[len(recent)-200:]
+		}
 		return ScriptsLoadedMsg{
-			Scripts:   scripts.Discover(repos, a.Paths),
-			Statuses:  history.LastStatuses(rows),
-			Schedules: a.Cron.Schedules(),
-			Recent:    rows,
-			SyncedAt:  scripts.LastSyncTime(repos),
+			Scripts:    all,
+			Statuses:   history.LastStatuses(rows),
+			Schedules:  a.Cron.Schedules(),
+			Recent:     recent,
+			EnvLabels:  labels,
+			HistorySig: historySig,
+			SyncedAt:   scripts.LastSyncTime(repos),
 		}
 	}
+}
+
+type historySignature struct {
+	size    int64
+	modTime time.Time
+	exists  bool
+}
+
+func historyFileSignature(path string) historySignature {
+	info, err := os.Stat(path)
+	if err != nil {
+		return historySignature{}
+	}
+	return historySignature{size: info.Size(), modTime: info.ModTime(), exists: true}
+}
+
+func (m *Model) pollHistorySignature() tea.Cmd {
+	path := m.app.Paths.HistoryFile
+	return func() tea.Msg { return HistorySignatureMsg{Sig: historyFileSignature(path)} }
 }
 
 func (m *Model) scanLocks() tea.Cmd {
@@ -302,7 +343,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.relayout()
-		return m, nil
+		return m, m.kickAnim()
 
 	case tea.KeyPressMsg:
 		// a key can start anything moving — a selection move restarts the
@@ -321,9 +362,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// first, and this catches an entry that was queued while the gate said
 		// no (inventory §4.11 drains one per loop iteration). And it is what
 		// arms the animation clock when a status message comes due to fade.
-		return m, tea.Batch(tickCmd(), m.run.dequeue(m), m.kickAnim())
+		return m, tea.Batch(tickCmd(), m.run.resumePreparation(m), m.run.dequeue(m), m.kickAnim())
 
-	case RunStartedMsg, RunQueuedMsg, RunEventsMsg, RunDoneMsg, TaskEventsMsg,
+	case RunStartedMsg, RunStartFailedMsg, RunQueuedMsg, RunEventsMsg, RunDoneMsg, TaskEventsMsg,
 		DepsScannedMsg, LogLoadedMsg, ClipboardMsg:
 		// run and sync traffic belongs to the Run view wherever the user is
 		// standing: a run started from Fleet must keep draining while they read
@@ -331,7 +372,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.run.update(m, msg), m.kickAnim())
 
 	case LockPollMsg:
-		return m, tea.Batch(m.scanLocks(), lockPollCmd())
+		return m, tea.Batch(m.scanLocks(), m.pollHistorySignature(), lockPollCmd())
+
+	case HistorySignatureMsg:
+		if msg.Sig == m.historySig {
+			return m, nil
+		}
+		m.historySig = msg.Sig
+		cmds := []tea.Cmd{m.loadFleet()}
+		if m.mode == modeHistory {
+			cmds = append(cmds, m.loadHistory())
+		}
+		return m, tea.Batch(cmds...)
 
 	case MissedTickMsg:
 		return m, tea.Batch(m.missedSweep(), missedTickCmd())
@@ -345,7 +397,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ScriptsLoadedMsg:
 		m.scripts, m.statuses = msg.Scripts, msg.Statuses
-		m.schedules, m.recent, m.syncedAt = msg.Schedules, msg.Recent, msg.SyncedAt
+		m.schedules, m.recent, m.envLabels = msg.Schedules, msg.Recent, msg.EnvLabels
+		m.syncedAt, m.historySig = msg.SyncedAt, msg.HistorySig
 		m.fleet.reload(m)
 		m.run.reload(m)
 		return m, m.kickAnim()
@@ -357,8 +410,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CronParsedMsg:
 		return m, m.onCronParsed(msg)
 
+	case EnvSavedMsg:
+		return m, m.onEnvSaved(msg)
+
 	case ScheduleSavedMsg:
 		return m, m.onScheduleSaved(msg)
+
+	case ThemeSavedMsg:
+		msg.Picker.saving = false
+		msg.Picker.settled = true
+		if msg.Err != nil {
+			m.statusText, m.statusKind, m.statusAt = "saving theme: "+msg.Err.Error(), StatusErr, m.now()
+			return m, nil
+		}
+		msg.Picker.completed = true
+		m.app.Cfg.Theme = msg.Name
+		m.useTheme(theme.New(msg.Name, m.th.Profile))
+		if m.ov == msg.Picker {
+			m.closeOverlay()
+		}
+		m.statusText, m.statusKind, m.statusAt = "saved theme: "+msg.Name, StatusOK, m.now()
+		return m, nil
 
 	case StatusMsg:
 		m.statusText, m.statusKind, m.statusAt = msg.Text, msg.Kind, m.now()
@@ -422,10 +494,9 @@ func (m *Model) onMissed(msg MissedMsg) tea.Cmd {
 func (m *Model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 	k := m.keys
 	// ctrl+c belongs to the terminal, not to whichever overlay happens to be
-	// open (inventory §1.2): it quits from every mode, closing anything that
-	// is up on the way out.
+	// open (inventory §1.2): it quits from every mode, preserving the current
+	// modal if the user declines the kill confirmation.
 	if msg.Mod == tea.ModCtrl && msg.Code == 'c' {
-		m.closeOverlay()
 		return m.quitCmd()
 	}
 	if m.ov != nil {
@@ -444,6 +515,9 @@ func (m *Model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.cycleTheme(1)
 	case key.Matches(msg, k.ThemePrev):
 		return m.cycleTheme(-1)
+	case key.Matches(msg, k.ThemeChoose):
+		m.open(newThemeOverlay(m))
+		return nil
 	case key.Matches(msg, k.Fleet):
 		return m.switchTo(modeFleet)
 	case key.Matches(msg, k.Run):
@@ -548,6 +622,16 @@ func (m *Model) footer() string {
 	hints := m.hints()
 	if line := m.help.ShortHelpView(hints); textkit.VisibleWidth(line) <= m.w {
 		return line
+	}
+	if m.ov == nil && m.w < 55 {
+		reserved := []key.Binding{m.keys.Quit}
+		if m.mode == modeRun {
+			reserved = append(reserved, m.keys.Focus)
+		}
+		reserved = append(reserved, m.keys.Palette, m.keys.Help)
+		if line := m.help.ShortHelpView(reserved); textkit.VisibleWidth(line) <= m.w {
+			return line
+		}
 	}
 	for n := len(hints) - 1; n > 0; n-- {
 		line := m.help.ShortHelpView(hints[:n]) + m.th.S.Muted.Render(" "+textkit.Ellipsis)

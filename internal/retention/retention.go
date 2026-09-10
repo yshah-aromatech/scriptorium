@@ -80,10 +80,11 @@ func Prune(o Options, force bool) error {
 	}
 	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 
-	_ = os.WriteFile(stamp, nil, 0o644)
-
 	sweepLogs(o, now())
-	return pruneHistory(o, now())
+	if err := pruneHistory(o, now); err != nil {
+		return err
+	}
+	return os.WriteFile(stamp, nil, 0o644)
 }
 
 // sweepLogs removes aged and orphaned log files by mtime.
@@ -111,15 +112,23 @@ func sweepLogs(o Options, now time.Time) {
 // pruneHistory rewrites history.jsonl without the rows the policy drops, then
 // deletes those rows' logs. The rewrite happens only when something was
 // actually dropped, and lands with a single rename(2).
-func pruneHistory(o Options, now time.Time) error {
+func pruneHistory(o Options, now func() time.Time) error {
+	lock, err := history.Lock(o.HistoryFile)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	if _, err := os.Stat(o.HistoryFile); err != nil {
-		return nil // no history yet
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
 	winDays := o.HistoryDays
 	if winDays <= 0 {
 		winDays = 30 // historyDays=0 only changes the tab view, not retention
 	}
-	nowUTC := now.UTC()
+	nowUTC := now().UTC()
 	histCutoff := nowUTC.Add(-time.Duration(winDays * float64(24*time.Hour)))
 	successCutoff := nowUTC.AddDate(0, 0, -1)
 	frequent := FrequentScripts(o.Schedules, nowUTC)
@@ -172,8 +181,7 @@ func pruneHistory(o Options, now time.Time) error {
 		return nil
 	}
 
-	// ponytail: a history append racing this exact instant is lost; the hourly
-	// throttle, the flock and the single rename keep the window tiny.
+	// The shared history lock covers the entire read/replace transaction.
 	tmp := o.HistoryFile + ".tmp"
 	var buf strings.Builder
 	for _, line := range keep {

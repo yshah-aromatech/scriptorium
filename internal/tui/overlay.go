@@ -44,6 +44,7 @@ const (
 	// read-only overlays: the app keeps working underneath
 	overlayHelp overlayKind = iota
 	overlayPalette
+	overlayTheme
 
 	// modal overlays: they own the next keystroke, and the queue waits
 	overlayConfirm
@@ -60,15 +61,22 @@ func (k overlayKind) blocking() bool { return k >= overlayConfirm }
 // open puts an overlay up, replacing any that was already open. One layer,
 // never a stack: two modals over each other is how a TUI acquires a state
 // nobody can Esc out of.
-func (m *Model) open(o overlay) { m.ov = o }
+func (m *Model) open(o overlay) {
+	if p, ok := o.(*themeOverlay); ok && p.completed {
+		m.ov = nil
+		return
+	}
+	m.ov = o
+}
 
 func (m *Model) closeOverlay() { m.ov = nil }
 
 // onOverlayKey routes a keypress into the open overlay and pops it when the
 // overlay says it is done.
 func (m *Model) onOverlayKey(msg tea.KeyPressMsg) tea.Cmd {
-	cmd, done := m.ov.key(m, msg)
-	if done {
+	previous := m.ov
+	cmd, done := previous.key(m, msg)
+	if done && m.ov == previous {
 		m.closeOverlay()
 	}
 	return cmd

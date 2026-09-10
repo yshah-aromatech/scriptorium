@@ -149,6 +149,23 @@ func TestMarqueeArmsTheSharedFrameClock(t *testing.T) {
 	}
 }
 
+func TestNarrowOutputHidesMarqueeClock(t *testing.T) {
+	m := runAt(t, 60, 24)
+	m.Update(LiveRunsMsg{})
+	withLongName(t, m)
+	if !m.run.marqueeRunning(m) {
+		t.Fatal("visible narrow list did not animate its overflowing selection")
+	}
+	press(m, "tab")
+	if m.run.marqueeRunning(m) || m.kickAnim() != nil {
+		t.Fatal("hidden narrow list kept the frame clock alive")
+	}
+	press(m, "tab")
+	if !m.run.marqueeRunning(m) || !m.animOn {
+		t.Fatal("returning to the list did not restore marquee animation")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Status fade
 // ---------------------------------------------------------------------------
@@ -235,7 +252,7 @@ func TestStatusFadeUnderNoColour(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // The card shows the fleet's newest runs, newest first, from the rows the view
-// already loaded — and both stopped statuses read as "stopped".
+// already loaded — status glyphs carry the state without a redundant word.
 func TestRecentRunsCard(t *testing.T) {
 	m := newFixtureModel(t, truecolorEnv)
 	m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
@@ -253,11 +270,14 @@ func TestRecentRunsCard(t *testing.T) {
 		t.Errorf("the card is not newest-first:\n%s", plain)
 	}
 
-	// killed and timeout both read as "stopped" at this size
+	// Status remains semantic without a duplicate status word.
 	rows2 := m.recent
 	rows2[len(rows2)-1].Status = "timeout"
-	if got := textkit.StripANSI(strings.Join(recentRows(m.th, rows2, m.now(), 36, 3), "\n")); !strings.Contains(got, "stopped") {
-		t.Errorf("a timeout does not read as stopped:\n%s", got)
+	if got := textkit.StripANSI(strings.Join(recentRows(m.th, rows2, m.now(), 36, 3), "\n")); !strings.Contains(got, "◷") || strings.Contains(got, "success") || strings.Contains(got, "failure") || strings.Contains(got, "stopped") {
+		t.Errorf("recent status is not glyph-only:\n%s", got)
+	}
+	if got := compactAge(1000 * 24 * 60 * 60); got != "999d" {
+		t.Errorf("long recent age = %q, want 999d", got)
 	}
 
 	// and it stays off a rail with no room for it rather than being squeezed

@@ -4,12 +4,14 @@ import (
 	"context"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/yshah-aromatech/scriptorium/internal/app"
 	"github.com/yshah-aromatech/scriptorium/internal/format"
+	"github.com/yshah-aromatech/scriptorium/internal/procstat"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
@@ -18,6 +20,40 @@ import (
 // Run lifecycle. Everything asynchronous here is a tea.Cmd — including
 // Handle.Kill, which blocks for up to the three-second kill grace and would
 // freeze rendering if it ran inside Update (see the ban in messages.go).
+
+// runAttempt reserves the output slot from scan through finalization. Only Update
+// changes phase/deps; commands capture its context and identity, never the model.
+type runAttempt struct {
+	name   string
+	ctx    context.Context
+	cancel context.CancelFunc
+	phase  string
+	deps   *DepsScannedMsg
+}
+
+func (r *runModel) reserve(name string) *runAttempt {
+	ctx, cancel := context.WithCancel(context.Background())
+	r.attempt = &runAttempt{name: name, ctx: ctx, cancel: cancel, phase: "scan"}
+	return r.attempt
+}
+
+func (r *runModel) releaseAttempt() {
+	if r.attempt != nil {
+		r.attempt.cancel()
+		r.attempt = nil
+	}
+}
+
+// settle advances only after the current producer has acknowledged completion.
+func (r *runModel) settle(m *Model) tea.Cmd {
+	if r.quitting {
+		if !r.active() {
+			return tea.Quit
+		}
+		return nil
+	}
+	return r.dequeue(m)
+}
 
 // queued is one entry of the run queue. The SCRIPT is kept, but the name is
 // what the dequeue resolves against: a sync while the entry waits replaces
@@ -38,7 +74,10 @@ type queued struct {
 func (r *runModel) start(m *Model, s scripts.Script, args ...string) tea.Cmd {
 	// a background task owns the output pane exactly as a run does, so a run
 	// asked for mid-task queues rather than interleaving into the same buffer
-	if r.handle != nil || r.task != nil {
+	if r.quitting {
+		return nil
+	}
+	if r.active() {
 		r.queue = append(r.queue, queued{Name: s.Name, Args: args})
 		pos := len(r.queue)
 		return func() tea.Msg { return RunQueuedMsg{Name: s.Name, Position: pos} }
@@ -51,19 +90,40 @@ func (r *runModel) start(m *Model, s scripts.Script, args ...string) tea.Cmd {
 // the model — which is what keeps the update loop single-threaded.
 func (r *runModel) launch(m *Model, s scripts.Script, args []string) tea.Cmd {
 	a, now := m.app, m.now()
-	eta := etaSeconds(a, s.Name)
+	attempt := r.attempt
+	if attempt == nil {
+		attempt = r.reserve(s.Name)
+	}
+	attempt.phase = "launch"
 	return func() tea.Msg {
-		h, err := a.Runner.Start(context.Background(), runner.Spec{
-			Script:    s,
-			Trigger:   "manual",
-			ExtraArgs: args,
-			Timeout:   timeoutFor(a, s),
+		if err := attempt.ctx.Err(); err != nil {
+			return RunStartFailedMsg{Attempt: attempt, Err: err}
+		}
+		eta := etaSeconds(a, s.Name)
+		if err := attempt.ctx.Err(); err != nil {
+			return RunStartFailedMsg{Attempt: attempt, Err: err}
+		}
+		h, err := a.Runner.Start(attempt.ctx, runner.Spec{
+			Script: s, Trigger: "manual", ExtraArgs: args, Timeout: timeoutFor(a, s),
 		})
 		if err != nil {
-			return ErrMsg{Context: "starting " + s.Name, Err: err}
+			return RunStartFailedMsg{Attempt: attempt, Err: err}
 		}
-		return RunStartedMsg{Script: s, Handle: h, StartedAt: now, EtaSec: eta}
+		return RunStartedMsg{Attempt: attempt, Script: s, Handle: h, StartedAt: now, EtaSec: eta}
 	}
+}
+
+func (r *runModel) onRunStartFailed(m *Model, msg RunStartFailedMsg) tea.Cmd {
+	if msg.Attempt == nil || msg.Attempt != r.attempt {
+		return nil
+	}
+	name := r.attempt.name
+	cancelled := r.attempt.ctx.Err() != nil
+	r.releaseAttempt()
+	if cancelled {
+		return tea.Batch(status(StatusWarn, "cancelled "+name), r.settle(m))
+	}
+	return tea.Batch(status(StatusErr, "starting "+name+": "+msg.Err.Error()), r.settle(m))
 }
 
 // timeoutFor resolves the run timeout the way every other caller must:
@@ -109,7 +169,7 @@ func etaSeconds(a *app.App, name string) float64 {
 // drain is bridge idiom 1 over the runner's event channel.
 func drainRun(h *runner.Handle) tea.Cmd {
 	return DrainCmd(h.Events, func(batch []runner.Event, closed bool) tea.Msg {
-		return RunEventsMsg{Batch: batch, Closed: closed}
+		return RunEventsMsg{Handle: h, Batch: batch, Closed: closed}
 	})
 }
 
@@ -123,6 +183,26 @@ func (r *runModel) onRunQueued(msg RunQueuedMsg) tea.Cmd {
 // onRunStarted records the handle, opens the output pane on this run and
 // starts draining it.
 func (r *runModel) onRunStarted(m *Model, msg RunStartedMsg) tea.Cmd {
+	if msg.Attempt != r.attempt || r.handle != nil {
+		// A duplicate must not kill the current handle. A truly abandoned handle
+		// still needs a consumer through finalization.
+		if msg.Handle == r.handle {
+			return nil
+		}
+		return func() tea.Msg {
+			if msg.Attempt != nil {
+				msg.Attempt.cancel()
+			}
+			msg.Handle.Kill("killed")
+			for range msg.Handle.Events {
+			}
+			return nil
+		}
+	}
+	if r.attempt != nil {
+		r.attempt.phase = "running"
+	}
+	r.lastSample = procstat.Sample{}
 	r.handle = msg.Handle
 	r.startedAt = msg.StartedAt
 	r.etaSec = msg.EtaSec
@@ -140,6 +220,9 @@ func (r *runModel) onRunStarted(m *Model, msg RunStartedMsg) tea.Cmd {
 // channel closes. Output lines arrive already redacted — the runner's single
 // chokepoint saw them first, and nothing here re-reads the raw stream.
 func (r *runModel) onRunEvents(m *Model, msg RunEventsMsg) tea.Cmd {
+	if r.handle == nil || (msg.Handle != nil && msg.Handle != r.handle) || (r.attempt != nil && msg.Handle == nil) {
+		return nil
+	}
 	lines := make([]string, 0, len(msg.Batch))
 	for _, ev := range msg.Batch {
 		switch ev.Kind {
@@ -157,19 +240,23 @@ func (r *runModel) onRunEvents(m *Model, msg RunEventsMsg) tea.Cmd {
 	if !msg.Closed {
 		return drainRun(r.handle)
 	}
-	row := r.doneRow
-	return func() tea.Msg { return RunDoneMsg{Row: row} }
+	row, h := r.doneRow, r.handle
+	return func() tea.Msg { return RunDoneMsg{Handle: h, Row: row} }
 }
 
 // onRunDone closes the run out: the summary banner, a status line, and a fleet
 // refresh so the list badge and the history the next ETA reads are current.
 // Then the queue gets its turn.
 func (r *runModel) onRunDone(m *Model, msg RunDoneMsg) tea.Cmd {
+	if (msg.Handle != nil && msg.Handle != r.handle) || (r.attempt != nil && msg.Handle == nil) {
+		return nil
+	}
+	r.releaseAttempt()
 	r.handle = nil
 	r.doneRow = nil
 	row := msg.Row
 	if row == nil {
-		return tea.Batch(m.loadFleet(), status(StatusWarn, "the run ended without reporting a result"))
+		return tea.Batch(m.loadFleet(), status(StatusWarn, "the run ended without reporting a result"), r.settle(m))
 	}
 
 	dur := 0.0
@@ -205,11 +292,16 @@ func (r *runModel) onRunDone(m *Model, msg RunDoneMsg) tea.Cmd {
 	if row.Status != "success" {
 		kind = StatusErr
 	}
+	message := row.Script + ": " + row.Status
+	if len(row.PersistenceWarnings) > 0 {
+		kind = StatusWarn
+		message += " — " + strings.Join(row.PersistenceWarnings, "; ")
+	}
 	return tea.Batch(
 		m.loadFleet(),
 		m.scanLocks(),
-		status(kind, row.Script+": "+row.Status),
-		r.dequeue(m),
+		status(kind, message),
+		r.settle(m),
 	)
 }
 
@@ -240,14 +332,14 @@ func trim1(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 // scripts.Script value, and an entry whose script is gone is reported, not
 // silently dropped.
 func (r *runModel) dequeue(m *Model) tea.Cmd {
-	if r.handle != nil || r.task != nil || len(r.queue) == 0 || !m.queueUnblocked() {
+	if r.quitting || r.active() || len(r.queue) == 0 || !m.queueUnblocked() {
 		return nil
 	}
 	next := r.queue[0]
 	r.queue = r.queue[1:]
 	for i := range m.scripts {
 		if m.scripts[i].Name == next.Name {
-			return r.launch(m, m.scripts[i], next.Args)
+			return r.start(m, m.scripts[i], next.Args...)
 		}
 	}
 	return status(StatusWarn, "queued script '"+next.Name+"' no longer exists — skipped")

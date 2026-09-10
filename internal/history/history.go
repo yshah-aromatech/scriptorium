@@ -11,7 +11,7 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 )
 
@@ -47,30 +47,53 @@ type Row struct {
 	// LogFile has no omitempty on purpose: the app always emits the key, and
 	// a skipped run emits it as null. Dropping it would rewrite history.
 	LogFile *string `json:"logFile"`
+	// PersistenceWarnings describes storage failures separately from script status.
+	PersistenceWarnings []string `json:"persistenceWarnings,omitempty"`
 }
 
-// Store is the history file. Concurrent writers in OTHER processes are handled
-// by the single-write append (below); the mutex only orders this process's own.
+// Store is the history file. Append and retention share a process-wide OS lock.
 type Store struct {
-	mu   sync.Mutex
 	path string
 }
 
 // NewStore returns the store for a history.jsonl path (config.Paths.HistoryFile).
 func NewStore(path string) *Store { return &Store{path: path} }
 
-// Append writes one row. The marshalled row and its newline go out in a single
-// Write call on an O_APPEND fd (never interleaves mid-row with concurrent appenders),
-// so a row can never interleave with a row another process (cron, MCP, TUI) is
-// appending at the same instant.
+// Lock serializes append and read/replace transactions, including legacy
+// PowerShell writers (Open-StoHistoryLock). Close the returned file to release.
+// The sidecar must never be renamed or removed: the history inode is replaced
+// by retention, so locking that inode would strand waiting appenders on it.
+func Lock(path string) (*os.File, error) {
+	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+		if err != syscall.EINTR {
+			break
+		}
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// Append opens the history inode only after acquiring the shared transaction
+// lock, so a prune cannot replace it between open and write.
 func (s *Store) Append(row Row) error {
 	b, err := json.Marshal(row)
 	if err != nil {
 		return err
 	}
 	b = append(b, '\n')
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lock, err := Lock(s.path)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err

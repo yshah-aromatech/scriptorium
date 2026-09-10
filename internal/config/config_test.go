@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,45 @@ func TestDefaults(t *testing.T) {
 	}
 	if paths.WebhookQueueFile != filepath.Join(data, "webhook-queue.jsonl") {
 		t.Errorf("WebhookQueueFile = %q", paths.WebhookQueueFile)
+	}
+}
+
+func TestReducedMotionAndSaveTheme(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"absent", `{}`, false},
+		{"false", `{"reducedMotion":false}`, false},
+		{"true", `{"reducedMotion":true}`, true},
+		{"wrong type", `{"reducedMotion":"yes"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, _, _, err := config.Load(appDirWith(t, tc.body))
+			if err != nil || cfg.ReducedMotion != tc.want {
+				t.Fatalf("ReducedMotion = %v, %v; want %v", cfg.ReducedMotion, err, tc.want)
+			}
+		})
+	}
+
+	dir := appDirWith(t, `{"unknown":{"nested":true},"mcpPort":9443,"ThEmE":"night-owl"}`)
+	if err := config.SaveTheme(dir, "dracula"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	var unknown map[string]bool
+	if err := json.Unmarshal(got["unknown"], &unknown); err != nil || !unknown["nested"] || string(got["mcpPort"]) != "9443" || string(got["ThEmE"]) != `"dracula"` {
+		t.Fatalf("SaveTheme changed unrelated config: %s", data)
+	}
+	if err := config.SaveTheme(t.TempDir(), "terminal"); err != nil {
+		t.Fatal(err)
 	}
 }
 

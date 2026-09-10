@@ -64,7 +64,7 @@ git clone https://github.com/yshah-aromatech/scriptorium.git && cd scriptorium &
 Then:
 
 1. If your *scripts* repo is private, create a fine-grained PAT for it (github.com → Settings → Developer settings → Fine-grained tokens) with **Contents: Read-only** on that repo.
-2. Configure `config.json` (`scriptsRepo`, `n8nWebhookUrl`) and `.env` (`GITHUB_TOKEN` if the scripts repo is private).
+2. Configure `config.json` (`scriptsRepo` or `repos`, `n8nWebhookUrl`) and `.env` (`GITHUB_TOKEN` if the scripts repo is private).
 3. Run: `scriptorium`
 
 ### PowerShell 7
@@ -79,7 +79,7 @@ sudo dpkg -i /tmp/packages-microsoft-prod.deb && sudo apt-get update && sudo apt
 
 ## Updating
 
-- **`U` in the TUI** updates the app in place: a released binary downloads and installs the latest GitHub release over itself; a source checkout runs `git pull --ff-only` instead. Either way, restart `scriptorium` to run the new code. A released build also shows a startup notice (`update available: vX.Y.Z — press U`) when one is available — a source checkout has no release version to compare against, so it skips the check entirely.
+- **`U` in the TUI** updates the app in place: a released binary downloads and installs the latest GitHub release over itself, then needs a restart; a source checkout runs `git pull --ff-only`, then needs a rebuild and restart. A released build also shows a startup notice (`update available: vX.Y.Z — press U`) when one is available — a source checkout has no release version to compare against, so it skips the check entirely.
 - **Re-running `install.sh`** is always safe (it never touches `config.json`/`.env`), prints `updated scriptorium vOLD → vNEW` (or "already current") after verifying the download, and is the only path that also installs new prerequisites — worth doing occasionally even if `U` looks up to date.
 - `scriptorium --version` prints the running build.
 
@@ -102,7 +102,7 @@ The entry point resolves in this order: `script.json`'s `"entry"`; then `main.ps
 ### Multiple repos
 
 ```bash
-scriptorium --add-repo https://github.com/YOUR_ORG/python-scripts --name python
+scriptorium --add-repo https://github.com/YOUR_ORG/your-scripts-repo --name shared
 scriptorium --sync
 ```
 
@@ -110,10 +110,12 @@ scriptorium --sync
 
 ```json
 "repos": [
-  { "name": "powershell", "url": "https://github.com/YOUR_ORG/powershell-scripts" },
-  { "name": "python",     "url": "https://github.com/YOUR_ORG/python-scripts", "branch": "main" }
+  { "name": "ops", "url": "https://github.com/YOUR_ORG/ops-scripts" },
+  { "name": "data", "url": "https://github.com/YOUR_ORG/data-scripts", "branch": "main" }
 ]
 ```
+
+Each repository can contain PowerShell and Python scripts together. A nonempty `repos` list takes precedence over the legacy `scriptsRepo`/`SCRIPTS_REPO` setting.
 
 Script names must be unique across repos; a folder name appearing in more than one repo is qualified as `<repoName>-<folder>` everywhere.
 
@@ -173,12 +175,14 @@ Lookup is curated-first (`tokyo_night` gets the curated palette, not the raw tin
 
 Press `]` / `[` in any view to cycle the whole set live — curated palettes first, then every tint. Cycling is session-only; the status line shows each theme's name and the exact `"theme": "…"` line to add to `config.json` to keep it. Both commands are also in the palette (`:` then type `theme`).
 
+Press `T` (or choose `theme: choose` from `:`) for a searchable picker. Arrow keys preview, Enter keeps the preview for this session, Esc restores the opening theme, and Ctrl+S persists the selected theme.
+
 ## Configuration reference (config.json)
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `scriptsRepo` | HTTPS URL of the private scripts repo (or `SCRIPTS_REPO` in `.env`) | — |
-| `repos` | array of `{name, url, branch}` scripts repos (overrides `scriptsRepo`) | `[]` |
+| `scriptsRepo` | legacy HTTPS URL of one scripts repo for either runtime (or `SCRIPTS_REPO` in `.env`) | — |
+| `repos` | array of `{name, url, branch}` mixed-language scripts repos; overrides `scriptsRepo` | `[]` |
 | `dataDir` | where scripts/module dirs/logs/history live | `~/.scriptorium` |
 | `n8nWebhookUrl` | n8n webhook endpoint (or `N8N_WEBHOOK_URL` in `.env`) | — |
 | `pwshBin` / `pythonBin` | interpreters used to run scripts | `pwsh` / `python3` |
@@ -188,7 +192,10 @@ Press `]` / `[` in any view to cycle the whole set live — curated palettes fir
 | `missedGraceMinutes` | how late a scheduled fire may be before it's reported missed | `5` |
 | `colorMode` | `auto`, `truecolor`, or `256` | `auto` |
 | `theme` | a curated palette, `terminal`, or any bubbletint ID — see [Themes](#themes) | `night-owl` |
+| `reducedMotion` | keep active status and progress static; disables decorative animation | `false` |
 | `mcpPort` / `mcpBind` | MCP/API server port and bind (`all` or `localhost`) | `8765` / `all` |
+
+History appends and retention share a `history.jsonl.lock` sidecar. When mixing the Go and legacy PowerShell apps, update both `src/Core.psm1` and `src/Runner.psm1` and stop older running processes before using the same data directory. Keep the lock file in place; deleting it while an app is running breaks coordination.
 
 See `config.json.example` for the full set. Unknown keys and bad values for numeric keys are reported as warnings at startup, never silently ignored.
 

@@ -262,7 +262,7 @@ func runListRepos(a *app.App, stdout io.Writer) int {
 // runList is --list. The schedule column is the managed crontab block's
 // expression for the script, in PS's own bracket shape.
 func runList(a *app.App, stdout io.Writer) int {
-	rows, _ := a.Hist.Last(2000)
+	rows, _ := a.Hist.Last(0)
 	statuses := history.LastStatuses(rows)
 	schedules := a.Cron.Schedules()
 	all := scripts.Discover(scripts.Repos(a.Cfg, a.Paths), a.Paths)
@@ -521,6 +521,9 @@ func runScript(a *app.App, f flags, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	for _, warning := range row.PersistenceWarnings {
+		fmt.Fprintln(stderr, "warning: "+warning)
+	}
 	var duration float64
 	var exitCode int
 	if row.DurationSec != nil {

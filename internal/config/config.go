@@ -115,6 +115,7 @@ type Config struct {
 	MissedGraceMinutes float64
 	ColorMode          string
 	Theme              string
+	ReducedMotion      bool
 	McpPort            int
 	McpBind            string
 }
@@ -155,8 +156,9 @@ var knownNonNumericKeys = map[string]bool{
 	// and would warn "unknown key 'theme'" on a config that sets it — which is
 	// why it is documented in the divergence registry rather than quietly
 	// added.
-	"theme":   true,
-	"mcpBind": true,
+	"theme":         true,
+	"reducedMotion": true,
+	"mcpBind":       true,
 }
 
 // numericKeyByLower and nonNumericKeyByLower map a lower-cased key name to
@@ -476,12 +478,66 @@ func assignNonNumeric(cfg *Config, key string, raw json.RawMessage) {
 		if json.Unmarshal(raw, &s) == nil {
 			cfg.Theme = s
 		}
+	case "reducedMotion":
+		var b bool
+		if json.Unmarshal(raw, &b) == nil {
+			cfg.ReducedMotion = b
+		}
 	case "mcpBind":
 		var s string
 		if json.Unmarshal(raw, &s) == nil {
 			cfg.McpBind = s
 		}
 	}
+}
+
+// SaveTheme changes only the theme property, retaining unknown config values
+// and replacing the file atomically.
+func SaveTheme(appDir, name string) error {
+	path := filepath.Join(appDir, "config.json")
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	raw := map[string]json.RawMessage{}
+	if err == nil {
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return err
+		}
+		if raw == nil {
+			return errors.New("config.json must be an object")
+		}
+	}
+	key := "theme"
+	for k := range raw {
+		if strings.EqualFold(k, key) {
+			key = k
+			break
+		}
+	}
+	value, err := json.Marshal(name)
+	if err != nil {
+		return err
+	}
+	raw[key] = value
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(appDir, ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(append(out, '\n')); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // forceEnvNames are secrets that may arrive directly via the process

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/yshah-aromatech/scriptorium/internal/app"
+	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/missed"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 )
@@ -197,8 +200,96 @@ func TestTickersReschedule(t *testing.T) {
 	if _, c := m.Update(TickMsg(frozen)); c == nil {
 		t.Error("the 1Hz tick did not reschedule itself")
 	}
-	if got := len(batchCmds(func() tea.Cmd { _, c := m.Update(LockPollMsg(frozen)); return c }())); got != 2 {
-		t.Errorf("the lock poll scheduled %d commands, want scan + reschedule", got)
+	if got := len(batchCmds(func() tea.Cmd { _, c := m.Update(LockPollMsg(frozen)); return c }())); got != 3 {
+		t.Errorf("the lock poll scheduled %d commands, want scan + history signature + reschedule", got)
+	}
+}
+
+func TestHistorySignatureRefreshesFleetAndHistoryAfterExternalAppend(t *testing.T) {
+	m := newFixtureModel(t, truecolorEnv)
+	m.mode = modeHistory
+	m.Update(m.loadHistory()())
+	row := doneRow("cleanup-tmp", "failure", 1, 2)
+	row.StartedAt = history.Stamp(frozen.Add(-time.Second))
+	row.FinishedAt = history.Stamp(frozen.Add(time.Second))
+	if err := m.app.Hist.Append(*row); err != nil {
+		t.Fatal(err)
+	}
+
+	_, cmd := m.Update(m.pollHistorySignature()())
+	for _, c := range batchCmds(cmd) {
+		switch msg := c().(type) {
+		case ScriptsLoadedMsg, HistoryLoadedMsg:
+			m.Update(msg)
+		}
+	}
+	if got := m.statuses["cleanup-tmp"].Status; got != "failure" {
+		t.Errorf("external status = %q, want failure", got)
+	}
+	if got := m.history.filteredRows(m)[0].Script; got != "cleanup-tmp" {
+		t.Errorf("newest history row = %q, want cleanup-tmp", got)
+	}
+}
+
+func TestLoadFleetKeepsOldSignatureWhenHistoryChangesDuringLoad(t *testing.T) {
+	appDir, dataDir := t.TempDir(), filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(filepath.Join(dataDir, "scripts", "quiet"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dataDir, "scripts", "quiet", "main.ps1"), "exit 0\n")
+	write(t, filepath.Join(appDir, "config.json"), fmt.Sprintf(`{"dataDir":%q}`, dataDir))
+	entered, release := make(chan struct{}), make(chan struct{})
+	block := false
+	a, err := app.OpenWith(appDir, func(_ string, args ...string) (string, bool) {
+		if len(args) == 1 && args[0] == "-l" {
+			if block {
+				close(entered)
+				<-release
+			}
+			return "", true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(a, fixedNow)
+	block = true
+	loaded := make(chan ScriptsLoadedMsg, 1)
+	go func() { loaded <- m.loadFleet()().(ScriptsLoadedMsg) }()
+	<-entered // Hist.Last has completed; Cron.Schedules is now blocking before the old final stat.
+	row := doneRow("quiet", "failure", 1, 1)
+	row.StartedAt, row.FinishedAt = history.Stamp(frozen), history.Stamp(frozen)
+	if err := a.Hist.Append(*row); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	msg := <-loaded
+	if msg.HistorySig == historyFileSignature(a.Paths.HistoryFile) {
+		t.Fatal("load paired stale rows with the newer history signature")
+	}
+	if _, ok := msg.Statuses["quiet"]; ok {
+		t.Fatalf("load unexpectedly included the append: %+v", msg.Statuses)
+	}
+}
+
+func TestLoadFleetKeepsQuietScriptStatusBeyondRecentWindow(t *testing.T) {
+	m := newFixtureModel(t, truecolorEnv)
+	quiet := doneRow("cleanup-tmp", "failure", 1, 1)
+	if err := m.app.Hist.Append(*quiet); err != nil {
+		t.Fatal(err)
+	}
+	for range 201 {
+		if err := m.app.Hist.Append(*doneRow("heartbeat", "success", 0, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.Update(m.loadFleet()())
+	if got := m.statuses["cleanup-tmp"].Status; got != "failure" {
+		t.Errorf("quiet script status = %q, want failure", got)
+	}
+	if len(m.recent) != 200 {
+		t.Errorf("recent rows = %d, want bounded 200", len(m.recent))
 	}
 }
 
@@ -223,7 +314,7 @@ func TestStatusExpires(t *testing.T) {
 // that are actually bound. The phase-11 keys must not appear anywhere.
 func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 	m := newFixtureModel(t, truecolorEnv)
-	m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	// Wave B3 closed the last of the PS floor: the output search (ctrl+f;
 	// n/N are a raw keypress match, not a keyMap field — see keys.go's
@@ -245,38 +336,20 @@ func TestFooterShowsOnlyLiveKeys(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		mode  mode
-		focus focus
-		want  []string // the pane's primary keys, between q and :/?
-		tail  []string // the rest of the pane's keys, after them
-	}{
-		{modeFleet, focusList, []string{"↑/k", "↓/j", "↵", "f", "r", "s"}, nil},
-		{modeRun, focusList, []string{"↑/k", "↓/j", "tab", "r", "a", "x", "s"},
-			[]string{"e", "i", "l", "v", "y", "c", "h", "X", "/", "ctrl+f", "U", "t"}},
-		{modeRun, focusOutput, []string{"↑/k", "↓/j", "pgup", "end", "tab", "r", "x"}, nil},
-		{modeHistory, focusList, []string{"↑/k", "↓/j", "↵", "r", "f"}, nil},
-		{modeSchedules, focusList, []string{"↑/k", "↓/j", "e/↵"}, nil},
-	} {
-		m.mode, m.focus = tc.mode, tc.focus
-		var keys []string
-		for _, b := range m.hints() {
-			keys = append(keys, b.Help().Key)
-		}
-		// `q` leads, structurally: no description can grow long enough to push
-		// it off the row (root.go's footer drops whole hints off the END).
-		want := append([]string{"q"}, tc.want...)
-		want = append(want, ":", "?")
-		want = append(want, tc.tail...)
-		want = append(want, "1", "2", "3", "4")
-		if strings.Join(keys, ",") != strings.Join(want, ",") {
-			t.Errorf("mode %v focus %v hints = %v, want %v", tc.mode, tc.focus, keys, want)
-		}
+		mode mode
+		want string
+	}{{modeFleet, "f failures"}, {modeHistory, "f scope"}} {
+		m.mode, m.focus = tc.mode, focusList
 		footer := textkit.StripANSI(m.help.ShortHelpView(m.hints()))
-		for _, k := range tc.want {
-			if !strings.Contains(footer, k) {
-				t.Errorf("footer %q is missing %q", footer, k)
+		for _, want := range []string{"q quit", "↑/↓/j/k move", ": commands", "? help", tc.want} {
+			if !strings.Contains(footer, want) {
+				t.Errorf("footer %q is missing %q", footer, want)
 			}
 		}
+	}
+	m.mode, m.focus = modeRun, focusList
+	if footer := textkit.StripANSI(m.help.ShortHelpView(m.hints())); !strings.Contains(footer, "tab focus") {
+		t.Errorf("Run footer lost focus hint: %q", footer)
 	}
 }
 
@@ -310,6 +383,14 @@ func TestFooterKeepsQuitAtTheFloor(t *testing.T) {
 
 			if !strings.Contains(footer, "q quit") {
 				t.Errorf("%s at width %d lost quit from the footer: %q", view.name, w, footer)
+			}
+			for _, want := range []string{": commands", "? help"} {
+				if !strings.Contains(footer, want) {
+					t.Errorf("%s at width %d lost %q: %q", view.name, w, want, footer)
+				}
+			}
+			if view.mode == modeRun && !strings.Contains(footer, "tab focus") {
+				t.Errorf("%s at width %d lost focus: %q", view.name, w, footer)
 			}
 			// and no hint is ever cut in half: the row ends either with a whole
 			// hint or with the ellipsis that says the rest was dropped

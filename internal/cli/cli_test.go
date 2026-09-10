@@ -20,6 +20,7 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
 	"github.com/yshah-aromatech/scriptorium/internal/cli"
 	"github.com/yshah-aromatech/scriptorium/internal/cron"
+	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/lockfile"
 	"github.com/yshah-aromatech/scriptorium/internal/pwshtest"
 	"github.com/yshah-aromatech/scriptorium/internal/update"
@@ -136,6 +137,28 @@ func writeScript(t *testing.T, dataDir, name, body string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "main.ps1"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListKeepsQuietScriptStatusBeyondLegacyTail(t *testing.T) {
+	_, dataDir := setupApp(t)
+	writeScript(t, dataDir, "quiet", "exit 0")
+	store := history.NewStore(filepath.Join(dataDir, "history.jsonl"))
+	now := history.Stamp(time.Now())
+	if err := store.Append(history.Row{Script: "quiet", Status: "failure", StartedAt: now, FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2001 {
+		if err := store.Append(history.Row{Script: "noisy", Status: "success", StartedAt: now, FinishedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out, errw bytes.Buffer
+	if code := cli.Main([]string{"--list"}, &out, &errw); code != 0 {
+		t.Fatalf("--list exit = %d, stderr: %s", code, errw.String())
+	}
+	if !strings.Contains(out.String(), "quiet") || !strings.Contains(out.String(), "failure") {
+		t.Errorf("quiet script lost its status beyond the old 2000-row tail:\n%s", out.String())
 	}
 }
 

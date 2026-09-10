@@ -15,6 +15,7 @@ package cron
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -44,12 +45,14 @@ var (
 	exprRe    = regexp.MustCompile(`^(@\S+|(?:\S+\s+){4}\S+)\s+cd `)
 	// A quote or space in the name would break the shell-quoted cron line AND
 	// the reader regex that parses it back — refuse rather than corrupt.
-	safeNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	safeNameRe  = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	noCrontabRe = regexp.MustCompile(`^(?:crontab: )?no crontab for [^\s]+$`)
 )
 
 // CrontabRunner executes the crontab binary. stdin is piped in (empty for a
 // read); ok is false when the command could not run at all or exited
-// nonzero. Injected so no test ever touches a real crontab.
+// nonzero (stdout then contains diagnostics). A positively identified absent
+// crontab is normalized to ("", true). Injected so tests never touch a real crontab.
 type CrontabRunner func(stdin string, args ...string) (stdout string, ok bool)
 
 // Crontab is the managed block in one user's crontab. AppDir/LogsDir/BinPath
@@ -64,27 +67,30 @@ type Crontab struct {
 	mu sync.Mutex
 }
 
-// defaultRunner shells out to the crontab binary, resolved through PATH (so a
-// PATH shim can stand in for it). stderr is discarded, matching PS's
-// `2>$null`: "no crontab for <user>" must not read as output. A command that
-// could not START surfaces its error as stdout, which puts Read in its
-// failed-with-output arm — the same wipe-guard side PS's catch block takes.
+// defaultRunner preserves failed-command diagnostics. Only the known C-locale
+// "no crontab" response is normalized into a successful empty read.
 func defaultRunner(stdin string, args ...string) (string, bool) {
 	bin, err := exec.LookPath("crontab")
 	if err != nil {
 		return err.Error(), false
 	}
 	cmd := exec.Command(bin, args...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.Output()
-	if err != nil {
-		var ee *exec.ExitError
-		if !errors.As(err, &ee) {
-			return err.Error(), false
-		}
-		return string(out), false
+	if err == nil {
+		return string(out), true
 	}
-	return string(out), true
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return err.Error(), false
+	}
+	diagnostic := strings.TrimSpace(string(ee.Stderr))
+	if len(args) == 1 && args[0] == "-l" && ee.ExitCode() == 1 && len(out) == 0 &&
+		noCrontabRe.MatchString(diagnostic) {
+		return "", true
+	}
+	return strings.TrimSpace(string(out)+string(ee.Stderr)) + " (" + err.Error() + ")", false
 }
 
 func (c *Crontab) runner() CrontabRunner {
@@ -103,25 +109,19 @@ func splitLines(out string) []string {
 	return strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 }
 
-// Read is Get-StoCrontab's truth table:
-//
-//	exit 0 with output      -> (lines, true)
-//	exit 0 with no output   -> (nil, true)    empty crontab
-//	failed with no stdout   -> (nil, true)    "no crontab for <user>"
-//	failed with stdout      -> (nil, false)   a real read failure
-//	could not execute       -> (nil, false)   (runner reports the error as stdout)
-//
-// ok=false is the wipe guard: it means "unknown contents", and no caller may
-// write on it.
+// Read returns ok=false for every ambiguous failure; callers must not write
+// when the existing contents are unknown.
 func (c *Crontab) Read() ([]string, bool) {
+	lines, err := c.read()
+	return lines, err == nil
+}
+
+func (c *Crontab) read() ([]string, error) {
 	out, ok := c.runner()("", "-l")
-	if ok {
-		return splitLines(out), true
+	if !ok {
+		return nil, fmt.Errorf("crontab read failed — refusing to write (unmanaged entries would be destroyed): %s", strings.TrimSpace(out))
 	}
-	if out == "" {
-		return nil, true
-	}
-	return nil, false
+	return splitLines(out), nil
 }
 
 // Lines returns the whole crontab (Get-StoCrontabLines): a failed read is
@@ -186,9 +186,9 @@ func (c *Crontab) Save(schedules map[string]string) error {
 }
 
 func (c *Crontab) save(schedules map[string]string) error {
-	lines, ok := c.Read()
-	if !ok {
-		return errors.New("crontab read failed — refusing to write (unmanaged entries would be destroyed)")
+	lines, err := c.read()
+	if err != nil {
+		return err
 	}
 	return c.saveFromLines(lines, schedules)
 }
@@ -247,8 +247,8 @@ func (c *Crontab) saveFromLines(lines []string, schedules map[string]string) err
 	if text != "" {
 		text += "\n"
 	}
-	if _, ok := c.runner()(text, "-"); !ok {
-		return errors.New("crontab write failed")
+	if diagnostic, ok := c.runner()(text, "-"); !ok {
+		return fmt.Errorf("crontab write failed: %s", strings.TrimSpace(diagnostic))
 	}
 	return nil
 }
@@ -271,9 +271,9 @@ func (c *Crontab) Set(name, expr string) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	lines, ok := c.Read()
-	if !ok {
-		return errors.New("crontab read failed — refusing to write (unmanaged entries would be destroyed)")
+	lines, err := c.read()
+	if err != nil {
+		return err
 	}
 	s := schedulesFromLines(lines)
 	s[name] = expr
@@ -285,9 +285,9 @@ func (c *Crontab) Set(name, expr string) error {
 func (c *Crontab) Remove(name string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	lines, ok := c.Read()
-	if !ok {
-		return errors.New("crontab read failed — refusing to write (unmanaged entries would be destroyed)")
+	lines, err := c.read()
+	if err != nil {
+		return err
 	}
 	s := schedulesFromLines(lines)
 	delete(s, name)

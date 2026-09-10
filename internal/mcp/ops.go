@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yshah-aromatech/scriptorium/internal/app"
 	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
@@ -184,7 +185,7 @@ func splitNonEmptyLines(s string) []string {
 // ---------------------------------------------------------------------
 
 func (o *Ops) ListScripts() (any, bool, error) {
-	rows, _ := o.App.Hist.Last(2000)
+	rows, _ := o.App.Hist.Last(0)
 	statuses := history.LastStatuses(rows)
 	schedules := o.App.Cron.Schedules()
 	running := map[string]bool{}
@@ -321,12 +322,17 @@ func (o *Ops) RunScript(args map[string]any) (any, bool, error) {
 	}
 	timeout := time.Duration(minutes * float64(time.Minute))
 
-	var lines []string
+	tail := outputTail{limit: max(o.App.Cfg.LogTailKb, 0) * 1024}
+	firstLine := true
 	row, err := o.App.Runner.RunToCompletion(context.Background(), runner.Spec{
 		Script: s, Trigger: "mcp", ExtraArgs: extraArgs, ExtraEnv: extraEnv, Timeout: timeout,
 	}, func(ev runner.Event) {
 		if ev.Kind == runner.EvLine {
-			lines = append(lines, ev.Line)
+			if !firstLine {
+				tail.add("\n")
+			}
+			firstLine = false
+			tail.add(ev.Line)
 		}
 	})
 	if err != nil {
@@ -334,9 +340,11 @@ func (o *Ops) RunScript(args map[string]any) (any, bool, error) {
 	}
 
 	// prefer the log tail (bounded, already redacted); skipped runs have no log
-	output := strings.Join(lines, "\n")
+	output := tail.text()
 	if row.LogFile != nil && *row.LogFile != "" {
-		output = history.LogTail(*row.LogFile, o.App.Cfg.LogTailKb)
+		if disk := history.LogTail(*row.LogFile, o.App.Cfg.LogTailKb); disk != "" {
+			output = disk
+		}
 	}
 
 	out := map[string]any{
@@ -351,6 +359,9 @@ func (o *Ops) RunScript(args map[string]any) (any, bool, error) {
 		"resources": map[string]any{
 			"cpuAvgPercent": 0.0, "cpuMaxPercent": 0.0, "memAvgMb": 0.0, "memMaxMb": 0.0,
 		},
+	}
+	if len(row.PersistenceWarnings) > 0 {
+		out["persistenceWarnings"] = row.PersistenceWarnings
 	}
 	if row.Resources != nil {
 		out["resources"] = map[string]any{
@@ -370,6 +381,38 @@ func (o *Ops) RunScript(args map[string]any) (any, bool, error) {
 		out["depInstallWarning"] = "dependency install exited non-zero — a failure may be caused by missing modules"
 	}
 	return out, false, nil
+}
+
+// outputTail retains at most limit bytes, copying suffixes so a huge input
+// line cannot keep its original allocation alive after the event is consumed.
+// ponytail: shifting costs O(limit) per line; use a ring if large configured tails become costly.
+type outputTail struct {
+	data  []byte
+	limit int
+}
+
+func (t *outputTail) add(text string) {
+	if t.limit <= 0 {
+		return
+	}
+	if t.data == nil {
+		t.data = make([]byte, 0, t.limit)
+	}
+	if len(text) >= t.limit {
+		text = text[len(text)-t.limit:]
+		t.data = t.data[:0]
+	} else if excess := len(t.data) + len(text) - t.limit; excess > 0 {
+		t.data = t.data[:copy(t.data, t.data[excess:])]
+	}
+	t.data = append(t.data, text...)
+}
+
+func (t *outputTail) text() string {
+	data := t.data
+	for len(data) > 0 && !utf8.RuneStart(data[0]) {
+		data = data[1:]
+	}
+	return string(data)
 }
 
 // ---------------------------------------------------------------------
@@ -571,10 +614,14 @@ func (o *Ops) UpdateApp() (any, bool, error) {
 	if buildinfo.Version == "dev" {
 		out, err := exec.Command("git", deps.GitPullFFOnlyArgs(o.App.Paths.AppDir)...).CombinedOutput()
 		ok := err == nil
+		note := "source update failed — see output"
+		if ok {
+			note = "source updated — rebuild, then restart the MCP service: systemctl restart scriptorium-mcp"
+		}
 		return map[string]any{
 			"ok":     ok,
 			"output": o.App.Sec.Redact(string(out)),
-			"note":   "restart the MCP service to apply: systemctl restart scriptorium-mcp",
+			"note":   note,
 		}, !ok, nil
 	}
 

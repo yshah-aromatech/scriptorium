@@ -511,8 +511,27 @@ func scrollWindow(top, sel, n, h int) int {
 // selected is the script the whole frame is talking about — the status bar's
 // context line and the Run view's deep-link both read it.
 func (m *Model) selected() *scripts.Script {
-	if m.mode == modeRun {
+	switch m.mode {
+	case modeFleet:
+		return m.fleet.selected(m)
+	case modeRun:
 		return m.run.selected(m)
+	case modeHistory:
+		rows := m.history.filteredRows(m)
+		if m.history.sel < 0 || m.history.sel >= len(rows) {
+			return nil
+		}
+		name := rows[m.history.sel].Script
+		if s := m.run.byName(m, name); s != nil {
+			return s
+		}
+		return &scripts.Script{Name: name}
+	case modeSchedules:
+		rows := m.sched.rows(m)
+		if m.sched.sel < 0 || m.sched.sel >= len(rows) {
+			return nil
+		}
+		return m.run.byName(m, rows[m.sched.sel].Name)
 	}
-	return m.fleet.selected(m)
+	return nil
 }

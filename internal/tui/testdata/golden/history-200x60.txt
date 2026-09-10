@@ -55,6 +55,6 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── ↵ open · r run script · f failures / scope ──╯
- backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-q quit · ↑/k up · ↓/j down · ↵ open · r run script · f failures / scope · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── ↵ open · r run script · f scope ──╯
+ heartbeat · ping the uptime endpoint · ↻ */10 * * * * · next in 10m
+q quit · ↑/↓/j/k move · : commands · ? help

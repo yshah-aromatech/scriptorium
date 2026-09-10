@@ -20,5 +20,5 @@
 
 
 
- backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-q quit · ↑/k up · ↓/j down · ↵ open · r run script · f failures / scope …
+ heartbeat · ping the uptime endpoint · ↻ */10 * * * * · next in 10m
+q quit · ↑/↓/j/k move · : commands · ? help · ↵ open · r run script · f scope

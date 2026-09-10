@@ -1,0 +1,24 @@
+ ▸ scriptorium    1 Fleet  2 Run  3 History  4 Schedules          ⟳ 4m   v1.4.2
+ ● 3 ok  ·  ✗ 1 failing  ·  ⚠ 1 missed  ·  ⏲ 2 due <1h                5 scripts
+─ scripts ──────────────────────────────────────────────────────────────────────
+╭─ theme ──────────────────────────────────────────────────────────────────────╮
+│ ❯                                                                            │
+│   catppuccin-mocha                                                           │
+│   gruvbox-dark                                                               │
+│ ▎ night-owl                                                                  │
+│   terminal                                                                   │
+│   tokyo-night                                                                │
+│   3024_day                                                                   │
+│   3024_night                                                                 │
+│   aardvark_blue                                                              │
+│   abernathy                                                                  │
+│   adventure                                                                  │
+│   adventure_time                                                             │
+│   afterglow                                                                  │
+│   alabaster                                                                  │
+│   alien_blood                                                                │
+╰─────────────────────── ↑/k up · ↓/j down · ↵ use · ctrl+s save · esc close ──╯
+ ✓ nightly-report         ps    ⣠⣾⣆ 5h2m
+ ✓ backup-db              ps ······   2d
+ backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
+↑/k up · ↓/j down · ↵ use · ctrl+s save · esc close

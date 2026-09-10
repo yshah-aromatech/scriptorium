@@ -100,13 +100,11 @@ func Discover(repos []Repo, paths config.Paths) []Script {
 		if nameCount[strings.ToLower(c.base)] > 1 {
 			name = c.repo.Name + "-" + c.base
 		}
-		lname := strings.ToLower(name)
-		if seen[lname] {
-			name += "-2"
-			seen[strings.ToLower(name)] = true
-		} else {
-			seen[lname] = true
+		baseName := name
+		for n := 2; seen[strings.ToLower(name)]; n++ {
+			name = baseName + "-" + strconv.Itoa(n)
 		}
+		seen[strings.ToLower(name)] = true
 
 		if c.isFile {
 			scripts = append(scripts, newScriptInfo(name, c.repo.Root, c.file, nil, c.repo.Name, c.base, paths))

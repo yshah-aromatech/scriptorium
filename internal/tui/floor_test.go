@@ -245,7 +245,7 @@ func TestSelfUpdateStreamsGitPullAndReportsSuccess(t *testing.T) {
 	if !strings.Contains(out, "self-update (git pull --ff-only) · done") {
 		t.Errorf("the task did not report success:\n%s", out)
 	}
-	if !strings.Contains(m.statusText, "app updated — restart scriptorium to apply") {
+	if !strings.Contains(m.statusText, "source updated — rebuild scriptorium, then restart") {
 		t.Errorf("status = %q", m.statusText)
 	}
 }

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -103,6 +104,17 @@ func TestHistoryRerunWiring(t *testing.T) {
 
 	name := m.history.filteredRows(m)[0].Script
 	msg := cmdMsg(press(m, "r"))
+	// Starting animation may accompany the queue message after a static view.
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, cmd := range batch {
+			if next := cmd(); next != nil {
+				if _, ok := next.(RunQueuedMsg); ok {
+					msg = next
+					break
+				}
+			}
+		}
+	}
 	q, ok := msg.(RunQueuedMsg)
 	if !ok || q.Name != name {
 		t.Fatalf("r on the selected row gave %#v, want it queued behind the live run", msg)
@@ -193,6 +205,7 @@ func patchLogFile(m *Model, script, path string) {
 			m.history.loaded[i].LogFile = &path
 		}
 	}
+	m.history.onLoaded(m, HistoryLoadedMsg{Rows: m.history.loaded})
 }
 
 // doneRowNamed is a minimal finished row for a script the fixture never
@@ -239,4 +252,62 @@ func TestGoldensHistory(t *testing.T) {
 		press(m, "enter")
 		return m
 	})
+}
+
+func TestHistoryOrderingCacheReloadAndScope(t *testing.T) {
+	m := historyAt(t, 120, 40)
+	first := m.history.filteredRows(m)
+	if allocs := testing.AllocsPerRun(10, func() { _ = m.history.filteredRows(m) }); allocs != 0 {
+		t.Errorf("unchanged History ordering allocates %.0f times", allocs)
+	}
+	m.historyScope = first[0].Script
+	if rows := m.history.filteredRows(m); len(rows) != 1 || rows[0].Script != m.historyScope {
+		t.Fatalf("scope: %v", rows)
+	}
+	m.historyScope = ""
+	// Reloading the same backing slice still refreshes ordering and width;
+	// an offscreen long name must size every visible row consistently.
+	m.history.loaded[0].Script = strings.Repeat("wide", 10)
+	m.history.onLoaded(m, HistoryLoadedMsg{Rows: m.history.loaded})
+	if m.history.nameW != nameColMax {
+		t.Fatalf("offscreen name width = %d", m.history.nameW)
+	}
+	m.historyScope = first[0].Script
+	_ = m.history.filteredRows(m)
+	if m.history.nameW != len(first[0].Script) {
+		t.Fatalf("scope kept old column width %d", m.history.nameW)
+	}
+	m.historyScope = ""
+	m.history.sel = 100
+	m.history.onLoaded(m, HistoryLoadedMsg{Rows: []history.Row{doneRowNamed("replacement")}})
+	if rows := m.history.filteredRows(m); len(rows) != 1 || rows[0].Script != "replacement" || m.history.sel != 0 {
+		t.Fatalf("reload: %v selection %d", rows, m.history.sel)
+	}
+	m.history.onLoaded(m, HistoryLoadedMsg{})
+	if rows := m.history.filteredRows(m); len(rows) != 0 {
+		t.Fatalf("empty reload: %v", rows)
+	}
+}
+
+func BenchmarkHistoryRender(b *testing.B) {
+	for _, n := range []int{200, 50000} {
+		for _, warm := range []bool{false, true} {
+			b.Run(fmt.Sprintf("rows=%d/warm=%t", n, warm), func(b *testing.B) {
+				m := newFixtureModel(b, truecolorEnv)
+				m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+				m.mode = modeHistory
+				for range n {
+					m.history.loaded = append(m.history.loaded, m.recent[0])
+				}
+				if warm {
+					_ = m.frame()
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					_ = m.frame()
+				}
+			})
+		}
+	}
 }

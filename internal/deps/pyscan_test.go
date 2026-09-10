@@ -173,19 +173,8 @@ func TestScanPythonRequirementsPrecedenceNoVenv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanPython: %v", err)
 	}
-	byName := depNames(got)
-	for _, want := range []string{"requests", "localpkg"} {
-		d, ok := byName[want]
-		if !ok {
-			t.Errorf("missing %q, got %+v", want, got)
-			continue
-		}
-		if d.PipName != want || d.Display != want {
-			t.Errorf("%q Dep = %+v, want PipName/Display verbatim (no mapping for requirements.txt names)", want, d)
-		}
-	}
-	if _, ok := byName["shouldnotbescanned"]; ok {
-		t.Error("requirements.txt present -> the AST scanner must not run at all")
+	if len(got) != 1 || got[0].Name != "requirements.txt" {
+		t.Errorf("requirements.txt present -> one pip manifest sentinel, got %+v", got)
 	}
 }
 
@@ -199,15 +188,35 @@ func TestScanPythonRequirementsPrecedenceEmptyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanPython: %v", err)
 	}
-	if got != nil {
-		t.Errorf("empty requirements.txt should yield no deps, got %+v", got)
+	if len(got) != 1 || got[0].Name != "requirements.txt" {
+		t.Errorf("a manifest must always request pip preparation, got %+v", got)
+	}
+}
+
+func TestScanPythonRequirementsAlwaysDelegatesPinsExtrasAndIncludesToPip(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("requests[socks]==2.32.3\n-r shared.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("urllib3==2.2.2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	venvDir := filepath.Join(dir, "venv")
+	writeStubVenvPython(t, venvDir, `[{"name":"requests"},{"name":"urllib3"}]`)
+
+	got, err := (&Scanner{}).ScanPython(dir, venvDir, "python3")
+	if err != nil {
+		t.Fatalf("ScanPython: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "requirements.txt" {
+		t.Errorf("manifest scan = %+v, want one manifest sentinel despite pip list", got)
 	}
 }
 
 // installedPipNames is exercised via a stub venv python answering
 // `-m pip list --format=json` with canned JSON — no real pip involved. Also
 // covers the underscore<->hyphen, case-insensitive normalization rule.
-func TestScanPythonRequirementsWithVenvNormalization(t *testing.T) {
+func TestScanPythonRequirementsWithVenvAlwaysRequestsManifestInstall(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("requests\nflask\nsome_package\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -220,18 +229,8 @@ func TestScanPythonRequirementsWithVenvNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanPython: %v", err)
 	}
-	byName := depNames(got)
-	if _, ok := byName["requests"]; ok {
-		t.Errorf("requests is in the stub pip list -> should not be missing, got %+v", got)
-	}
-	if _, ok := byName["some_package"]; ok {
-		t.Errorf("some_package should normalize (underscore<->hyphen, case-insensitive) against installed 'Some-Package' -> not missing, got %+v", got)
-	}
-	if _, ok := byName["flask"]; !ok {
-		t.Errorf("flask is not in the stub pip list -> should be missing, got %+v", got)
-	}
-	if len(got) != 1 {
-		t.Errorf("got %+v, want exactly [flask]", got)
+	if len(got) != 1 || got[0].Name != "requirements.txt" {
+		t.Errorf("got %+v, want exactly [requirements.txt]", got)
 	}
 }
 

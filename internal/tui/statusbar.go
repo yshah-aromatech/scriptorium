@@ -15,11 +15,20 @@ import (
 // time in this order of urgency: what is running now, what just happened, and
 // — when nothing is happening — what the highlighted script is.
 func (m *Model) statusBar() string {
+	fade := func(age time.Duration) float64 {
+		if m.app.Cfg.ReducedMotion {
+			return 0
+		}
+		return fadeAmount(age)
+	}
+	if age := m.now().Sub(m.statusAt); m.statusText != "" && age <= statusTTL && m.statusKind >= StatusWarn {
+		return textkit.Truncate(statusLine(m.th, m.statusKind, m.statusText, fade(age)), m.w)
+	}
 	if line, busy := m.run.statusLine(m, m.w); busy {
 		return line
 	}
 	if age := m.now().Sub(m.statusAt); m.statusText != "" && age <= statusTTL {
-		return textkit.Truncate(statusLine(m.th, m.statusKind, m.statusText, fadeAmount(age)), m.w)
+		return textkit.Truncate(statusLine(m.th, m.statusKind, m.statusText, fade(age)), m.w)
 	}
 	return textkit.Truncate(m.contextLine(), m.w)
 }

@@ -84,6 +84,10 @@ type TickMsg time.Time
 // the MCP server or another shell.
 type LockPollMsg time.Time
 
+// HistorySignatureMsg carries the history file's cheap change signature.
+// Stat happens in a command; Update only compares the result.
+type HistorySignatureMsg struct{ Sig historySignature }
+
 // MissedTickMsg is the 60 s beat: run app.MissedSweep.
 type MissedTickMsg time.Time
 
@@ -94,11 +98,13 @@ type MissedTickMsg time.Time
 // ScriptsLoadedMsg carries a full refresh of the fleet: discovery, last
 // statuses and the managed crontab, gathered together off the update loop.
 type ScriptsLoadedMsg struct {
-	Scripts   []scripts.Script
-	Statuses  map[string]history.Last
-	Schedules map[string]string
-	Recent    []history.Row
-	SyncedAt  time.Time
+	Scripts    []scripts.Script
+	Statuses   map[string]history.Last
+	Schedules  map[string]string
+	Recent     []history.Row
+	EnvLabels  map[string]string
+	HistorySig historySignature
+	SyncedAt   time.Time
 }
 
 // LiveRunsMsg is the result of one lock scan.
@@ -144,6 +150,7 @@ type ScheduleSavedMsg struct {
 // plain `i` check. Degraded/Warning come from the PowerShell scanner's
 // no-pwsh fallback, which can report deps but never install them.
 type DepsScannedMsg struct {
+	Attempt     *runAttempt
 	Script      scripts.Script
 	Missing     []deps.Dep
 	Args        []string
@@ -160,6 +167,7 @@ type DepsScannedMsg struct {
 // RunStartedMsg announces a launched run: the handle to drain and kill it
 // with, and the ETA derived from history at launch (never mid-render).
 type RunStartedMsg struct {
+	Attempt   *runAttempt
 	Script    scripts.Script
 	Handle    *runner.Handle
 	StartedAt time.Time
@@ -168,13 +176,23 @@ type RunStartedMsg struct {
 
 // RunEventsMsg is one batched drain of the runner's event channel.
 type RunEventsMsg struct {
+	Handle *runner.Handle
 	Batch  []runner.Event
 	Closed bool
 }
 
 // RunDoneMsg carries the finished run's history row (nil only if the run was
 // abandoned, which needs a cancelled context and a full buffer at once).
-type RunDoneMsg struct{ Row *history.Row }
+type RunDoneMsg struct {
+	Handle *runner.Handle
+	Row    *history.Row
+}
+
+// RunStartFailedMsg acknowledges launch failure or cancellation before a handle exists.
+type RunStartFailedMsg struct {
+	Attempt *runAttempt
+	Err     error
+}
 
 // RunQueuedMsg announces that a run was queued behind the live one.
 type RunQueuedMsg struct {
@@ -192,6 +210,7 @@ type RunQueuedMsg struct {
 // it has; Closed is the channel's end, which is when the task is really over
 // (a cancelled task still drains to it).
 type TaskEventsMsg struct {
+	Task     *task
 	Name     string
 	Batch    []string
 	Closed   bool
@@ -236,4 +255,17 @@ type ErrMsg struct {
 // status is a shorthand for the common "post a line" command.
 func status(kind StatusKind, text string) tea.Cmd {
 	return func() tea.Msg { return StatusMsg{Text: text, Kind: kind} }
+}
+
+// EnvSavedMsg keeps the dirty editor alive until its atomic save succeeds.
+type EnvSavedMsg struct {
+	Editor *envOverlay
+	Text   string
+	Err    error
+}
+
+type ThemeSavedMsg struct {
+	Picker *themeOverlay
+	Name   string
+	Err    error
 }

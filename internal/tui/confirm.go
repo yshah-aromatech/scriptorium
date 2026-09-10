@@ -8,14 +8,13 @@ import (
 // confirmOverlay is the y/n modal (inventory §1.6): y or Enter runs the
 // action, n or Esc cancels with "cancelled".
 //
-// The action is a tea.Cmd, not a closure over the model. The PS app had to
-// pass its data through state to keep its scriptblocks resolvable; here the
-// reason is the update loop — whatever the answer triggers has to be a command
-// like everything else, so a confirm can kill a run (which blocks for the 3s
-// grace) without stalling the frame.
+// onYes is asynchronous work. onAccept/onCancel run on the update loop when
+// the answer itself must change ownership; they return any asynchronous work.
 type confirmOverlay struct {
-	message string
-	onYes   tea.Cmd
+	message  string
+	onYes    tea.Cmd
+	onAccept func(*Model) tea.Cmd
+	onCancel func(*Model) tea.Cmd
 }
 
 func confirmPrompt(message string, onYes tea.Cmd) *confirmOverlay {
@@ -39,8 +38,14 @@ func (c *confirmOverlay) hints(m *Model) []key.Binding {
 func (c *confirmOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch {
 	case key.Matches(msg, m.keys.Accept):
+		if c.onAccept != nil {
+			return c.onAccept(m), true
+		}
 		return c.onYes, true
 	case key.Matches(msg, m.keys.Deny), key.Matches(msg, m.keys.Close):
+		if c.onCancel != nil {
+			return c.onCancel(m), true
+		}
 		return status(StatusInfo, "cancelled"), true
 	}
 	return nil, false
@@ -52,9 +57,20 @@ func (c *confirmOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // promises.
 func (m *Model) quitCmd() tea.Cmd {
 	if !m.run.active() {
+		m.closeOverlay()
 		return tea.Quit
 	}
-	m.open(confirmPrompt("a script is running — kill it and quit?",
-		tea.Sequence(m.run.kill(m), tea.Quit)))
+	previous := m.ov
+	m.open(&confirmOverlay{onCancel: func(m *Model) tea.Cmd {
+		m.open(previous)
+		if p, ok := previous.(*themeOverlay); ok && p.settled {
+			return nil
+		}
+		return status(StatusInfo, "cancelled")
+	}, message: "a script is running — kill it and quit?", onAccept: func(m *Model) tea.Cmd {
+		m.run.quitting = true
+		m.run.queue = nil
+		return tea.Batch(m.run.kill(m), m.run.settle(m))
+	}})
 	return nil
 }
