@@ -257,6 +257,41 @@ function Initialize-Sto {
 #     back to the logRetentionDays age prune
 #   - historyMaxLines is only a safety backstop against pathological growth
 # ---------------------------------------------------------------------------
+# Shared with internal/history.Lock: flock the stable sidecar, never the
+# history inode (retention replaces it). Dispose releases even after errors.
+function Open-StoHistoryLock {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not ('StoHistoryNative' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class StoHistoryNative {
+    [DllImport("libc", SetLastError = true)]
+    public static extern int flock(int fd, int operation);
+    [DllImport("libc", SetLastError = true)]
+    public static extern int open(string path, int flags);
+}
+'@
+    }
+    # FileStream.Open itself takes a nonblocking flock in .NET and rejects
+    # an already-locked file. Native open lets us wait instead of losing rows.
+    # Ensure the empty sidecar exists; an IOException may mean it is locked.
+    # Native open below reports actual open failures and avoids variadic mode
+    # arguments, whose ABI differs on Apple Silicon.
+    try { [IO.File]::Open("$Path.lock", [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite).Dispose() }
+    catch [IO.IOException] { }
+    # O_RDWR | O_CLOEXEC, on the supported macOS/Linux hosts.
+    $flags = if ($IsMacOS) { 2 -bor 0x1000000 } else { 2 -bor 0x80000 }
+    $fd = [StoHistoryNative]::open("$Path.lock", $flags)
+    if ($fd -lt 0) { throw 'history lock open failed' }
+    $file = [Microsoft.Win32.SafeHandles.SafeFileHandle]::new([IntPtr]$fd, $true)
+    try {
+        while ([StoHistoryNative]::flock($fd, 2) -ne 0) {
+            if ([Runtime.InteropServices.Marshal]::GetLastWin32Error() -ne 4) { throw 'history lock failed' }
+        }
+        return $file
+    } catch { $file.Dispose(); throw }
+}
+
 function Clear-StoOldData {
     param([switch]$Force)
     $cfg = $script:Config
@@ -268,8 +303,9 @@ function Clear-StoOldData {
             if ((Test-Path $stamp) -and ((Get-Date) - (Get-Item -Force $stamp).LastWriteTime).TotalHours -lt 1) { return }
         } catch { }
     }
-    try { New-Item -ItemType File -Path $stamp -Force | Out-Null } catch { }
-
+    try { $historyLock = Open-StoHistoryLock -Path $paths.HistoryFile }
+    catch { Write-Warning 'history lock failed; retention skipped'; return }
+    try {
     # aged/orphaned log files
     try {
         $days = [double]$cfg.logRetentionDays
@@ -325,8 +361,7 @@ function Clear-StoOldData {
             $keep.RemoveRange(0, $keep.Count - $max)
         }
         if ($dropped -gt 0) {
-            # ponytail: rewrite can drop a history append racing in this exact
-            # instant; hourly throttle + atomic move keep the window tiny
+            # The history sidecar lock covers both reads and the replacement.
             $tmp = "$($paths.HistoryFile).tmp"
             [IO.File]::WriteAllLines($tmp, $keep)
             [IO.File]::Move($tmp, $paths.HistoryFile, $true)   # one rename(2) — Move-Item -Force deletes then renames
@@ -341,6 +376,8 @@ function Clear-StoOldData {
             }
         }
     } catch { }
+    try { New-Item -ItemType File -Path $stamp -Force | Out-Null } catch { }
+    } finally { $historyLock.Dispose() }
 }
 
 # script name -> $true for every cron-scheduled script firing at 10-minute
@@ -712,4 +749,4 @@ Export-ModuleMember -Function Initialize-Sto, Get-StoConfig, Get-StoConfigWarnin
 Get-StoPaths, Get-StoAppDir, Get-StoAppVersion, Get-StoTheme, Read-StoEnvFile, Read-StoEnvDoc, Register-StoSecret,
 Hide-StoSecret, Format-StoDuration, Format-StoRelativeTime, Copy-StoClipboard,
 ConvertTo-AnsiFg, ConvertTo-AnsiBg, ConvertTo-Ansi256Index, Get-StoBlendHex,
-Get-StoDisplayWidth, Get-StoCodepointWidth, Format-StoCell, Split-StoArguments, Clear-StoOldData, Get-StoFrequentScripts
+Get-StoDisplayWidth, Get-StoCodepointWidth, Format-StoCell, Split-StoArguments, Clear-StoOldData, Get-StoFrequentScripts, Open-StoHistoryLock

@@ -44,6 +44,13 @@ type historyModel struct {
 	// own rule), oldest first exactly as the store returns it.
 	loaded []history.Row
 
+	// Cache ordering and column metadata together; onLoaded invalidates even
+	// when a refreshed snapshot reuses the same backing slice.
+	cachedSource []history.Row
+	cachedScope  string
+	ordered      []history.Row
+	nameW        int
+
 	preview *historyPreview
 }
 
@@ -68,20 +75,30 @@ func (h *historyModel) clampSel(n int) {
 // h.loaded arrives oldest-first (the store's own order), so this walks it
 // backwards rather than sorting.
 func (h *historyModel) filteredRows(m *Model) []history.Row {
-	var out []history.Row
+	if h.ordered != nil && h.cachedScope == m.historyScope && len(h.cachedSource) == len(h.loaded) &&
+		(len(h.loaded) == 0 || &h.cachedSource[0] == &h.loaded[0]) {
+		return h.ordered
+	}
+	h.cachedSource, h.cachedScope = h.loaded, m.historyScope
+	h.ordered = make([]history.Row, 0, len(h.loaded))
+	h.nameW = 8
 	for i := len(h.loaded) - 1; i >= 0; i-- {
 		r := h.loaded[i]
 		if m.historyScope == "" || r.Script == m.historyScope {
-			out = append(out, r)
+			h.ordered = append(h.ordered, r)
+			if h.nameW < nameColMax {
+				h.nameW = min(nameColMax, max(h.nameW, textkit.Width(r.Script)))
+			}
 		}
 	}
-	return out
+	return h.ordered
 }
 
 // onLoaded stores a fresh read (root.go's HistoryLoadedMsg case) and clamps
 // the selection, which a shorter reload can otherwise leave out of range.
 func (h *historyModel) onLoaded(m *Model, msg HistoryLoadedMsg) {
 	h.loaded = msg.Rows
+	h.ordered = nil
 	h.clampSel(len(h.filteredRows(m)))
 }
 
@@ -292,11 +309,7 @@ func (h *historyModel) tableRows(m *Model, rows []history.Row, w, hh int) []stri
 	h.top = scrollWindow(h.top, h.sel, len(rows), max(hh, 1))
 
 	wide := w >= wideTableMin
-	nameW := 8
-	for _, r := range rows {
-		nameW = max(nameW, textkit.Width(r.Script))
-	}
-	nameW = min(nameW, nameColMax)
+	nameW := h.nameW
 
 	var out []string
 	for i := h.top; i < len(rows) && len(out) < hh; i++ {

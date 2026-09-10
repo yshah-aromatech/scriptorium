@@ -48,6 +48,45 @@ func TestRunLayout(t *testing.T) {
 	}
 }
 
+func TestRunNarrowLayoutKeepsOneFullWidthPane(t *testing.T) {
+	for _, size := range [][2]int{{40, 10}, {60, 24}, {79, 24}} {
+		m := runAt(t, size[0], size[1])
+		frame := plainFrame(m)
+		if !strings.Contains(frame, "scripts · list") || strings.Contains(frame, "─ output") {
+			t.Errorf("%dx%d list frame did not show only the list:\n%s", size[0], size[1], frame)
+		}
+		before := m.run.list.Index()
+		press(m, "tab")
+		frame = plainFrame(m)
+		if !strings.Contains(frame, "─ output") || strings.Contains(frame, "scripts · list") || m.run.list.Index() != before {
+			t.Errorf("%dx%d output frame lost state or rendered both panes:\n%s", size[0], size[1], frame)
+		}
+		checkFrameShape(t, "narrow run", m.frame(), size[0], size[1])
+	}
+	m := runAt(t, 80, 24)
+	frame := plainFrame(m)
+	if !strings.Contains(frame, "─ scripts") || !strings.Contains(frame, "─ output") || !strings.Contains(frame, "│") {
+		t.Errorf("80 columns did not retain the split:\n%s", frame)
+	}
+}
+
+func TestGoldensRunNarrow(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		focus focus
+	}{{"run-narrow-list", focusList}, {"run-narrow-output", focusOutput}} {
+		for _, size := range [][2]int{{40, 10}, {60, 24}} {
+			m := runAt(t, size[0], size[1])
+			m.focus = tc.focus
+			frame := m.frame()
+			base := fmt.Sprintf("%s-%dx%d", tc.name, size[0], size[1])
+			checkFrameShape(t, base, frame, size[0], size[1])
+			checkGolden(t, base+".txt", plainGolden(frame))
+			checkGolden(t, base+".ansi", frame)
+		}
+	}
+}
+
 // The details card describes the SELECTED script, and follows the selection.
 func TestDetailsCardFollowsSelection(t *testing.T) {
 	m := runAt(t, 120, 40)
@@ -549,6 +588,56 @@ func TestRunDoneReportsEverywhere(t *testing.T) {
 	}
 }
 
+func TestSelectedUsesCurrentHistoryAndSchedulesRows(t *testing.T) {
+	m := newFixtureModel(t, truecolorEnv)
+	m.mode = modeHistory
+	m.Update(m.loadHistory()())
+	m.history.sel = 0
+	if rows := m.history.filteredRows(m); len(rows) == 0 || m.selected() == nil || m.selected().Name != rows[0].Script {
+		t.Fatalf("history selected = %+v, rows = %+v", m.selected(), rows)
+	}
+	m.mode = modeSchedules
+	m.sched.sel = 0
+	if rows := m.sched.rows(m); len(rows) == 0 || m.selected() == nil || m.selected().Name != rows[0].Name {
+		t.Fatalf("schedules selected = %+v, rows = %+v", m.selected(), rows)
+	}
+}
+
+func TestEnvironmentLabelsRefreshOnlyWithFleetLoads(t *testing.T) {
+	m := newFixtureModel(t, truecolorEnv)
+	m.mode = modeRun
+	m.run.selectByName(m, "backup-db")
+	s := m.run.selected(m)
+	if s == nil {
+		t.Fatal("backup-db not selected")
+	}
+	write(t, s.EnvFile, "ONE=1\nTWO=2\n")
+	m.Update(m.loadFleet()())
+	if got := m.envLabels[s.Name]; got != "2 vars" {
+		t.Fatalf("loaded env label = %q, want 2 vars", got)
+	}
+	if err := os.Remove(s.EnvFile); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(m.run.detailsBody(m, 80), "\n"); !strings.Contains(got, "2 vars") {
+		t.Errorf("View recomputed environment label after external change: %q", got)
+	}
+	if err := os.MkdirAll(s.VenvDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m.Update(m.loadFleet()())
+	if got := m.envLabels[s.Name]; !strings.Contains(got, "venv") {
+		t.Errorf("loaded env label = %q, want venv", got)
+	}
+	if err := os.RemoveAll(s.VenvDir); err != nil {
+		t.Fatal(err)
+	}
+	m.Update(m.loadFleet()())
+	if got := m.envLabels[s.Name]; strings.Contains(got, "venv") {
+		t.Errorf("reloaded env label = %q, still has venv", got)
+	}
+}
+
 // The completion stats must not be left to the wrapper: at the floor it folds
 // mid-word, which on this line splits a number from its unit ("peak" /
 // "61.2MB"). Each stat line is emitted to fit instead.
@@ -612,7 +701,7 @@ func TestSyncStreamsIntoTheOutputPane(t *testing.T) {
 	ch <- taskEvent{Done: true, OK: true}
 	close(ch)
 
-	cmd := drainTask("sync scripts repos", ch)
+	cmd := drainTask(m.run.task)
 	for cmd != nil {
 		msg, ok := cmd().(TaskEventsMsg)
 		if !ok {
@@ -678,6 +767,27 @@ func TestMouseFocusAndSelection(t *testing.T) {
 	}
 }
 
+func TestNarrowRunMouseUsesVisiblePane(t *testing.T) {
+	m := runAt(t, 60, 24)
+	m.Update(tea.MouseClickMsg{X: 3, Y: headerRows + 3, Button: tea.MouseLeft})
+	if got := m.run.list.Index(); got != 2 || m.focus != focusList {
+		t.Fatalf("list click = index %d focus %v, want 2/list", got, m.focus)
+	}
+	for i := range 100 {
+		m.run.out.append(fmt.Sprintf("line %d", i))
+	}
+	press(m, "tab")
+	before := m.run.list.Index()
+	m.Update(tea.MouseWheelMsg{X: 3, Y: headerRows + 2, Button: tea.MouseWheelUp})
+	if m.run.out.follow || m.run.list.Index() != before {
+		t.Error("output wheel on narrow frame did not stay in output")
+	}
+	m.Update(tea.MouseClickMsg{X: 3, Y: headerRows + 1, Button: tea.MouseLeft})
+	if m.run.out.anchor == nil {
+		t.Error("output click did not map the full-width buffer cell")
+	}
+}
+
 // The Fleet view answers the same gestures.
 func TestFleetMouse(t *testing.T) {
 	m := newFixtureModel(t, truecolorEnv)
@@ -707,4 +817,19 @@ func TestQueuedMessage(t *testing.T) {
 	if !strings.Contains(m.statusText, "position 1") {
 		t.Errorf("status = %q", m.statusText)
 	}
+}
+
+func TestRunDoneKeepsPersistenceWarningVisible(t *testing.T) {
+	m := runAt(t, 120, 40)
+	row := doneRow("backup-db", "success", 0, 1)
+	row.PersistenceWarnings = []string{"history write failed; this run was not saved"}
+	for _, cmd := range batchCmds(m.run.onRunDone(m, RunDoneMsg{Row: row})) {
+		if msg, ok := cmd().(StatusMsg); ok {
+			if msg.Kind != StatusWarn || !strings.Contains(msg.Text, "success") || !strings.Contains(msg.Text, "history write failed") {
+				t.Fatalf("completion hid storage failure: %+v", msg)
+			}
+			return
+		}
+	}
+	t.Fatal("completion did not report status")
 }

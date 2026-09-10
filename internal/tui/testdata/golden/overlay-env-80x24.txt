@@ -15,7 +15,7 @@
 ╰─────────────────────────────────────────────────── ctrl+s save · esc close ──╯
  ● backup-db · powershell…│
  ▸ entry backup-db/backup…│
- ⚙ env 2 vars             │
+ ⚙ env 0 vars             │
  ↻ cron 0 2 * * * · next …│
  ✦ last success · 42.5s ·…│
    cpu 66% peak · mem 61.…│

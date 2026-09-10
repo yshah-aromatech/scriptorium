@@ -11,6 +11,8 @@ import (
 
 	"github.com/yshah-aromatech/scriptorium/internal/config"
 	"github.com/yshah-aromatech/scriptorium/internal/secret"
+
+	"github.com/yshah-aromatech/scriptorium/internal/subprocess"
 )
 
 // cleanExcludes are the `git clean -fdx` exclusions: local per-script .env
@@ -40,12 +42,12 @@ func SyncOne(ctx context.Context, repo Repo, reg *secret.Registry, onLine func(s
 
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		emit(fmt.Sprintf("[%s] cloning %s (branch %s)...", repo.Name, repo.URL, branch))
-		out, cerr := exec.CommandContext(ctx, "git", "clone", "--branch", branch, url, dir).CombinedOutput()
+		out, cerr := subprocess.CommandContext(ctx, "git", "clone", "--branch", branch, url, dir).CombinedOutput()
 		emitLines(emit, string(out))
 		ok = cerr == nil
 	} else {
 		emit(fmt.Sprintf("[%s] syncing %s (hard reset to origin/%s)...", repo.Name, repo.URL, branch))
-		_, _ = exec.CommandContext(ctx, "git", "-C", dir, "remote", "set-url", "origin", url).CombinedOutput() // refresh token; output discarded like PS's Out-Null
+		_, _ = subprocess.CommandContext(ctx, "git", "-C", dir, "remote", "set-url", "origin", url).CombinedOutput() // refresh token; output discarded like PS's Out-Null
 
 		steps := [][]string{
 			{"fetch", "origin"},
@@ -61,7 +63,7 @@ func SyncOne(ctx context.Context, repo Repo, reg *secret.Registry, onLine func(s
 				return false
 			}
 			args := append([]string{"-C", dir}, step...)
-			out, serr := exec.CommandContext(ctx, "git", args...).CombinedOutput()
+			out, serr := subprocess.CommandContext(ctx, "git", args...).CombinedOutput()
 			emitLines(emit, string(out))
 			if serr != nil {
 				emit(fmt.Sprintf("[%s] git %s failed (exit %d)", repo.Name, step[0], exitCode(serr)))

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,7 @@ import (
 //
 // It is a plain TEXT editor, exactly as the PS one is: Save-TuiEnv writes the
 // buffer's lines back verbatim with a trailing newline and never re-serialises
-// key/value pairs. That is why the write below is three lines here rather than
+// key/value pairs. This uses an atomic text save rather than
 // an envfile.Write — a Write in internal/envfile would have to promise a
 // round-trip through the parser, and this feature deliberately does not go
 // through the parser at all (comments, ordering, blank lines and duplicate
@@ -30,6 +31,7 @@ type envOverlay struct {
 	path     string
 	original string
 	escArmed bool
+	saving   bool
 }
 
 // newEnvEditor seeds the editor from the script's .env, falling back to its
@@ -91,6 +93,9 @@ func (e *envOverlay) hints(m *Model) []key.Binding {
 }
 
 func (e *envOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if e.saving {
+		return nil, false
+	}
 	switch {
 	case key.Matches(msg, m.keys.Close):
 		if e.dirty() && !e.escArmed {
@@ -100,7 +105,8 @@ func (e *envOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return status(StatusInfo, ".env edit cancelled"), true
 
 	case key.Matches(msg, m.keys.Save):
-		return e.save(m), true
+		e.saving = true
+		return e.save(m), false
 	}
 	e.escArmed = false
 	var cmd tea.Cmd
@@ -117,15 +123,48 @@ func (e *envOverlay) save(m *Model) tea.Cmd {
 	sec := m.app.Sec
 	return func() tea.Msg {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return ErrMsg{Context: "saving " + path, Err: err}
+			return EnvSavedMsg{Editor: e, Err: err}
 		}
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			return ErrMsg{Context: "saving " + path, Err: err}
+		if err := saveEnv(path, body); err != nil {
+			return EnvSavedMsg{Editor: e, Err: err}
 		}
 		values, _ := envfile.Read(path)
 		for k, v := range values {
 			sec.Add(k, v, true)
 		}
-		return StatusMsg{Kind: StatusOK, Text: "saved " + filepath.Base(path) + " for " + name}
+		return EnvSavedMsg{Editor: e, Text: "saved " + filepath.Base(path) + " for " + name}
 	}
+}
+
+// A private temporary file in the same directory keeps both partial writes
+// and failed replacements from damaging the original secrets file.
+func saveEnv(path, body string) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".env-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.WriteString(body); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}
+
+func (m *Model) onEnvSaved(msg EnvSavedMsg) tea.Cmd {
+	msg.Editor.saving = false
+	m.statusAt = m.now()
+	if msg.Err != nil {
+		m.statusText = fmt.Sprintf("saving %s: %v", msg.Editor.path, msg.Err)
+		m.statusKind = StatusErr
+		return nil
+	}
+	if m.ov == msg.Editor {
+		m.ov = nil
+	}
+	m.statusText, m.statusKind = msg.Text, StatusOK
+	return m.loadFleet()
 }

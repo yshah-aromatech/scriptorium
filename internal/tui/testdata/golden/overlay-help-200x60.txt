@@ -24,14 +24,14 @@
 │  g       top                                                                                       ?       help                                                                                      │
 │  G       bottom                                                                                    ]       theme: next                                                                               │
 │  tab     focus                                                                                     [       theme: previous                                                                           │
-│  end     follow                                                                                    q       quit                                                                                      │
-│                                                                                                                                                                                                      │
-│ # fleet                                                                                           # overlays                                                                                         │
-│  ↵       open                                                                                      y/↵     confirm                                                                                   │
-│  f       failures / scope                                                                          n       no                                                                                        │
-│                                                                                                    ctrl+s  save                                                                                      │
-│ # run                                                                                              esc     close                                                                                     │
-│  r       run script                                                                                                                                                                                  │
+│  end     follow                                                                                    T       theme: choose                                                                             │
+│                                                                                                    q       quit                                                                                      │
+│ # fleet                                                                                                                                                                                              │
+│  ↵       open                                                                                     # overlays                                                                                         │
+│  f       failures / scope                                                                          y/↵     confirm                                                                                   │
+│                                                                                                    n       no                                                                                        │
+│ # run                                                                                              ctrl+s  save                                                                                      │
+│  r       run script                                                                                esc     close                                                                                     │
 │  a       args                                                                                                                                                                                        │
 │  x       kill                                                                                                                                                                                        │
 │  X       clear queue                                                                                                                                                                                 │

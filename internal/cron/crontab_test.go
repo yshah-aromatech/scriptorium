@@ -142,7 +142,7 @@ func TestScheduleWithUnparsableExpressionIsSkipped(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestSaveFreshCrontabWritesSortedBlock(t *testing.T) {
-	f := &fakeRunner{out: "", ok: false} // "no crontab for <user>": empty, not failed
+	f := &fakeRunner{out: "", ok: true} // normalized, positively identified empty crontab
 	if err := newCT(f).Save(map[string]string{"zeta": "0 2 * * *", "alpha": "*/10 * * * *"}); err != nil {
 		t.Fatal(err)
 	}
@@ -314,11 +314,11 @@ func TestSetSingleReadGuardsAgainstWipeOnFlakyFirstRead(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// 4. Empty crontab (exit 1, no output) is a WRITEABLE empty, not a failure.
+// 4. A positively identified empty crontab is writable.
 // ---------------------------------------------------------------------
 
 func TestEmptyCrontabSemanticsAllowWriting(t *testing.T) {
-	f := &fakeRunner{out: "", ok: false}
+	f := &fakeRunner{out: "", ok: true}
 	if err := newCT(f).Set("job", "*/5 * * * *"); err != nil {
 		t.Fatal(err)
 	}

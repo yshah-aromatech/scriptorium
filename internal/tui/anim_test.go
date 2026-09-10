@@ -63,13 +63,14 @@ func TestEtaBarSubCellResolution(t *testing.T) {
 // The bar EASES toward its target after a jump instead of snapping: at the
 // anchor it shows where it started, past etaEase it shows the true fraction.
 func TestEtaBarEasesTowardTheTarget(t *testing.T) {
+	m := newFixtureModel(t, truecolorEnv)
 	r := &runModel{etaSec: 100, startedAt: frozen.Add(-50 * time.Second)}
 	r.etaFrom, r.etaAnchor = 0, frozen // target jumped to 0.5 at frozen
 
-	if got := r.etaFrac(frozen); got != 0 {
+	if got := r.etaFrac(m, frozen); got != 0 {
 		t.Errorf("at the anchor the bar shows %v, want its starting 0", got)
 	}
-	mid := r.etaFrac(frozen.Add(etaEase / 2))
+	mid := r.etaFrac(m, frozen.Add(etaEase/2))
 	if mid <= 0 || mid >= 0.5 {
 		t.Errorf("mid-ease fraction = %v, want strictly between 0 and 0.5", mid)
 	}
@@ -77,9 +78,37 @@ func TestEtaBarEasesTowardTheTarget(t *testing.T) {
 	if mid <= 0.25 {
 		t.Errorf("mid-ease fraction = %v — not easing out", mid)
 	}
-	after := r.etaFrac(frozen.Add(etaEase))
+	after := r.etaFrac(m, frozen.Add(etaEase))
 	if want := 0.503; after < 0.5 || after > want {
 		t.Errorf("post-ease fraction = %v, want the true target (~0.5)", after)
+	}
+}
+
+func TestReducedMotionUsesStableProgressAndOneHzExpiry(t *testing.T) {
+	m := animatedModel(t)
+	now := frozen
+	m.now = func() time.Time { return now }
+	m.app.Cfg.ReducedMotion = true
+	m.run.queue = []queued{{Name: "heartbeat"}}
+	m.useTheme(theme.New(theme.Default, colorprofile.Ascii))
+	before := m.frame()
+	now = now.Add(16 * time.Millisecond)
+	if after := m.frame(); after != before {
+		t.Fatal("reduced-motion frame changed on a 16 ms beat")
+	}
+	if m.spinnerFrame() != "▶" || m.run.marqueeRunning(m) || m.pulseTitleStyle() != nil || m.kickAnim() != nil || m.onFrame() != nil {
+		t.Fatal("reduced motion left a decorative animation active")
+	}
+	plain := textkit.StripANSI(before)
+	for _, want := range []string{"▶", "backup-db", "~22s left", "queued", "█"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("stable frame missing %q:\n%s", want, plain)
+		}
+	}
+	now = frozen.Add(statusTTL + time.Second)
+	m.Update(TickMsg(now))
+	if strings.Contains(textkit.StripANSI(m.statusBar()), "scripts synced") {
+		t.Error("one-second tick did not expire reduced-motion status")
 	}
 }
 
@@ -205,5 +234,31 @@ func BenchmarkAnimatedFrame(b *testing.B) {
 	for b.Loop() {
 		at = at.Add(16 * time.Millisecond)
 		_ = m.frame()
+	}
+}
+
+func TestInvisibleActivityDoesNotAnimateHistoryOrSchedules(t *testing.T) {
+	m := newFixtureModel(t, truecolorEnv)
+	m.w, m.h = 120, 40
+	for _, mode := range []mode{modeHistory, modeSchedules} {
+		m.mode = mode
+		if m.animLive() {
+			t.Errorf("external lock animates static mode %v", mode)
+		}
+		m.run.handle = &runner.Handle{Name: "backup-db"}
+		if !m.animLive() {
+			t.Errorf("visible status spinner in mode %v must animate", mode)
+		}
+		m.statusKind, m.statusText, m.statusAt = StatusWarn, "warning", frozen
+		if m.animLive() {
+			t.Errorf("hidden status spinner animates mode %v", mode)
+		}
+		m.run.handle = nil
+		m.statusText = ""
+	}
+	m.mode = modeFleet
+	m.w, m.h = 20, 5
+	if m.animLive() {
+		t.Error("too-small screen animates hidden activity")
 	}
 }

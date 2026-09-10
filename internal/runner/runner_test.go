@@ -814,3 +814,47 @@ func TestSecondConcurrentRunIsSkipped(t *testing.T) {
 		t.Fatalf("first run = %+v, want success", first)
 	}
 }
+
+func TestPersistenceFailuresDoNotChangeScriptResult(t *testing.T) {
+	for _, failed := range []string{"log", "history"} {
+		t.Run(failed, func(t *testing.T) {
+			pwshtest.RequirePython(t)
+			e := newEnv(t, nil)
+			s := e.script("persist", "python", "main.py", "print('completed')\n")
+			if failed == "log" {
+				e.r.Paths.LogsDir = filepath.Join(e.paths.DataDir, secretValue)
+				if err := os.WriteFile(e.r.Paths.LogsDir, []byte("obstacle"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				e.r.Hist = history.NewStore(e.paths.DataDir)
+			}
+			e.sec.Add("TOKEN", secretValue, true)
+			result := e.run(context.Background(), runner.Spec{Script: s})
+			if result.row.Status != "success" || result.row.ExitCode == nil || *result.row.ExitCode != 0 {
+				t.Fatalf("persistence changed execution result: %+v", result.row)
+			}
+			b, err := json.Marshal(result.row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal(b, &wire); err != nil {
+				t.Fatal(err)
+			}
+			warnings := string(wire["persistenceWarnings"])
+			if !strings.Contains(warnings, failed) {
+				t.Errorf("missing %s persistence warning in result: %s", failed, b)
+			}
+			if strings.Contains(string(b), secretValue) || strings.Contains(strings.Join(result.lines, "\n"), secretValue) {
+				t.Error("persistence diagnostic leaked a secret")
+			}
+			if !strings.Contains(strings.Join(result.lines, "\n"), "warning:") {
+				t.Error("streaming consumer did not receive warning")
+			}
+			if failed == "log" && result.row.LogFile != nil {
+				t.Errorf("missing log falsely reported: %s", *result.row.LogFile)
+			}
+		})
+	}
+}

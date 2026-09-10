@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/yshah-aromatech/scriptorium/internal/app"
 	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
 	"github.com/yshah-aromatech/scriptorium/internal/deps"
+	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/mcp"
 	"github.com/yshah-aromatech/scriptorium/internal/pwshtest"
 	"github.com/yshah-aromatech/scriptorium/internal/update"
@@ -133,6 +136,32 @@ func TestListScriptsReportsRuntimeRepoRunningSchedule(t *testing.T) {
 	if hello["lastStatus"] != "never run" {
 		t.Errorf("lastStatus = %v, want 'never run'", hello["lastStatus"])
 	}
+}
+
+func TestListScriptsKeepsQuietStatusBeyondLegacyTail(t *testing.T) {
+	a := newTestApp(t)
+	writePS(t, a.Paths.DataDir, "quiet", "exit 0")
+	if err := a.Hist.Append(history.Row{Script: "quiet", Status: "failure"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2001 {
+		if err := a.Hist.Append(history.Row{Script: "noisy", Status: "success"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, isErr, err := (&mcp.Ops{App: a}).ListScripts()
+	if err != nil || isErr {
+		t.Fatalf("ListScripts() = %v, %v, %v", result, isErr, err)
+	}
+	for _, s := range asMap(t, result)["scripts"].([]map[string]any) {
+		if s["name"] == "quiet" {
+			if s["lastStatus"] != "failure" {
+				t.Errorf("quiet lastStatus = %v, want failure", s["lastStatus"])
+			}
+			return
+		}
+	}
+	t.Fatal("quiet script absent from list_scripts")
 }
 
 // ---------------------------------------------------------------------
@@ -674,8 +703,26 @@ func TestUpdateAppNotAGitRepoReportsFailureRedacted(t *testing.T) {
 	if out["ok"] != false {
 		t.Errorf("ok = %v", out["ok"])
 	}
-	if !strings.Contains(out["note"].(string), "systemctl restart scriptorium-mcp") {
+	if !strings.Contains(out["note"].(string), "source update failed") {
 		t.Errorf("note = %v", out["note"])
+	}
+}
+
+func TestUpdateAppSourceModeRequiresRebuildThenRestart(t *testing.T) {
+	a := newTestApp(t)
+	bin := t.TempDir()
+	git := filepath.Join(bin, "git")
+	if err := os.WriteFile(git, []byte("#!/bin/sh\necho updated\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	result, isErr, err := (&mcp.Ops{App: a}).UpdateApp()
+	if err != nil || isErr {
+		t.Fatalf("UpdateApp() = %v, %v, %v", result, isErr, err)
+	}
+	note := asMap(t, result)["note"].(string)
+	if !strings.Contains(note, "rebuild") || !strings.Contains(note, "systemctl restart scriptorium-mcp") {
+		t.Errorf("source note = %q, want rebuild then service restart", note)
 	}
 }
 
@@ -716,6 +763,9 @@ func TestUpdateAppStampedModeAppliesSelfUpdate(t *testing.T) {
 	note, _ := out["note"].(string)
 	if !strings.Contains(note, "v1.1.0") || !strings.Contains(note, "systemctl restart scriptorium-mcp") {
 		t.Errorf("note = %q, want it to mention v1.1.0 and the systemctl restart", note)
+	}
+	if strings.Contains(note, "rebuild") {
+		t.Errorf("stamped release note = %q, must not require a rebuild", note)
 	}
 }
 
@@ -870,5 +920,53 @@ func TestCallDispatchesEveryToolName(t *testing.T) {
 	// get_script_details needs a valid script to avoid an (expected) isErr
 	if _, _, err := o.Call("get_script_details", map[string]any{"script": "hello"}); err != nil {
 		t.Errorf("Call(get_script_details) error = %v", err)
+	}
+}
+
+func TestRunScriptBoundsFallbackWithoutLog(t *testing.T) {
+	for _, logOK := range []bool{false, true} {
+		t.Run(fmt.Sprint(logOK), func(t *testing.T) {
+			a := newTestApp(t)
+			entry := writePS(t, a.Paths.DataDir, "bounded", "")
+			content := strings.Repeat("early output\n", 20000) + strings.Repeat("界", 100000) + "\nlast line\n"
+			if err := os.WriteFile(entry, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			stub := filepath.Join(t.TempDir(), "pwsh")
+			if err := os.WriteFile(stub, []byte(`#!/bin/sh
+while [ "$#" -gt 0 ]; do
+ if [ "$1" = "-File" ]; then cat "$2"; exit; fi
+ shift
+done
+`), 0700); err != nil {
+				t.Fatal(err)
+			}
+			a.Cfg.PwshBin = stub
+			a.Cfg.LogTailKb = 1
+			if !logOK {
+				a.Runner.Paths.LogsDir = filepath.Join(entry, "not-a-dir")
+			}
+			result, isErr, err := (&mcp.Ops{App: a}).RunScript(opsArgs("script", "bounded"))
+			if err != nil || isErr {
+				t.Fatalf("run: %v %v", result, err)
+			}
+			out := asMap(t, result)
+			output := out["output"].(string)
+			if len(output) > 1024 {
+				t.Fatalf("output retained %d bytes, want <=1024", len(output))
+			}
+			if !strings.HasSuffix(strings.TrimSuffix(output, "\n"), "last line") {
+				t.Fatalf("missing final output: %q", output)
+			}
+			if !logOK && !utf8.ValidString(output) {
+				t.Fatal("fallback split UTF-8")
+			}
+			if logOK && !strings.HasSuffix(output, "\n") {
+				t.Fatal("did not prefer disk log")
+			}
+			if !logOK && out["persistenceWarnings"] == nil {
+				t.Fatal("lost persistence warning")
+			}
+		})
 	}
 }

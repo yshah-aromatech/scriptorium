@@ -55,6 +55,6 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── ↵ open · r run script · f failures / scope ──╯
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── ↵ open · r run script · f scope ──╯
  ⚠ missed run: nightly-report — the scheduled fire never arrived
-q quit · ↑/k up · ↓/j down · ↵ open · r run script · f failures / scope · : commands · ? help · 1 fleet · 2 run · 3 history · 4 schedules
+q quit · ↑/↓/j/k move · : commands · ? help

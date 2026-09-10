@@ -46,14 +46,24 @@ func frameCmd() tea.Cmd {
 // animLive reports whether anything on screen is actually moving — the sole
 // condition under which the clock is worth a tick (§12.10's budget rule).
 func (m *Model) animLive() bool {
-	return len(m.live) > 0 || m.run.active() || m.run.marqueeRunning(m) || m.fadeLive()
+	if m.app.Cfg.ReducedMotion {
+		return false
+	}
+	if m.w < minWidth || m.h < minHeight {
+		return false
+	}
+	// External locks animate Fleet's activity card only. A local run also
+	// animates the global status bar unless a warning currently covers it.
+	warning := m.statusText != "" && m.statusKind >= StatusWarn && m.now().Sub(m.statusAt) <= statusTTL
+	activity := m.mode == modeFleet && (len(m.live) > 0 || m.run.active())
+	return activity || (m.run.active() && (m.mode == modeRun || !warning)) || m.run.marqueeRunning(m) || m.fadeLive()
 }
 
 // fadeLive is true while a status message is inside (or within a second of)
 // its dissolve window — the same near-due arming rule the old 100 ms fade
 // tick used, so a message never burns frames during its five quiet seconds.
 func (m *Model) fadeLive() bool {
-	if m.statusText == "" {
+	if m.statusText == "" || (m.run.active() && m.statusKind < StatusWarn) {
 		return false
 	}
 	age := m.now().Sub(m.statusAt)
@@ -109,6 +119,9 @@ func pulseAmount(t time.Time) float64 {
 // panel voice) while nothing runs. theme.Mix carries the profile guard —
 // continuous only in truecolor, stepped below it.
 func (m *Model) pulseTitleStyle() *lipgloss.Style {
+	if m.app.Cfg.ReducedMotion {
+		return nil
+	}
 	if len(m.live) == 0 && !m.run.active() {
 		return nil
 	}
@@ -160,11 +173,14 @@ func easeOutCubic(x float64) float64 {
 // progress, eased from wherever the bar stood when the target last jumped
 // (run start). Pure clock arithmetic — no per-frame mutable state, so a
 // replayed clock reproduces every sub-cell position exactly.
-func (r *runModel) etaFrac(now time.Time) float64 {
+func (r *runModel) etaFrac(m *Model, now time.Time) float64 {
 	if r.etaSec <= 0 {
 		return 0
 	}
 	target := min(now.Sub(r.startedAt).Seconds()/r.etaSec, 1)
+	if m.app.Cfg.ReducedMotion {
+		return target
+	}
 	dt := now.Sub(r.etaAnchor)
 	if dt >= etaEase {
 		return target

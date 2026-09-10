@@ -14,10 +14,10 @@
 │  g       top                           ?       help                          │
 │  G       bottom                        ]       theme: next                   │
 │  tab     focus                         [       theme: previous               │
-│  end     follow                        q       quit                          │
-│                                                                              │
-│ # fleet                               # overlays                             │
-│  ↵       open                          y/↵     confirm                       │
+│  end     follow                        T       theme: choose                 │
+│                                        q       quit                          │
+│ # fleet                                                                      │
+│  ↵       open                         # overlays                             │
 │  ▼ 16 more — ↑↓ scrolls                                                      │
 ╰─────────────────────────────────── ↑/k up · ↓/j down · any other key close ──╯
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h

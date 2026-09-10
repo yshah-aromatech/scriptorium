@@ -1,0 +1,10 @@
+ ▸ scriptorium    1  2 Run  3  4   ⟳ 4m
+─ scripts · list ───────────────────────
+▎✓ backup-db                   ps ↻   3m
+ · cleanup-tmp                 ps      —
+ ✓ heartbeat                   py ↻  40s
+ ✓ nightly-report              ps ⚠   5h
+ ▶ sync-orders                 py    12m
+
+ backup-db · nightly postgres dump to o…
+q quit · tab focus · : commands · ? help

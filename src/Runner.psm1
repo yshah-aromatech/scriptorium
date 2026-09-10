@@ -494,13 +494,15 @@ function Complete-StoRun {
     $Handle.Result = $result
     if ($Handle.Kind -ne 'run') { Unlock-StoScript -Handle $Handle; return $result }
 
-    # history (without the log payload) — a single write() so concurrent
-    # appenders (cron + MCP + TUI) can't interleave mid-row; Add-Content's
-    # 1KB writer buffer splits long rows into two writes
+    # Same sidecar flock as Go append/prune and Clear-StoOldData. Acquire
+    # before opening history so a waiting writer cannot keep a replaced inode.
+    $historyLock = $null
     try {
+        $historyLock = Open-StoHistoryLock -Path $paths.HistoryFile
         [IO.File]::AppendAllText($paths.HistoryFile,
             ($result | ConvertTo-Json -Depth 6 -Compress) + "`n", [Text.UTF8Encoding]::new($false))
-    } catch { Write-Warning "history write failed: $($_.Exception.Message)" }
+    } catch { Write-Warning 'history write failed; this run was not saved' }
+    finally { if ($historyLock) { $historyLock.Dispose() } }
     # unlock only after the row is written: a queued re-run of a sub-second
     # script could otherwise append its row first and lose last-status-wins
     Unlock-StoScript -Handle $Handle

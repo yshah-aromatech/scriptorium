@@ -1,11 +1,16 @@
 package tui
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/yshah-aromatech/scriptorium/internal/config"
+	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
@@ -99,6 +104,160 @@ func TestPaletteListsThemeCommands(t *testing.T) {
 	if !strings.Contains(frame, "theme: next") || !strings.Contains(frame, "theme: previous") {
 		t.Errorf("palette filtered to 'theme' does not list both cycler commands:\n%s", frame)
 	}
+}
+
+func TestThemePickerPreviewsAndSavesAtomically(t *testing.T) {
+	m := newFixtureModel(t, truecolorEnv)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	press(m, ":")
+	p, ok := m.ov.(*paletteOverlay)
+	if !ok {
+		t.Fatal("palette did not open")
+	}
+	for i, shown := range p.shown {
+		if strings.Join(p.items[shown].b.Keys(), ",") == "T" {
+			p.sel = i
+			break
+		}
+	}
+	replay := cmdMsg(press(m, "enter"))
+	m.Update(replay)
+	picker, ok := m.ov.(*themeOverlay)
+	if !ok {
+		t.Fatalf("palette replay opened %T, want theme picker", m.ov)
+	}
+	picker.ti.SetValue("gbd")
+	picker.filter()
+	picker.preview(m)
+	if got := picker.selected(); got == "" || m.th.Name != "gruvbox-dark" {
+		t.Fatalf("picker preview = %q / %q", got, m.th.Name)
+	}
+	press(m, "enter")
+	if m.ov != nil || m.th.Name != "gruvbox-dark" {
+		t.Fatal("Enter did not apply and close the picker")
+	}
+
+	m.open(newThemeOverlay(m))
+	picker = m.ov.(*themeOverlay)
+	picker.ti.SetValue("dracula")
+	picker.filter()
+	picker.sel = 0
+	picker.preview(m)
+	save, closed := picker.key(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if closed {
+		t.Fatal("save closed before it completed")
+	}
+	m.Update(cmdMsg(save))
+	if m.ov != nil || m.app.Cfg.Theme != "dracula" {
+		t.Fatalf("successful theme save did not close and update config: overlay %T theme %q status %q", m.ov, m.app.Cfg.Theme, m.statusText)
+	}
+	cfg, _, _, err := config.Load(m.app.Paths.AppDir)
+	if err != nil || cfg.Theme != "dracula" {
+		t.Fatalf("saved theme did not reload: %q, %v", cfg.Theme, err)
+	}
+
+	original := []byte(`{"unknown":{"nested":true},"theme":"dracula"}`)
+	path := filepath.Join(m.app.Paths.AppDir, "config.json")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(m.app.Paths.AppDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(m.app.Paths.AppDir, 0700) })
+	m.app.Cfg.Theme = "dracula"
+	m.open(newThemeOverlay(m))
+	picker = m.ov.(*themeOverlay)
+	picker.ti.SetValue("terminal")
+	picker.filter()
+	picker.sel = 0
+	picker.preview(m)
+	save, closed = picker.key(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if closed {
+		t.Fatal("failed save closed before it completed")
+	}
+	m.Update(cmdMsg(save))
+	if m.ov != picker || m.app.Cfg.Theme != "dracula" || picker.ti.Value() != "terminal" {
+		t.Fatal("failed save discarded the picker or changed config")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(original) {
+		t.Fatalf("failed save changed config: %q, %v", got, err)
+	}
+}
+
+func TestThemePickerGolden(t *testing.T) {
+	m := newFixtureModel(t, truecolorEnv)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.open(newThemeOverlay(m))
+	frame := m.frame()
+	checkFrameShape(t, "overlay-theme-80x24", frame, 80, 24)
+	checkGolden(t, "overlay-theme-80x24.txt", plainGolden(frame))
+	checkGolden(t, "overlay-theme-80x24.ansi", frame)
+}
+
+func TestThemeSaveSettlesBehindQuitConfirmation(t *testing.T) {
+	m := runAt(t, 120, 40)
+	m.run.handle = fakeHandle("backup-db")
+	p := newThemeOverlay(m)
+	m.open(p)
+	p.saving = true
+	for _, msg := range []tea.KeyPressMsg{{Code: tea.KeyEnter}, {Code: tea.KeyEscape}, {Code: tea.KeyUp}, {Code: 'x', Text: "x"}} {
+		if cmd, close := p.key(m, msg); cmd != nil || close {
+			t.Fatalf("pending save accepted %#v", msg)
+		}
+	}
+	m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if _, ok := m.ov.(*confirmOverlay); !ok {
+		t.Fatalf("ctrl+c opened %T, want quit confirmation", m.ov)
+	}
+	m.Update(ThemeSavedMsg{Picker: p, Name: "dracula"})
+	if p.saving || m.app.Cfg.Theme != "dracula" {
+		t.Fatal("successful save was not settled behind confirmation")
+	}
+	press(m, "n")
+	if m.ov != nil {
+		t.Fatalf("declining quit resurrected completed picker: %T", m.ov)
+	}
+
+	p = newThemeOverlay(m)
+	m.open(p)
+	p.saving = true
+	m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m.Update(ThemeSavedMsg{Picker: p, Name: "terminal", Err: errors.New("disk full")})
+	if p.saving || m.app.Cfg.Theme != "dracula" {
+		t.Fatal("failed save was not settled behind confirmation")
+	}
+	press(m, "n")
+	if m.ov != p || !strings.Contains(m.statusText, "disk full") {
+		t.Fatalf("declining quit did not restore editable picker: %T %q", m.ov, m.statusText)
+	}
+	if cmd, close := p.key(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}); cmd == nil || close {
+		t.Fatal("failed save did not permit retry")
+	}
+	// A dependency scan must queue behind a pending write rather than replace it.
+	m.run.releaseAttempt()
+	p.ti.SetValue("dracula")
+	p.filter()
+	p.saving = true
+	attempt := m.run.reserve(m.scripts[0].Name)
+	m.run.onDepsScanned(m, DepsScannedMsg{Attempt: attempt, Script: m.scripts[0], Missing: []deps.Dep{{Name: "Az", Display: "Az"}}})
+	if m.ov != p || attempt.phase != "waiting" {
+		t.Fatalf("dependency completion replaced pending picker: %T phase %q", m.ov, attempt.phase)
+	}
+	m.Update(ThemeSavedMsg{Picker: p, Name: "terminal", Err: errors.New("retry failed")})
+	m.Update(TickMsg(frozen))
+	if m.ov != p || p.ti.Value() != "dracula" || attempt.phase != "waiting" || !strings.Contains(m.statusText, "retry failed") {
+		t.Fatalf("failed save let preparation replace picker: %T %q %q %q", m.ov, p.ti.Value(), attempt.phase, m.statusText)
+	}
+	if cmd, close := p.key(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}); cmd == nil || close {
+		t.Fatal("failed queued save did not permit retry")
+	}
+	m.Update(ThemeSavedMsg{Picker: p, Name: "terminal", Err: errors.New("retry failed")})
+	press(m, "esc")
+	if m.ov != nil {
+		t.Fatalf("editable failed picker did not dismiss: %T", m.ov)
+	}
+	m.run.releaseAttempt()
 }
 
 // A tint name in config.json resolves end-to-end, and the dracula fleet frame

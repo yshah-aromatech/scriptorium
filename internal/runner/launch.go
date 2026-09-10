@@ -1,12 +1,15 @@
 package runner
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
 
 	"github.com/yshah-aromatech/scriptorium/internal/envfile"
+
+	"github.com/yshah-aromatech/scriptorium/internal/subprocess"
 )
 
 // buildCmd assembles the child process: one function and a switch, not a
@@ -18,7 +21,7 @@ import (
 // user chose to keep out of git, and per-run env (MCP run_script) may be
 // credentials. Registering before start is what makes the very first output
 // line redactable.
-func (r *Runner) buildCmd(spec Spec) *exec.Cmd {
+func (r *Runner) buildCmd(ctx context.Context, spec Spec) *exec.Cmd {
 	sc := spec.Script
 	env := os.Environ()
 	add := func(k, v string) {
@@ -47,7 +50,7 @@ func (r *Runner) buildCmd(spec Spec) *exec.Cmd {
 	if sc.Runtime == "python" {
 		venvPy := filepath.Join(sc.VenvDir, "bin", "python")
 		if _, err := os.Stat(venvPy); err != nil {
-			ensureVenv(r.Cfg.PythonBin, sc.VenvDir, venvPy)
+			ensureVenv(ctx, r.Cfg.PythonBin, sc.VenvDir, venvPy)
 		}
 		cmd = exec.Command(venvPy, append([]string{sc.Entry}, args...)...)
 		// line streaming depends on unbuffered python output
@@ -73,7 +76,15 @@ func (r *Runner) buildCmd(spec Spec) *exec.Cmd {
 // never goes through that. Both steps are best-effort with their output
 // discarded, exactly like the PS app: a failed pip upgrade must not stop a
 // run whose interpreter already exists.
-func ensureVenv(pythonBin, venvDir, venvPy string) {
-	_ = exec.Command(pythonBin, "-m", "venv", venvDir).Run()
-	_ = exec.Command(venvPy, "-m", "pip", "install", "--upgrade", "pip", "--quiet").Run()
+func ensureVenv(ctx context.Context, pythonBin, venvDir, venvPy string) {
+	for _, args := range [][]string{
+		{pythonBin, "-m", "venv", venvDir},
+		{venvPy, "-m", "pip", "install", "--upgrade", "pip", "--quiet"},
+	} {
+		if ctx.Err() != nil {
+			return
+		}
+		cmd := subprocess.CommandContext(ctx, args[0], args[1:]...)
+		_ = cmd.Run()
+	}
 }

@@ -185,7 +185,7 @@ func TestRunAutoInstallsMissingPythonPackageViaRequirementsTxt(t *testing.T) {
 		t.Fatalf("exit = %d, want 0\nstdout: %s\nstderr: %s", code, out.String(), errw.String())
 	}
 
-	if !strings.Contains(out.String(), "installing missing modules: requests") {
+	if !strings.Contains(out.String(), "installing missing modules: requirements.txt") {
 		t.Errorf("stdout missing the install announcement:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "STUB_INSTALL_RAN") {

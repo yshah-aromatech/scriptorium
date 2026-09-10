@@ -200,6 +200,30 @@ func TestDiscoverResidualCollisionGetsDashTwoSuffix(t *testing.T) {
 	}
 }
 
+func TestDiscoverResidualCollisionsUseFirstFreeCaseInsensitiveName(t *testing.T) {
+	root, discover := discoverRoot(t)
+	writeFile(t, filepath.Join(root, "x", "main.ps1"), "folder")
+	writeFile(t, filepath.Join(root, "x.ps1"), "loose")
+	// This natural candidate claims the first generated suffix before the
+	// second x candidate is qualified.
+	writeFile(t, filepath.Join(root, "scripts-x-2", "main.ps1"), "natural")
+
+	got := discover()
+	seen := map[string]bool{}
+	for _, s := range got {
+		name := strings.ToLower(s.Name)
+		if seen[name] {
+			t.Fatalf("duplicate case-insensitive name %q in %+v", s.Name, got)
+		}
+		seen[name] = true
+	}
+	for _, want := range []string{"scripts-x", "scripts-x-2", "scripts-x-3"} {
+		if !seen[want] {
+			t.Errorf("names = %+v, missing %q", got, want)
+		}
+	}
+}
+
 // M8: a repo root that doesn't exist, or that exists as a plain file rather
 // than a directory, is skipped rather than panicking or erroring.
 func TestDiscoverRepoRootMissingOrIsFile(t *testing.T) {

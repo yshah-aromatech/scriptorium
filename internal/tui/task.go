@@ -9,6 +9,8 @@ import (
 
 	"github.com/yshah-aromatech/scriptorium/internal/secret"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/textkit"
+
+	"github.com/yshah-aromatech/scriptorium/internal/subprocess"
 )
 
 // Background tasks: everything that streams into the output pane but is not a
@@ -48,7 +50,7 @@ func (r *runModel) startTask(m *Model, name string,
 	run func(ctx context.Context, emit func(string)) bool,
 	after func(m *Model, ok bool) tea.Cmd) tea.Cmd {
 
-	if r.handle != nil {
+	if r.handle != nil || r.attempt != nil || r.quitting {
 		return status(StatusWarn, "something is already running — x to kill it first")
 	}
 	if r.task != nil {
@@ -67,12 +69,12 @@ func (r *runModel) startTask(m *Model, name string,
 	}()
 
 	r.task = &task{name: name, ch: ch, cancel: cancel, after: after}
-	return tea.Batch(drainTask(name, ch), m.kickAnim())
+	return tea.Batch(drainTask(r.task), m.kickAnim())
 }
 
-func drainTask(name string, ch <-chan taskEvent) tea.Cmd {
-	return DrainCmd(ch, func(batch []taskEvent, closed bool) tea.Msg {
-		msg := TaskEventsMsg{Name: name, Closed: closed}
+func drainTask(t *task) tea.Cmd {
+	return DrainCmd(t.ch, func(batch []taskEvent, closed bool) tea.Msg {
+		msg := TaskEventsMsg{Task: t, Name: t.name, Closed: closed}
 		for _, e := range batch {
 			if e.Done {
 				msg.Finished, msg.OK = true, e.OK
@@ -90,7 +92,7 @@ func drainTask(name string, ch <-chan taskEvent) tea.Cmd {
 // goroutine leaks.
 func (r *runModel) onTaskEvents(m *Model, msg TaskEventsMsg) tea.Cmd {
 	t := r.task
-	if t == nil {
+	if t == nil || (msg.Task != nil && msg.Task != t) || (msg.Task == nil && msg.Name != t.name) {
 		return nil
 	}
 	if len(msg.Batch) > 0 {
@@ -100,7 +102,7 @@ func (r *runModel) onTaskEvents(m *Model, msg TaskEventsMsg) tea.Cmd {
 		t.ok = msg.OK
 	}
 	if !msg.Closed {
-		return drainTask(t.name, t.ch)
+		return drainTask(t)
 	}
 
 	r.task = nil
@@ -116,11 +118,11 @@ func (r *runModel) onTaskEvents(m *Model, msg TaskEventsMsg) tea.Cmd {
 	}
 
 	cmds := []tea.Cmd{m.scanLocks()}
-	if t.after != nil {
+	if t.after != nil && !r.quitting {
 		cmds = append(cmds, t.after(m, t.ok && !t.killed))
 	}
 	// the queue waited for this task exactly as it waits for a run
-	return tea.Batch(append(cmds, r.dequeue(m))...)
+	return tea.Batch(append(cmds, r.settle(m))...)
 }
 
 // killTask cancels the live task. The child dies with its context; the drain
@@ -153,7 +155,7 @@ func (r *runModel) pwshTask(m *Model, name, script string, after func(*Model, bo
 // the pane holds only redacted text, which is what makes copying from it safe
 // (the same rule the runner's own sink follows).
 func streamCmd(ctx context.Context, reg *secret.Registry, emit func(string), name string, args ...string) bool {
-	c := exec.CommandContext(ctx, name, args...)
+	c := subprocess.CommandContext(ctx, name, args...)
 	// one LineWriter per stream: they are documented as not safe for
 	// concurrent use, and exec copies stdout and stderr on separate
 	// goroutines. emit is a channel send, so sharing THAT is fine.

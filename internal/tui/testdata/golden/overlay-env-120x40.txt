@@ -30,7 +30,7 @@
 ╭─ details ────────────────────────────╮│                                                                              │
 │  ● backup-db · powershell · scripts  ││                                                                              │
 │  ▸ entry backup-db/backup-db.ps1     ││                                                                              │
-│  ⚙ env 2 vars                        ││                                                                              │
+│  ⚙ env 0 vars                        ││                                                                              │
 │  ↻ cron 0 2 * * * · next in 11h      ││                                                                              │
 │  ✦ last success · 42.5s · 3m ago     ││                                                                              │
 │    cpu 66% peak · mem 61.2MB peak    ││                                                                              │

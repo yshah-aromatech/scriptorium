@@ -1,6 +1,7 @@
 package deps
 
 import (
+	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -14,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/yshah-aromatech/scriptorium/internal/subprocess"
 )
 
 //go:embed scanner.ps1
@@ -52,6 +55,14 @@ type Scanner struct {
 // exclusion). Cache hit on an unchanged (size, mtime) skips the pwsh
 // invocation entirely.
 func (s *Scanner) ScanPS(entry, dir, moduleDir string, loose bool) (PSScanResult, error) {
+	return s.ScanPSContext(context.Background(), entry, dir, moduleDir, loose)
+}
+
+// ScanPSContext is ScanPS with cancellation for interactive preparation.
+func (s *Scanner) ScanPSContext(ctx context.Context, entry, dir, moduleDir string, loose bool) (PSScanResult, error) {
+	if err := ctx.Err(); err != nil {
+		return PSScanResult{}, err
+	}
 	info, statErr := os.Stat(entry)
 	if statErr == nil {
 		if cached, ok := s.cached(entry, info.Size(), info.ModTime().UnixNano()); ok {
@@ -59,7 +70,7 @@ func (s *Scanner) ScanPS(entry, dir, moduleDir string, loose bool) (PSScanResult
 		}
 	}
 
-	result, err := s.runScanner(entry, dir, moduleDir, loose)
+	result, err := s.runScanner(ctx, entry, dir, moduleDir, loose)
 	if err != nil {
 		return result, err
 	}
@@ -151,7 +162,7 @@ func (s *Scanner) pwshBin() string {
 // (bad exit, unparseable output) is a real scan error the caller decides how
 // to handle (the CLI --run flow swallows it, matching PS's own
 // Get-StoMissingDeps-failure-yields-empty-missing behavior).
-func (s *Scanner) runScanner(entry, dir, moduleDir string, loose bool) (PSScanResult, error) {
+func (s *Scanner) runScanner(ctx context.Context, entry, dir, moduleDir string, loose bool) (PSScanResult, error) {
 	looseArg := "false"
 	if loose {
 		looseArg = "true"
@@ -162,8 +173,11 @@ func (s *Scanner) runScanner(entry, dir, moduleDir string, loose bool) (PSScanRe
 		return PSScanResult{}, fmt.Errorf("materializing embedded scanner: %w", err)
 	}
 
-	cmd := exec.Command(s.pwshBin(), "-NoProfile", "-NonInteractive", "-File", scriptPath, entry, dir, moduleDir, looseArg)
+	cmd := subprocess.CommandContext(ctx, s.pwshBin(), "-NoProfile", "-NonInteractive", "-File", scriptPath, entry, dir, moduleDir, looseArg)
 	out, runErr := cmd.Output()
+	if err := ctx.Err(); err != nil {
+		return PSScanResult{}, err
+	}
 	if runErr != nil {
 		// "missing/unrunnable" means the process never actually started: a
 		// bare name not on $PATH (*exec.Error) or an absolute/relative path

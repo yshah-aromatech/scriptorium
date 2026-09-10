@@ -17,7 +17,7 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-╰──────────────────────────────────────────────────────────────────────── ↵ open · r run script · f failures / scope ──╯
+╰─────────────────────────────────────────────────────────────────────────────────── ↵ open · r run script · f scope ──╯
 ╭─ log: backup-db ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ connecting to postgres://db.internal:5432                                                                            │
 │ dumping schema public (18 tables)                                                                                    │
@@ -37,4 +37,4 @@
 │                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
  backup-db · nightly postgres dump to object storage · ↻ 0 2 * * * · next in 11h
-q quit · ↑/k up · ↓/j down · ↵ open · r run script · f failures / scope · : commands · ? help · 1 fleet · 2 run …
+q quit · ↑/↓/j/k move · : commands · ? help

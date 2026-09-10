@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,6 +16,8 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
 	"github.com/yshah-aromatech/scriptorium/internal/secret"
 	"github.com/yshah-aromatech/scriptorium/internal/update"
+
+	"github.com/yshah-aromatech/scriptorium/internal/subprocess"
 )
 
 // The Run view's action keys (inventory §1.3), each with the overlay or task it
@@ -73,14 +74,15 @@ func (r *runModel) editEnv(m *Model) tea.Cmd {
 // or pip). installOnly marks the `i` path, which never runs the script.
 func (r *runModel) scanDeps(m *Model, s scripts.Script, args []string, installOnly bool) tea.Cmd {
 	a := m.app
+	attempt := r.reserve(s.Name)
 	return func() tea.Msg {
-		msg := DepsScannedMsg{Script: s, Args: args, InstallOnly: installOnly}
+		msg := DepsScannedMsg{Attempt: attempt, Script: s, Args: args, InstallOnly: installOnly}
 		if s.Runtime == "python" {
-			missing, err := a.Scanner.ScanPython(s.Dir, s.VenvDir, a.Cfg.PythonBin)
+			missing, err := a.Scanner.ScanPythonContext(attempt.ctx, s.Dir, s.VenvDir, a.Cfg.PythonBin)
 			msg.Missing, msg.Err = missing, err
 			return msg
 		}
-		res, err := a.Scanner.ScanPS(s.Entry, s.Dir, s.ModuleDir, s.Loose)
+		res, err := a.Scanner.ScanPSContext(attempt.ctx, s.Entry, s.Dir, s.ModuleDir, s.Loose)
 		msg.Missing, msg.Err = res.Missing, err
 		msg.Degraded, msg.Warning = res.Degraded, res.Warning
 		return msg
@@ -92,29 +94,53 @@ func (r *runModel) scanDeps(m *Model, s scripts.Script, args []string, installOn
 // list and the run proceeds, and a degraded PowerShell scan cannot install
 // anything anyway — the warning is visible, the run is not held hostage to it.
 func (r *runModel) onDepsScanned(m *Model, msg DepsScannedMsg) tea.Cmd {
+	if msg.Attempt != r.attempt {
+		return nil
+	}
+	if r.attempt != nil {
+		if r.attempt.phase != "scan" {
+			return nil
+		}
+		if r.attempt.ctx.Err() != nil {
+			name := r.attempt.name
+			r.releaseAttempt()
+			return tea.Batch(status(StatusWarn, "cancelled "+name), r.settle(m))
+		}
+		// Keep the user's editor or quit confirmation intact until dismissed.
+		if m.ov != nil && m.ov.kind().blocking() {
+			r.attempt.phase, r.attempt.deps = "waiting", &msg
+			return nil
+		}
+		r.attempt.phase = "prompt"
+	}
+
 	if msg.InstallOnly {
 		r.out.append("declared missing: " + displayList(msg.Missing))
 	}
 	switch {
 	case msg.Err != nil:
+		note := status(StatusErr, "dependency scan failed: "+msg.Err.Error())
 		if msg.InstallOnly {
-			return status(StatusErr, "dependency scan failed: "+msg.Err.Error())
+			r.releaseAttempt()
+			return tea.Batch(note, r.settle(m))
 		}
-		return r.launch(m, msg.Script, msg.Args)
+		return tea.Batch(note, r.launch(m, msg.Script, msg.Args))
 	case msg.Degraded:
 		note := status(StatusWarn, "dependency scan degraded: "+msg.Warning)
 		if msg.InstallOnly {
-			return note
+			r.releaseAttempt()
+			return tea.Batch(note, r.settle(m))
 		}
 		return tea.Batch(note, r.launch(m, msg.Script, msg.Args))
 	case len(msg.Missing) == 0:
 		if msg.InstallOnly {
-			return status(StatusOK, msg.Script.Name+": every dependency is installed")
+			r.releaseAttempt()
+			return tea.Batch(status(StatusOK, msg.Script.Name+": every dependency is installed"), r.settle(m))
 		}
 		return r.launch(m, msg.Script, msg.Args)
 	}
 	m.open(&depsOverlay{
-		script: msg.Script, missing: msg.Missing,
+		attempt: msg.Attempt, script: msg.Script, missing: msg.Missing,
 		args: msg.Args, installOnly: msg.InstallOnly,
 	})
 	return nil
@@ -134,6 +160,9 @@ func displayList(ds []deps.Dep) string {
 // depScan is `i`: scan and report, opening the prompt only if something is
 // actually missing.
 func (r *runModel) depScan(m *Model) tea.Cmd {
+	if r.active() {
+		return status(StatusWarn, "something is already running — x to kill it first")
+	}
 	s := r.selected(m)
 	if s == nil {
 		return status(StatusWarn, "no script selected")
@@ -194,7 +223,7 @@ func (r *runModel) systemUpdate(m *Model) tea.Cmd {
 // task failure: it just skips the stage with the manual command, and the
 // caller's after-hook (the module/venv stages) still runs either way.
 func aptUpgrade(ctx context.Context, reg *secret.Registry, emit func(string)) bool {
-	if exec.CommandContext(ctx, "sudo", "-n", "true").Run() != nil {
+	if subprocess.CommandContext(ctx, "sudo", "-n", "true").Run() != nil {
 		emit(deps.AptSkipNote)
 		return true
 	}
@@ -215,7 +244,7 @@ func (r *runModel) selfUpdate(m *Model) tea.Cmd {
 			return streamCmd(ctx, m.app.Sec, emit, "git", deps.GitPullFFOnlyArgs(appDir)...)
 		}, func(m *Model, ok bool) tea.Cmd {
 			if ok {
-				return status(StatusOK, "app updated — restart scriptorium to apply")
+				return status(StatusOK, "source updated — rebuild scriptorium, then restart")
 			}
 			return status(StatusErr, "app update failed — see the output pane")
 		})
@@ -371,6 +400,18 @@ func (r *runModel) openHistory(m *Model) tea.Cmd {
 
 // kill is `x`: whichever of the two things that can be running is running.
 func (r *runModel) kill(m *Model) tea.Cmd {
+	if a := r.attempt; a != nil && r.handle == nil {
+		a.cancel()
+		if a.phase == "prompt" || a.phase == "waiting" {
+			if d, ok := m.ov.(*depsOverlay); ok && d.attempt == a {
+				m.closeOverlay()
+			}
+			r.releaseAttempt()
+			return tea.Batch(status(StatusWarn, "cancelled "+a.name), r.settle(m))
+		}
+		return status(StatusWarn, "cancelling "+a.name)
+	}
+
 	if r.handle == nil && r.task != nil {
 		return r.killTask()
 	}
@@ -385,4 +426,14 @@ func (r *runModel) kill(m *Model) tea.Cmd {
 		h.Kill("killed")
 		return StatusMsg{Text: "killed " + h.Name, Kind: StatusWarn}
 	}
+}
+
+// resumePreparation handles a completed scan whose result waited for a modal.
+func (r *runModel) resumePreparation(m *Model) tea.Cmd {
+	if a := r.attempt; a != nil && a.phase == "waiting" && m.queueUnblocked() {
+		msg := *a.deps
+		a.phase, a.deps = "scan", nil
+		return r.onDepsScanned(m, msg)
+	}
+	return nil
 }

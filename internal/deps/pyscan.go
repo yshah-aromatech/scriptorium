@@ -1,6 +1,7 @@
 package deps
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/yshah-aromatech/scriptorium/internal/subprocess"
 )
 
 //go:embed scanner.py
@@ -92,11 +95,10 @@ type pyScanDoc struct {
 
 // ScanPython is the port of Get-StoMissingPythonDeps: §9.5.
 //
-// requirements.txt in dir takes precedence over the AST scan entirely: its
-// names (verbatim, no pip-name mapping — they're already real package
-// names) are checked against `pip list --format=json` inside the venv
-// (underscore/hyphen normalized both sides, case-insensitive); no venv means
-// everything listed is missing.
+// requirements.txt in dir takes precedence over the AST scan entirely. Its
+// syntax is pip's domain (pins, extras, markers and included files), so its
+// mere presence produces one sentinel that routes preparation to `pip install
+// -r` with the original path rather than trying to reimplement satisfaction.
 //
 // Otherwise the embedded AST scanner runs via the venv's python (or the
 // system pythonBin when there's no venv yet — just to find the imports; its
@@ -105,27 +107,19 @@ type pyScanDoc struct {
 // present as a literal file) yields an empty result, not an error — a
 // zero-import script never needs a venv at all.
 func (s *Scanner) ScanPython(dir, venvDir, pythonBin string) ([]Dep, error) {
-	hasVenv := HasVenv(venvDir)
+	return s.ScanPythonContext(context.Background(), dir, venvDir, pythonBin)
+}
 
-	if reqPath := requirementsPath(dir); reqPath != "" {
-		wanted := ReadRequirements(reqPath)
-		if len(wanted) == 0 {
-			return nil, nil
-		}
-		have := map[string]bool{}
-		if hasVenv {
-			for _, name := range installedPipNames(VenvPython(venvDir)) {
-				have[normalizePipName(name)] = true
-			}
-		}
-		var missing []Dep
-		for _, name := range wanted {
-			if !have[normalizePipName(name)] {
-				missing = append(missing, Dep{Name: name, Display: name, PipName: name})
-			}
-		}
-		return missing, nil
+// ScanPythonContext is ScanPython with cancellation for interactive preparation.
+func (s *Scanner) ScanPythonContext(ctx context.Context, dir, venvDir, pythonBin string) ([]Dep, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	if reqPath := requirementsPath(dir); reqPath != "" {
+		name := filepath.Base(reqPath)
+		return []Dep{{Name: name, Display: name, PipName: name}}, nil
+	}
+	hasVenv := HasVenv(venvDir)
 
 	py := pythonBin
 	if hasVenv {
@@ -135,7 +129,10 @@ func (s *Scanner) ScanPython(dir, venvDir, pythonBin string) ([]Dep, error) {
 		return nil, nil
 	}
 
-	out, err := exec.Command(py, "-c", string(scannerPy), dir).CombinedOutput()
+	out, err := subprocess.CommandContext(ctx, py, "-c", string(scannerPy), dir).CombinedOutput()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil {
 		return nil, nil // PS parity: a scan failure yields an empty result, not an error
 	}
@@ -181,8 +178,8 @@ func normalizePipName(name string) string {
 // installedPipNames runs `python -m pip list --format=json` inside a venv
 // and returns the raw package names; any failure (missing pip, bad JSON)
 // yields an empty list, matching PS's try/catch-swallow.
-func installedPipNames(venvPython string) []string {
-	out, err := exec.Command(venvPython, "-m", "pip", "list", "--format=json").Output()
+func installedPipNames(ctx context.Context, venvPython string) []string {
+	out, err := subprocess.CommandContext(ctx, venvPython, "-m", "pip", "list", "--format=json").Output()
 	if err != nil {
 		return nil
 	}

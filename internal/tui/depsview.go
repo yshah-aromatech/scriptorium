@@ -15,6 +15,7 @@ import (
 // (and then runs, unless this scan was a plain `i` check), n skips the install,
 // Esc cancels.
 type depsOverlay struct {
+	attempt     *runAttempt
 	script      scripts.Script
 	missing     []deps.Dep
 	args        []string
@@ -52,13 +53,18 @@ func (d *depsOverlay) hints(m *Model) []key.Binding {
 }
 
 func (d *depsOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if d.attempt != m.run.attempt {
+		return nil, true
+	}
 	switch {
 	case key.Matches(msg, m.keys.Close):
+		m.run.releaseAttempt()
 		return status(StatusInfo, "cancelled"), true
 	case msg.String() == "y":
 		return m.run.installDeps(m, d), true
 	case key.Matches(msg, m.keys.Deny):
 		if d.installOnly {
+			m.run.releaseAttempt()
 			return status(StatusInfo, "skipped the install"), true
 		}
 		return m.run.launch(m, d.script, d.args), true
@@ -75,6 +81,10 @@ func (d *depsOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // it would be wrong in both directions.
 func (r *runModel) installDeps(m *Model, d *depsOverlay) tea.Cmd {
 	s, args, only := d.script, d.args, d.installOnly
+	if d.attempt != r.attempt {
+		return nil
+	}
+	r.releaseAttempt() // synchronous transfer to startTask; its completion owns launch
 	cmd := deps.InstallCommand(deps.InstallTarget{
 		Runtime: s.Runtime, Dir: s.Dir, ModuleDir: s.ModuleDir, VenvDir: s.VenvDir,
 	}, d.missing, m.app.Cfg.PythonBin)
@@ -82,13 +92,13 @@ func (r *runModel) installDeps(m *Model, d *depsOverlay) tea.Cmd {
 	return r.pwshTask(m, "install deps: "+s.Name, cmd, func(m *Model, ok bool) tea.Cmd {
 		m.app.Scanner.Invalidate(s.Entry)
 		if !ok {
-			return status(StatusErr, "installing deps for "+s.Name+" failed — it was not started")
+			return tea.Batch(m.loadFleet(), status(StatusErr, "installing deps for "+s.Name+" failed — it was not started"))
 		}
 		if only {
-			return status(StatusOK, "installed the missing deps for "+s.Name)
+			return tea.Batch(m.loadFleet(), status(StatusOK, "installed the missing deps for "+s.Name))
 		}
 		// launch, not start: the dependency question has just been answered,
 		// so asking it again would reopen this very overlay.
-		return r.launch(m, s, args)
+		return tea.Batch(m.loadFleet(), r.launch(m, s, args))
 	})
 }

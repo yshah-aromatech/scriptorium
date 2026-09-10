@@ -498,3 +498,60 @@ func TestGoldensActionOverlays(t *testing.T) {
 		return m
 	})
 }
+
+func TestEnvFailedSaveKeepsDirtyBufferAndOriginalFile(t *testing.T) {
+	ta := seedToolApp(t, "echo hi\n")
+	m := toolModel(t, ta)
+	path := m.scripts[0].EnvFile
+	write(t, path, "TOKEN=original\n")
+	press(m, "e")
+	ed := m.ov.(*envOverlay)
+	ed.ta.SetValue("TOKEN=unsaved")
+	// A non-writable parent fails before replacing the original, without
+	// depending on disk capacity or modifying anything outside this fixture.
+	if err := os.Chmod(filepath.Dir(path), 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Dir(path), 0700) })
+	send(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if m.ov != ed || !ed.dirty() || ed.ta.Value() != "TOKEN=unsaved" {
+		t.Error("failed save discarded dirty editor")
+	}
+	if m.statusKind != StatusErr {
+		t.Errorf("save failure not reported: %s", m.statusText)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "TOKEN=original\n" {
+		t.Errorf("original changed: %q, %v", got, err)
+	}
+}
+
+func TestEnvSaveAtomicallyReplacesWithPrivateFile(t *testing.T) {
+	ta := seedToolApp(t, "echo hi\n")
+	m := toolModel(t, ta)
+	path := m.scripts[0].EnvFile
+	write(t, path, "TOKEN=original\n")
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	press(m, "e")
+	m.ov.(*envOverlay).ta.SetValue("TOKEN=replacement")
+	send(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if m.ov != nil {
+		t.Fatal("successful save left editor open")
+	}
+	st, err := os.Stat(path)
+	if err != nil || st.Mode().Perm() != 0600 {
+		t.Errorf("saved file isn't private: %v, %v", st, err)
+	}
+	got := make([]byte, 100)
+	n, _ := old.Read(got)
+	if string(got[:n]) != "TOKEN=original\n" {
+		t.Error("save truncated the original inode")
+	}
+}

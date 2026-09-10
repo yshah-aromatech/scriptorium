@@ -59,6 +59,7 @@ const (
 	// seriesPoints is how many points a per-run resource series keeps: small
 	// enough for history, enough for a sparkline.
 	seriesPoints = 60
+	seriesBuffer = 512
 )
 
 // EventKind tags an Event's payload.
@@ -132,10 +133,13 @@ type payload struct {
 // Start launches a run and returns immediately with its event channel. It
 // does not fail: a held lock and a failed exec are both RUNS — fully
 // classified, appended to history and reported — not errors. The error
-// result exists for the callers' sake and is always nil today.
+// result reports cancellation during preparation, before a script process exists.
 func (r *Runner) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	s := &supervisor{
 		r:         r,
@@ -177,12 +181,14 @@ func (r *Runner) Start(ctx context.Context, spec Spec) (*Handle, error) {
 	}
 	s.release = release
 
-	// the log path is computed before the launch and kept even when it
-	// fails: PS puts it in the handle before Process.Start, so a failed
-	// start still reports a (never-created) logFile
+	// The intended path is not reported as a saved log until it is created.
 	s.logFile = filepath.Join(r.Paths.LogsDir, safeName(s.name)+"-"+stamp(s.startedAt)+".log")
 
-	cmd := r.buildCmd(spec)
+	cmd := r.buildCmd(ctx, spec)
+	if err := ctx.Err(); err != nil {
+		s.release()
+		return nil, err
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err == nil {
 		var stderr io.ReadCloser
@@ -240,11 +246,13 @@ type supervisor struct {
 	spec Spec
 	ctx  context.Context
 
-	name      string
-	trigger   string
-	runtime   string
-	logFile   string
-	startedAt time.Time
+	name                string
+	trigger             string
+	runtime             string
+	logFile             string
+	logPersisted        bool
+	persistenceWarnings []string
+	startedAt           time.Time
 
 	events   chan Event
 	samples  chan procstat.Sample
@@ -259,10 +267,11 @@ type supervisor struct {
 	finished bool
 
 	// accumulators — supervisor goroutine only
-	sampleCount          int
-	cpuSum, cpuMax       float64
-	memSum, memMax       float64
-	cpuSeries, memSeries []float64
+	sampleCount                           int
+	cpuSum, cpuMax                        float64
+	memSum, memMax                        float64
+	cpuSeries, memSeries                  []float64
+	seriesBucketSize, seriesBucketSamples int
 }
 
 // setPreset records a status that wins over the exit code. The first one
@@ -337,6 +346,9 @@ func (s *supervisor) supervise(stdout, stderr io.ReadCloser) {
 	// already-started process (and its lock) — run without a log instead
 	if f, err := os.OpenFile(s.logFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644); err == nil {
 		s.log = f
+		s.logPersisted = true
+	} else {
+		s.warnPersistence("log could not be created")
 	}
 
 	lines := make(chan string, lineBuffer)
@@ -492,9 +504,19 @@ func (s *supervisor) sample(stop <-chan struct{}) {
 func (s *supervisor) emitLine(raw string, toLog bool) {
 	line := s.r.Sec.Redact(raw)
 	if toLog && s.log != nil {
-		_, _ = s.log.WriteString(line + "\n")
+		if _, err := s.log.WriteString(line + "\n"); err != nil && s.logPersisted {
+			s.logPersisted = false
+			s.warnPersistence("log write failed; output may be incomplete")
+		}
 	}
 	s.emit(Event{Kind: EvLine, Line: line})
+}
+
+// Fixed diagnostics carry no paths, values, or OS error text that could leak
+// secrets. Every consumer gets both the live notice and the final row warnings.
+func (s *supervisor) warnPersistence(warning string) {
+	s.persistenceWarnings = append(s.persistenceWarnings, warning)
+	s.emitLine("warning: "+warning, false)
 }
 
 func (s *supervisor) onSample(sm procstat.Sample) {
@@ -507,8 +529,33 @@ func (s *supervisor) onSample(sm procstat.Sample) {
 	if sm.MemMB > s.memMax {
 		s.memMax = sm.MemMB
 	}
-	s.cpuSeries = append(s.cpuSeries, sm.CPU)
-	s.memSeries = append(s.memSeries, sm.MemMB)
+	// ponytail: equal-width peak buckets double in duration when full. This
+	// preserves the whole run, with at most one partial bucket at the end;
+	// exact chart boundaries would require retaining all samples on disk.
+	if s.seriesBucketSize == 0 {
+		s.seriesBucketSize = 1
+	}
+	if s.seriesBucketSamples == s.seriesBucketSize {
+		s.seriesBucketSamples = 0
+	}
+	if s.seriesBucketSamples == 0 {
+		if len(s.cpuSeries) == seriesBuffer {
+			for i := range seriesBuffer / 2 {
+				s.cpuSeries[i] = max(s.cpuSeries[2*i], s.cpuSeries[2*i+1])
+				s.memSeries[i] = max(s.memSeries[2*i], s.memSeries[2*i+1])
+			}
+			s.cpuSeries = s.cpuSeries[:seriesBuffer/2]
+			s.memSeries = s.memSeries[:seriesBuffer/2]
+			s.seriesBucketSize *= 2
+		}
+		s.cpuSeries = append(s.cpuSeries, sm.CPU)
+		s.memSeries = append(s.memSeries, sm.MemMB)
+	} else {
+		i := len(s.cpuSeries) - 1
+		s.cpuSeries[i] = max(s.cpuSeries[i], sm.CPU)
+		s.memSeries[i] = max(s.memSeries[i], sm.MemMB)
+	}
+	s.seriesBucketSamples++
 	s.emit(Event{Kind: EvSample, Sample: sm})
 }
 
@@ -533,7 +580,10 @@ func (s *supervisor) finalize(exitCode int) {
 	}
 	// the log writer closes BEFORE the tail is read back out of the file
 	if s.log != nil {
-		_ = s.log.Close()
+		if err := s.log.Close(); err != nil {
+			s.logPersisted = false
+			s.warnPersistence("log close failed; output may be incomplete")
+		}
 		s.log = nil
 	}
 
@@ -556,31 +606,35 @@ func (s *supervisor) finalize(exitCode int) {
 	success := status == "success"
 	duration := procstat.Round1(finishedAt.Sub(s.startedAt).Seconds())
 	var logFile *string
-	if s.logFile != "" {
+	if s.logPersisted {
 		logFile = &s.logFile
 	}
 	row := history.Row{
-		Event:       "script_run",
-		RunID:       newRunID(),
-		Script:      s.name,
-		Runtime:     s.runtime,
-		Repo:        s.spec.Script.Repo,
-		Trigger:     s.trigger,
-		Status:      status,
-		Success:     &success,
-		ExitCode:    &exitCode,
-		StartedAt:   history.Stamp(s.startedAt),
-		FinishedAt:  history.Stamp(finishedAt),
-		DurationSec: &duration,
-		Host:        webhook.Host(),
-		Resources:   &res,
-		LogFile:     logFile,
+		Event:               "script_run",
+		RunID:               newRunID(),
+		Script:              s.name,
+		Runtime:             s.runtime,
+		Repo:                s.spec.Script.Repo,
+		Trigger:             s.trigger,
+		Status:              status,
+		Success:             &success,
+		ExitCode:            &exitCode,
+		StartedAt:           history.Stamp(s.startedAt),
+		FinishedAt:          history.Stamp(finishedAt),
+		DurationSec:         &duration,
+		Host:                webhook.Host(),
+		Resources:           &res,
+		LogFile:             logFile,
+		PersistenceWarnings: s.persistenceWarnings,
 	}
 
 	// history first: unlocking earlier would let a queued re-run of a
 	// sub-second script append its row ahead of this one and lose
 	// last-status-wins
-	_ = s.r.Hist.Append(row)
+	if err := s.r.Hist.Append(row); err != nil {
+		s.warnPersistence("history write failed; this run was not saved")
+		row.PersistenceWarnings = s.persistenceWarnings
+	}
 	if s.release != nil {
 		s.release()
 		s.release = nil
