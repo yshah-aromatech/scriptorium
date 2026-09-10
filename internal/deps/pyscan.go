@@ -169,33 +169,6 @@ func requirementsPath(dir string) string {
 	return ""
 }
 
-// normalizePipName is the underscore<->hyphen fold both requirements.txt
-// names and `pip list` names go through before comparison, case-insensitive.
-func normalizePipName(name string) string {
-	return strings.ToLower(strings.ReplaceAll(name, "_", "-"))
-}
-
-// installedPipNames runs `python -m pip list --format=json` inside a venv
-// and returns the raw package names; any failure (missing pip, bad JSON)
-// yields an empty list, matching PS's try/catch-swallow.
-func installedPipNames(ctx context.Context, venvPython string) []string {
-	out, err := subprocess.CommandContext(ctx, venvPython, "-m", "pip", "list", "--format=json").Output()
-	if err != nil {
-		return nil
-	}
-	var pkgs []struct {
-		Name string `json:"name"`
-	}
-	if json.Unmarshal(out, &pkgs) != nil {
-		return nil
-	}
-	names := make([]string, len(pkgs))
-	for i, p := range pkgs {
-		names[i] = p.Name
-	}
-	return names
-}
-
 // sortNamesCI is Deps.psm1:454's `Sort-Object` (default: case-insensitive)
 // on the AST scanner's third-party import names — sort.Strings is ordinal
 // and would put every uppercase name first (e.g. "Crypto" before "attr"),

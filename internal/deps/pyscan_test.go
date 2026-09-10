@@ -213,9 +213,7 @@ func TestScanPythonRequirementsAlwaysDelegatesPinsExtrasAndIncludesToPip(t *test
 	}
 }
 
-// installedPipNames is exercised via a stub venv python answering
-// `-m pip list --format=json` with canned JSON — no real pip involved. Also
-// covers the underscore<->hyphen, case-insensitive normalization rule.
+// An existing venv never bypasses pip's authoritative manifest install.
 func TestScanPythonRequirementsWithVenvAlwaysRequestsManifestInstall(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("requests\nflask\nsome_package\n"), 0o644); err != nil {

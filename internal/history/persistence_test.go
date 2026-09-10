@@ -53,7 +53,7 @@ func TestHistoryTransactionsWaitAcrossProcesses(t *testing.T) {
 			if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 				t.Fatal(err)
 			}
-			defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+			defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 			cmd := exec.Command(os.Args[0], "-test.run=^TestHistoryWriterProcess$")
 			cmd.Env = append(os.Environ(), "STO_HISTORY_TEST_PATH="+path, "STO_HISTORY_TEST_OP="+op)
 			if pwsh != "" {
@@ -71,7 +71,7 @@ func TestHistoryTransactionsWaitAcrossProcesses(t *testing.T) {
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
-			defer cmd.Process.Kill()
+			defer func() { _ = cmd.Process.Kill() }()
 			scanner := bufio.NewScanner(stdout)
 			for scanner.Scan() && scanner.Text() != "ready" {
 			}
@@ -156,7 +156,7 @@ func TestAppendWaitsForPruneTransactionAndSurvives(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer cmd.Process.Kill()
+	defer func() { _ = cmd.Process.Kill() }()
 	scanner := bufio.NewScanner(stdout)
 	if !scanner.Scan() || scanner.Text() != "ready" {
 		t.Fatal("writer did not start")
