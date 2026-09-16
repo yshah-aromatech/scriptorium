@@ -49,6 +49,10 @@ Mouse: wheel scrolls the hovered pane; click focuses/selects; drag over the outp
 
 Paste into the `.env` editor, argument/schedule/filter/search prompts, and theme/command searches using your terminal's paste shortcut (`Cmd+V` on macOS, usually `Ctrl+Shift+V` on Linux/Windows, or the terminal's Paste menu). This also works over SSH. `Ctrl+V` in these fields reads the clipboard on the machine running Scriptorium, when available. Multiline paste stays multiline in the `.env` editor; `Ctrl+S` saves. Pasting into a prompt does not submit it — press `Enter` separately.
 
+## Releasing (maintainers)
+
+Build and publish releases locally, not through GitHub Actions. CI runs tests, vet, and lint only. With Go and GoReleaser installed, start from a clean `main`, run `go test ./...`, create the next patch tag (for example `git tag v1.1.3`), push `main` and that tag, then run `GITHUB_TOKEN="$(gh auth token)" goreleaser release --clean` locally. `.goreleaser.yml` defines the Linux amd64/arm64 archives and `checksums.txt` required by the installer and self-updater.
+
 ## Installation
 
 ```bash
