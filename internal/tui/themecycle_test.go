@@ -195,6 +195,57 @@ func TestThemePickerGolden(t *testing.T) {
 	checkGolden(t, "overlay-theme-80x24.ansi", frame)
 }
 
+func TestThemePickerSamplesAndOrder(t *testing.T) {
+	m := newFixtureModel(t, truecolorEnv)
+	p := newThemeOverlay(m)
+	want := []string{"dracula", "catppuccin-mocha", "builtin_solarized_dark", "gruvbox-dark", "tomorrow_night", "tokyo-night", "nord", "one_dark", "rose_pine", "night-owl"}
+	if strings.Join(p.items[:10], ",") != strings.Join(want, ",") {
+		t.Fatalf("popular themes = %v", p.items[:10])
+	}
+	seen := make(map[string]bool)
+	for _, name := range p.items {
+		if seen[name] || theme.New(name, m.th.Profile).Name != name {
+			t.Fatalf("duplicate or unresolved theme %q", name)
+		}
+		seen[name] = true
+	}
+	for _, name := range theme.CycleNames() {
+		_, canonical, _ := theme.Resolve(name)
+		if !seen[canonical] {
+			t.Fatalf("missing theme %q", name)
+		}
+	}
+	for _, w := range []int{40, 76, 116} {
+		p.ti.SetValue("dracula")
+		p.filter()
+		p.sel = 0
+		p.preview(m)
+		rows := p.rows(m, w, 13)
+		if len(rows) > 13 {
+			t.Fatalf("%d columns: %d rows", w, len(rows))
+		}
+		for _, row := range rows {
+			if textkit.VisibleWidth(row) > w {
+				t.Fatalf("%d columns: overflowing row %q", w, row)
+			}
+		}
+		plain := textkit.StripANSI(strings.Join(rows, "\n"))
+		for _, label := range []string{"backup-db", "sync-files", "TIMEOUT", "FAIL", "Queued"} {
+			if !strings.Contains(plain, label) {
+				t.Errorf("%d columns: missing sample %q", w, label)
+			}
+		}
+		if w >= 64 && (!strings.Contains(plain, "Output · example") || !strings.Contains(plain, "Schedule")) {
+			t.Errorf("%d columns: missing panel samples", w)
+		}
+	}
+	pressKey := tea.KeyPressMsg{Code: tea.KeyEscape}
+	p.key(m, pressKey)
+	if m.th.Name != theme.Default {
+		t.Fatal("cancel did not restore original theme")
+	}
+}
+
 func TestThemeSaveSettlesBehindQuitConfirmation(t *testing.T) {
 	m := runAt(t, 120, 40)
 	m.run.handle = fakeHandle("backup-db")

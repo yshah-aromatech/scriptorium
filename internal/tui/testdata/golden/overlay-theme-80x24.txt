@@ -3,20 +3,20 @@
 ─ scripts ──────────────────────────────────────────────────────────────────────
 ╭─ theme ──────────────────────────────────────────────────────────────────────╮
 │ ❯                                                                            │
-│   catppuccin-mocha                                                           │
-│   gruvbox-dark                                                               │
-│ ▎ night-owl                                                                  │
-│   terminal                                                                   │
-│   tokyo-night                                                                │
-│   3024_day                                                                   │
+│   dracula                        SCRIPTORIUM   Fleet  Run                    │
+│   catppuccin-mocha              ▎ backup-db  ps                              │
+│   builtin_solarized_dark          sync-files  py                             │
+│   gruvbox-dark                  OK  TIMEOUT  FAIL                            │
+│   tomorrow_night                Running  Queued  2m ago                      │
+│   tokyo-night                   ╭─ Output · example ───────────────────────╮ │
+│   nord                          │$ backup-db --verify                      │ │
+│   one_dark                      │Backup complete: 42 records               │ │
+│   rose_pine                     ╰──────────────────────────────────────────╯ │
+│ ▎ night-owl                     ╭─ Schedule ───────────────────────────────╮ │
+│   terminal                      │Daily at 09:00  Scheduled                 │ │
+│   3024_day                      ╰──────────────────────────────────────────╯ │
 │   3024_night                                                                 │
 │   aardvark_blue                                                              │
-│   abernathy                                                                  │
-│   adventure                                                                  │
-│   adventure_time                                                             │
-│   afterglow                                                                  │
-│   alabaster                                                                  │
-│   alien_blood                                                                │
 ╰─────────────────────── ↑/k up · ↓/j down · ↵ use · ctrl+s save · esc close ──╯
  ✓ nightly-report         ps    ⣠⣾⣆ 5h2m
  ✓ backup-db              ps ······   2d

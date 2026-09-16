@@ -211,7 +211,7 @@ func newThemeOverlay(m *Model) *themeOverlay {
 	st.Cursor.Color = m.th.C.Accent
 	st.Focused.Text = m.th.S.Base
 	ti.SetStyles(st)
-	p := &themeOverlay{ti: ti, items: theme.CycleNames(), original: m.th.Name}
+	p := &themeOverlay{ti: ti, items: theme.PickerNames(), original: m.th.Name}
 	p.filter()
 	for i, name := range p.items {
 		if name == p.original {
@@ -230,7 +230,7 @@ func (p *themeOverlay) kind() overlayKind {
 }
 func (p *themeOverlay) title() string { return "theme" }
 func (p *themeOverlay) height(_ *Model, _, h int) int {
-	return min(len(p.shown)+1, max(h-6, 3))
+	return min(max(len(p.shown)+1, 13), max(h-6, 3))
 }
 func (p *themeOverlay) hints(m *Model) []key.Binding {
 	return []key.Binding{m.keys.Up, m.keys.Down,
@@ -239,6 +239,7 @@ func (p *themeOverlay) hints(m *Model) []key.Binding {
 }
 func (p *themeOverlay) filter() {
 	q := strings.ToLower(strings.TrimSpace(p.ti.Value()))
+	p.sel, p.top = 0, 0
 	p.shown = p.shown[:0]
 	for i, name := range p.items {
 		if q == "" || subsequence(strings.ToLower(name), q) {
@@ -260,20 +261,64 @@ func (p *themeOverlay) preview(m *Model) {
 }
 func (p *themeOverlay) rows(m *Model, w, h int) []string {
 	th := m.th
+	st := p.ti.Styles()
+	st.Cursor.Color = th.C.Accent
+	st.Focused.Text = th.S.Base
+	p.ti.SetStyles(st)
 	p.ti.SetWidth(max(w-4, 4))
 	rows := []string{th.S.Info.Render("❯ ") + p.ti.View()}
 	body := max(h-1, 1)
+	listWidth := w
+	var sample []string
+	if w >= 64 {
+		listWidth = min(30, w/2-1)
+		sample = themeSample(m, w-listWidth-2)
+	} else if h >= 9 {
+		sample = themeSample(m, w)
+		body -= 5
+	}
 	p.top = scrollWindow(p.top, p.sel, len(p.shown), body)
 	if len(p.shown) == 0 {
-		return append(rows, th.S.Muted.Render("no theme matches"))
+		rows = append(rows, th.S.Muted.Render("no theme matches"))
 	}
-	for i := p.top; i < len(p.shown) && len(rows) < h; i++ {
+	for i := p.top; i < len(p.shown) && len(rows) <= body; i++ {
 		name := p.items[p.shown[i]]
 		mark, style := "  ", th.S.Key
 		if i == p.sel {
 			mark, style = th.S.Accent.Render("▎")+" ", th.S.Sel
 		}
-		rows = append(rows, textkit.Truncate(mark+style.Render(name), w))
+		rows = append(rows, textkit.Truncate(mark+style.Render(name), listWidth))
+	}
+	if w >= 64 {
+		rows = fitRows(rows, h)
+		for i := 1; i < h && i <= len(sample); i++ {
+			rows[i] = fillTo(rows[i], listWidth, nil) + "  " + sample[i-1]
+		}
+	} else if len(sample) > 0 {
+		rows = append(fitRows(rows, body+1), sample[:5]...)
+	}
+	return rows
+}
+
+// themeSample uses the same styles and panel renderer as the live views.
+func themeSample(m *Model, w int) []string {
+	s := m.th.S
+	rows := []string{
+		s.Chip.Render(" SCRIPTORIUM ") + " " + s.TabOn.Render(" Fleet ") + " " + s.ChipOff.Render("Run"),
+		s.Primary.Render("▎") + s.Sel.Render(" backup-db ") + " " + s.RuntimePS.Render("ps"),
+		s.Card.Render("  sync-files ") + " " + s.RuntimePy.Render("py"),
+		s.Success.Render("OK") + "  " + s.Warning.Render("TIMEOUT") + "  " + s.Danger.Render("FAIL"),
+		s.Pulse.Render("Running") + "  " + s.Info.Render("Queued") + "  " + s.Muted.Render("2m ago"),
+	}
+	rows = append(rows, renderPanel(m.th, []string{
+		s.Base.Render("$ backup-db --verify"),
+		s.Success.Render("Backup complete: 42 records"),
+	}, w, 4, panelOpts{title: "Output · example", focused: true})...)
+	rows = append(rows, renderPanel(m.th, []string{
+		s.Muted.Render("Daily at 09:00") + "  " + s.Info.Render("Scheduled"),
+	}, w, 3, panelOpts{title: "Schedule"})...)
+	for i := range rows {
+		rows[i] = textkit.Truncate(rows[i], w)
 	}
 	return rows
 }

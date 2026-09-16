@@ -111,6 +111,22 @@ func CycleNames() []string {
 	return append(Names(), tint.DefaultTintIDs()...)
 }
 
+// PickerNames puts ten popular theme families first; see docs/theme-picker.md
+// for the popularity proxy and source snapshot. Canonical aliases appear once.
+func PickerNames() []string {
+	names := []string{"dracula", "catppuccin-mocha", "builtin_solarized_dark", "gruvbox-dark", "tomorrow_night", "tokyo-night", "nord", "one_dark", "rose_pine", "night-owl"}
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(CycleNames()))
+	for _, name := range append(names, CycleNames()...) {
+		_, canonical, ok := Resolve(name)
+		if ok && !seen[canonical] {
+			seen[canonical] = true
+			out = append(out, canonical)
+		}
+	}
+	return out
+}
+
 // NearMatches suggests up to n known names for a misspelled one — simple
 // prefix/contains matching over the full cycle set, both spellings
 // normalized, with a shared-prefix-length tiebreak so a one-letter typo
