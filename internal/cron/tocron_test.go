@@ -96,7 +96,7 @@ func TestToCronTransportErrorIsByteExact(t *testing.T) {
 	got := cron.ToCron("gibberish", func(string) (string, error) {
 		return "", errors.New("connection refused")
 	})
-	const want = "OpenRouter request failed: connection refused"
+	const want = "AI request failed: connection refused"
 	if got.Err != want {
 		t.Errorf("Err = %q\nwant %q", got.Err, want)
 	}

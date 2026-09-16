@@ -194,6 +194,8 @@ Press `T` (or choose `theme: choose` from `:`) for a searchable picker. Arrow ke
 | `pwshBin` / `pythonBin` | interpreters used to run scripts | `pwsh` / `python3` |
 | `runTimeoutMinutes` | kill runs longer than this (0 = no limit; `script.json`'s `timeoutMinutes` overrides) | `0` |
 | `openRouterModel` | model for plain-English → cron (`OPENROUTER_API_KEY` in `.env`) | `google/gemini-3.1-flash-lite` |
+| `aiEndpoint` | custom 9router/OpenAI-compatible API base or full chat-completions URL | empty (use OpenRouter) |
+| `aiModel` | model ID supplied by your custom endpoint | empty |
 | `logRetentionDays` / `historyDays` / `historyMaxLines` | log/history retention | `30` / `30` / `50000` |
 | `missedGraceMinutes` | how late a scheduled fire may be before it's reported missed | `5` |
 | `colorMode` | `auto`, `truecolor`, or `256` | `auto` |
@@ -204,6 +206,32 @@ Press `T` (or choose `theme: choose` from `:`) for a searchable picker. Arrow ke
 History appends and retention share a `history.jsonl.lock` sidecar. When mixing the Go and legacy PowerShell apps, update both `src/Core.psm1` and `src/Runner.psm1` and stop older running processes before using the same data directory. Keep the lock file in place; deleting it while an app is running breaks coordination.
 
 See `config.json.example` for the full set. Unknown keys and bad values for numeric keys are reported as warnings at startup, never silently ignored.
+
+### Custom AI endpoint (9router)
+
+Add these fields to your app's `config.json` (usually `~/scriptorium/config.json`):
+
+```json
+"aiEndpoint": "http://localhost:20128/v1",
+"aiModel": "your-9router-model-id"
+```
+
+Use the endpoint and exact model ID shown by your 9router instance. Put its key
+in the app's `.env`, then restart Scriptorium:
+
+```dotenv
+AI_API_KEY=your-9router-api-key
+```
+
+`aiEndpoint` accepts an origin (adds `/v1/chat/completions`), an API base such
+as `/v1` (adds `/chat/completions`), or the full `/chat/completions` URL.
+Custom endpoints require both `AI_API_KEY` and `aiModel`; they never reuse
+`OPENROUTER_API_KEY`. Keys are redacted from app output. Process environment
+values override `.env`. Use HTTPS for remote endpoints.
+
+In Schedules, press `e` and enter a request such as `every weekday at 9am`.
+Review the resulting cron expression before confirming. Leave `aiEndpoint`
+empty to use the existing OpenRouter settings. Literal cron needs no AI.
 
 ## Troubleshooting
 

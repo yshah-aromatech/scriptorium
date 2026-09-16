@@ -11,6 +11,8 @@
   "runTimeoutMinutes": 0,
   "maxOutputLines": 5000,
   "openRouterModel": "google/gemini-3.1-flash-lite",
+  "aiEndpoint": "",
+  "aiModel": "",
   "syncOnLaunch": false,
   "logRetentionDays": 30,
   "historyMaxLines": 50000,

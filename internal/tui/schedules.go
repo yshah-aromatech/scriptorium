@@ -228,13 +228,21 @@ func scheduleRemoveCmd(ct *cron.Crontab, name string) tea.Cmd {
 }
 
 // cronAI resolves the function cron.ToCron needs for its natural-language
-// path: a test's injected hook when one is set, else a real client keyed off
-// OPENROUTER_API_KEY — nil when that is unset, which is what makes ToCron
-// return the PS app's own "not set" error rather than trying a request with
-// no key.
+// path: an injected test hook, a configured custom endpoint with AI_API_KEY,
+// or OpenRouter with OPENROUTER_API_KEY. Missing custom settings fail locally.
 func (m *Model) cronAI() func(string) (string, error) {
 	if m.aiConvert != nil {
 		return m.aiConvert
+	}
+	if endpoint := strings.TrimSpace(m.app.Cfg.AIEndpoint); endpoint != "" {
+		apiKey := strings.TrimSpace(os.Getenv("AI_API_KEY"))
+		model := strings.TrimSpace(m.app.Cfg.AIModel)
+		if apiKey == "" || model == "" {
+			return func(string) (string, error) {
+				return "", errors.New("custom AI endpoint requires AI_API_KEY and aiModel")
+			}
+		}
+		return openrouter.New(apiKey, model).WithEndpoint(endpoint).Convert
 	}
 	apiKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
 	if apiKey == "" {

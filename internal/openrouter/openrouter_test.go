@@ -123,3 +123,49 @@ func TestConvertEmptyChoicesReturnsEmptyString(t *testing.T) {
 		t.Errorf("Convert = %q, want empty", got)
 	}
 }
+
+func TestCustomEndpointPaths(t *testing.T) {
+	for _, tc := range []struct{ base, path string }{
+		{"", "/v1/chat/completions"},
+		{"/", "/v1/chat/completions"},
+		{"/v1/", "/v1/chat/completions"},
+		{"/proxy/api/v1", "/proxy/api/v1/chat/completions"},
+		{"/v1/chat/completions/", "/v1/chat/completions"},
+	} {
+		t.Run(tc.base, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if r.URL.Path != tc.path || r.Header.Get("Authorization") != "Bearer router-key" || body["model"] != "router/model" || r.Method != "POST" {
+					t.Errorf("unexpected request: %s %s model=%v", r.Method, r.URL.Path, body["model"])
+				}
+				_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"0 9 * * 1-5"}}]}`)
+			}))
+			defer srv.Close()
+			got, err := openrouter.New("router-key", "router/model").WithEndpoint(srv.URL + tc.base).Convert("weekdays at 9am")
+			if err != nil || got != "0 9 * * 1-5" {
+				t.Fatalf("Convert = %q, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestCustomEndpointRejectsInvalidURLsAndRedirects(t *testing.T) {
+	for _, endpoint := range []string{"localhost:20128", "file:///tmp/key", "https://user:secret@example.com/v1", "https://example.com/v1?key=secret", "https://example.com/#secret", "http://"} {
+		_, err := openrouter.New("key", "model").WithEndpoint(endpoint).Convert("daily")
+		if err == nil || !strings.Contains(err.Error(), "aiEndpoint must") || strings.Contains(err.Error(), "secret") {
+			t.Errorf("invalid endpoint error = %v", err)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirected" {
+			t.Error("followed redirect with credentials")
+		}
+		http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	_, err := openrouter.New("key", "model").WithEndpoint(srv.URL).Convert("daily")
+	if err == nil || !strings.Contains(err.Error(), "307") {
+		t.Fatalf("redirect error = %v", err)
+	}
+}

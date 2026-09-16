@@ -129,6 +129,8 @@ $script:ConfigDefaults = [ordered]@{
     runTimeoutMinutes = 0
     maxOutputLines    = 5000
     openRouterModel   = 'google/gemini-3.1-flash-lite'
+    aiEndpoint        = ''
+    aiModel           = ''
     syncOnLaunch      = $false
     logRetentionDays  = 30
     historyMaxLines   = 50000      # safety backstop only — retention is time-based
@@ -194,7 +196,7 @@ function Initialize-Sto {
         }
     }
     # secrets that may come from the process environment directly
-    foreach ($name in 'GITHUB_TOKEN', 'OPENROUTER_API_KEY', 'N8N_WEBHOOK_URL', 'MCP_AUTH_TOKEN') {
+    foreach ($name in 'GITHUB_TOKEN', 'OPENROUTER_API_KEY', 'AI_API_KEY', 'N8N_WEBHOOK_URL', 'MCP_AUTH_TOKEN') {
         $v = [Environment]::GetEnvironmentVariable($name)
         if ($v) { Register-StoSecret -Name $name -Value $v }
     }

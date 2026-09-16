@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,44 @@ import (
 	"github.com/yshah-aromatech/scriptorium/internal/openrouter"
 	"github.com/yshah-aromatech/scriptorium/internal/tui/theme"
 )
+
+func TestCronAIUsesCustomEndpointAndSeparateKey(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-key-must-not-be-sent")
+	t.Setenv("AI_API_KEY", "router-key")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer router-key" || body["model"] != "router/model" {
+			t.Errorf("wrong custom endpoint request: %s model=%v", r.URL.Path, body["model"])
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"0 9 * * 1-5"}}]}`)
+	}))
+	defer srv.Close()
+	m := newFixtureModel(t, truecolorEnv)
+	m.app.Cfg.AIEndpoint = srv.URL + "/v1"
+	m.app.Cfg.AIModel = "router/model"
+	got := cron.ToCron("weekdays at 9am", m.cronAI())
+	if got.Err != "" || got.Expression != "0 9 * * 1-5" {
+		t.Fatalf("custom conversion = %+v", got)
+	}
+	for _, missing := range []string{"key", "model"} {
+		t.Run(missing, func(t *testing.T) {
+			if missing == "key" {
+				t.Setenv("AI_API_KEY", "")
+			} else {
+				m.app.Cfg.AIModel = ""
+				defer func() { m.app.Cfg.AIModel = "router/model" }()
+			}
+			got := cron.ToCron("daily", m.cronAI())
+			if !strings.Contains(got.Err, "requires AI_API_KEY and aiModel") {
+				t.Fatalf("missing custom %s: %+v", missing, got)
+			}
+			if got := cron.ToCron("0 9 * * *", m.cronAI()); got.Err != "" || got.Source != "literal" {
+				t.Fatalf("literal cron needs AI: %+v", got)
+			}
+		})
+	}
+}
 
 // schedAt is a fixture model on the Schedules view. Unlike History, the view
 // needs no async load — it reads the same m.scripts/m.schedules/m.missed the

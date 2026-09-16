@@ -250,22 +250,39 @@ function Convert-StoToCron {
     if (Test-StoCronExpression $t) {
         return @{ Expression = $t; Source = 'literal'; Error = $null }
     }
+    $cfg = Get-StoConfig
+    $endpoint = 'https://openrouter.ai/api/v1/chat/completions'
+    $model = [string]$cfg.openRouterModel
     $apiKey = $env:OPENROUTER_API_KEY
+    if (-not [string]::IsNullOrWhiteSpace($cfg.aiEndpoint)) {
+        $apiKey = $env:AI_API_KEY
+        $model = ([string]$cfg.aiModel).Trim()
+        if ([string]::IsNullOrWhiteSpace($apiKey) -or -not $model) {
+            return @{ Expression = $null; Source = 'ai'; Error = 'AI request failed: custom AI endpoint requires AI_API_KEY and aiModel' }
+        }
+        $uri = $null
+        if (-not [uri]::TryCreate($cfg.aiEndpoint.Trim(), [UriKind]::Absolute, [ref]$uri) -or
+            $uri.Scheme -notin 'http', 'https' -or -not $uri.Host -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) {
+            return @{ Expression = $null; Source = 'ai'; Error = 'AI request failed: aiEndpoint must be an absolute HTTP(S) URL without credentials, query, or fragment' }
+        }
+        $endpoint = $uri.AbsoluteUri.TrimEnd('/')
+        if ($uri.AbsolutePath -eq '/') { $endpoint += '/v1' }
+        if (-not $endpoint.EndsWith('/chat/completions')) { $endpoint += '/chat/completions' }
+    }
     if (-not $apiKey) {
         return @{ Expression = $null; Source = 'ai'; Error = 'not a cron expression, and OPENROUTER_API_KEY is not set for natural-language conversion' }
     }
-    $cfg = Get-StoConfig
     try {
         $body = @{
-            model    = [string]$cfg.openRouterModel
+            model    = $model
             messages = @(
                 @{ role = 'system'; content = 'Convert the user''s scheduling request into a single standard 5-field cron expression. Reply with ONLY the cron expression, nothing else.' },
                 @{ role = 'user'; content = $t }
             )
         } | ConvertTo-Json -Depth 5
-        $resp = Invoke-RestMethod -Method Post -Uri 'https://openrouter.ai/api/v1/chat/completions' `
+        $resp = Invoke-RestMethod -Method Post -Uri $endpoint `
             -Headers @{ Authorization = "Bearer $apiKey" } -ContentType 'application/json' `
-            -Body $body -TimeoutSec 30
+            -Body $body -TimeoutSec 30 -MaximumRedirection 0
         $raw = "$($resp.choices[0].message.content)" -replace '`', ''
         # models sometimes fence the answer or append prose — take the first
         # line that validates as a cron expression
@@ -277,7 +294,7 @@ function Convert-StoToCron {
         }
         return @{ Expression = $null; Source = 'ai'; Error = "model returned something that isn't a cron expression: $($raw.Trim())" }
     } catch {
-        return @{ Expression = $null; Source = 'ai'; Error = "OpenRouter request failed: $($_.Exception.Message)" }
+        return @{ Expression = $null; Source = 'ai'; Error = "AI request failed: $($_.Exception.Message)" }
     }
 }
 

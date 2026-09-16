@@ -16,6 +16,23 @@ Describe 'Test-StoCronExpression' {
 }
 
 Describe 'Convert-StoToCron' {
+    It 'uses custom AI endpoint, model and key' {
+        Mock Get-StoConfig -ModuleName Cron { @{ aiEndpoint = 'http://localhost:20128/v1/'; aiModel = 'router/model' } }
+        Mock Invoke-RestMethod -ModuleName Cron {
+            @{ choices = @(@{ message = @{ content = '0 9 * * 1-5' } }) }
+        }
+        $saved = $env:AI_API_KEY
+        try {
+            $env:AI_API_KEY = 'router-key'
+            $r = Convert-StoToCron 'weekdays at 9am'
+            $r.Expression | Should -Be '0 9 * * 1-5'
+            Should -Invoke Invoke-RestMethod -ModuleName Cron -Times 1 -Exactly -ParameterFilter {
+                $Uri -eq 'http://localhost:20128/v1/chat/completions' -and
+                $Headers.Authorization -eq 'Bearer router-key' -and
+                ($Body | ConvertFrom-Json).model -eq 'router/model' -and $MaximumRedirection -eq 0
+            }
+        } finally { $env:AI_API_KEY = $saved }
+    }
     It 'passes literal cron through without the AI' {
         $r = Convert-StoToCron '*/5 * * * *'
         $r.Expression | Should -Be '*/5 * * * *'

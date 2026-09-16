@@ -30,7 +30,7 @@ func ToCron(text string, ai func(text string) (string, error)) Conversion {
 	}
 	raw, err := ai(t)
 	if err != nil {
-		return Conversion{Source: "ai", Err: "OpenRouter request failed: " + err.Error()}
+		return Conversion{Source: "ai", Err: "AI request failed: " + err.Error()}
 	}
 	// models sometimes fence the answer or append prose — strip backticks and
 	// take the first line that validates as a cron expression

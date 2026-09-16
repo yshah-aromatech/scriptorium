@@ -107,6 +107,8 @@ type Config struct {
 	RunTimeoutMinutes  float64
 	MaxOutputLines     int
 	OpenRouterModel    string
+	AIEndpoint         string
+	AIModel            string
 	SyncOnLaunch       bool
 	LogRetentionDays   float64
 	HistoryMaxLines    int
@@ -149,6 +151,8 @@ var knownNonNumericKeys = map[string]bool{
 	"n8nWebhookUrl":   true,
 	"pwshBin":         true,
 	"openRouterModel": true,
+	"aiEndpoint":      true,
+	"aiModel":         true,
 	"syncOnLaunch":    true,
 	"colorMode":       true,
 	// theme is a GO-ONLY key (parity divergence 23): it selects one of the
@@ -463,6 +467,10 @@ func assignNonNumeric(cfg *Config, key string, raw json.RawMessage) {
 		if json.Unmarshal(raw, &s) == nil {
 			cfg.OpenRouterModel = s
 		}
+	case "aiEndpoint":
+		_ = json.Unmarshal(raw, &cfg.AIEndpoint)
+	case "aiModel":
+		_ = json.Unmarshal(raw, &cfg.AIModel)
 	case "syncOnLaunch":
 		var b bool
 		if json.Unmarshal(raw, &b) == nil {
@@ -542,11 +550,11 @@ func SaveTheme(appDir, name string) error {
 
 // forceEnvNames are secrets that may arrive directly via the process
 // environment rather than the app .env file.
-var forceEnvNames = []string{"GITHUB_TOKEN", "OPENROUTER_API_KEY", "N8N_WEBHOOK_URL", "MCP_AUTH_TOKEN"}
+var forceEnvNames = []string{"GITHUB_TOKEN", "OPENROUTER_API_KEY", "AI_API_KEY", "N8N_WEBHOOK_URL", "MCP_AUTH_TOKEN"}
 
 // LoadAppEnv reads <appDir>/.env into the process environment (an already
 // set variable wins) and registers every value through reg's name gate;
-// it then force-registers the four known secret names directly from the
+// it then force-registers the known secret names directly from the
 // process environment when set.
 func LoadAppEnv(appDir string, reg *secret.Registry) error {
 	vals, err := envfile.Read(filepath.Join(appDir, ".env"))

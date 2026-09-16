@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -24,10 +26,11 @@ const timeout = 30 * time.Second
 
 // Client talks to one OpenRouter-compatible endpoint.
 type Client struct {
-	apiKey  string
-	model   string
-	baseURL string
-	http    *http.Client
+	apiKey   string
+	model    string
+	baseURL  string
+	endpoint string
+	http     *http.Client
 }
 
 // New builds a client for the real endpoint.
@@ -36,13 +39,20 @@ func New(apiKey, model string) *Client {
 		apiKey:  apiKey,
 		model:   model,
 		baseURL: "https://openrouter.ai",
-		http:    &http.Client{Timeout: timeout},
+		http:    &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 
 // WithBaseURL points the client at another origin (an httptest server).
 func (c *Client) WithBaseURL(u string) *Client {
 	c.baseURL = u
+	return c
+}
+
+// WithEndpoint accepts an OpenAI-compatible API base or full completion URL.
+// An origin alone uses /v1, as expected by 9router.
+func (c *Client) WithEndpoint(endpoint string) *Client {
+	c.endpoint = strings.TrimSpace(endpoint)
 	return c
 }
 
@@ -68,6 +78,22 @@ type response struct {
 // when the reply carries no choice). Every failure — dial, status, decode —
 // comes back as a plain error message for ToCron to wrap.
 func (c *Client) Convert(text string) (string, error) {
+	endpoint := c.baseURL + "/api/v1/chat/completions"
+	if c.endpoint != "" {
+		u, err := url.Parse(c.endpoint)
+		if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+			return "", fmt.Errorf("aiEndpoint must be an absolute HTTP(S) URL without credentials, query, or fragment")
+		}
+		u.Path = strings.TrimRight(u.Path, "/")
+		if u.Path == "" {
+			u.Path = "/v1"
+		}
+		if !strings.HasSuffix(u.Path, "/chat/completions") {
+			u.Path += "/chat/completions"
+		}
+		u.RawPath = ""
+		endpoint = u.String()
+	}
 	body, err := json.Marshal(request{
 		Model: c.model,
 		Messages: []message{
@@ -79,7 +105,7 @@ func (c *Client) Convert(text string) (string, error) {
 		return "", err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}

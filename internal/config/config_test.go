@@ -66,6 +66,22 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestCustomAIConfigAndKeyRedaction(t *testing.T) {
+	dir := appDirWith(t, `{"aiEndpoint":"http://localhost:20128/v1","aiModel":"router/model"}`)
+	cfg, _, warnings, err := config.Load(dir)
+	if err != nil || len(warnings) != 0 || cfg.AIEndpoint != "http://localhost:20128/v1" || cfg.AIModel != "router/model" {
+		t.Fatalf("custom AI config = %+v, %v, %v", cfg, warnings, err)
+	}
+	t.Setenv("AI_API_KEY", "router-secret-value")
+	reg := secret.NewRegistry()
+	if err := config.LoadAppEnv(dir, reg); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(reg.Redact("Bearer router-secret-value"), "router-secret-value") {
+		t.Fatal("custom AI key was not redacted")
+	}
+}
+
 func TestReducedMotionAndSaveTheme(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
