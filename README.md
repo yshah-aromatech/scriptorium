@@ -47,6 +47,8 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 
 Mouse: wheel scrolls the hovered pane; click focuses/selects; drag over the output pane selects and copies text.
 
+Paste into the `.env` editor, argument/schedule/filter/search prompts, and theme/command searches using your terminal's paste shortcut (`Cmd+V` on macOS, usually `Ctrl+Shift+V` on Linux/Windows, or the terminal's Paste menu). This also works over SSH. `Ctrl+V` in these fields reads the clipboard on the machine running Scriptorium, when available. Multiline paste stays multiline in the `.env` editor; `Ctrl+S` saves. Pasting into a prompt does not submit it — press `Enter` separately.
+
 ## Installation
 
 ```bash

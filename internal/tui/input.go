@@ -105,10 +105,15 @@ func (in *inputOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if msg.Code == tea.KeyEnter {
 		return in.onSubmit(m, in.ti.Value()), true
 	}
+	return in.update(m, msg), false
+}
+
+func (in *inputOverlay) update(m *Model, msg tea.Msg) tea.Cmd {
+	before := in.ti.Value()
 	var cmd tea.Cmd
 	in.ti, cmd = in.ti.Update(msg)
-	if in.onChange != nil {
-		return tea.Batch(cmd, in.onChange(m, in.ti.Value())), false
+	if in.onChange != nil && in.ti.Value() != before {
+		return tea.Batch(cmd, in.onChange(m, in.ti.Value()))
 	}
-	return cmd, false
+	return cmd
 }

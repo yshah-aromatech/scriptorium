@@ -165,10 +165,14 @@ func (p *paletteOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		return replay(it.b), true
 	}
+	return p.update(msg), false
+}
+
+func (p *paletteOverlay) update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	p.ti, cmd = p.ti.Update(msg)
 	p.filter()
-	return cmd, false
+	return cmd
 }
 
 // replay turns a binding into the keypress that triggers it, so the palette
@@ -306,9 +310,19 @@ func (p *themeOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		p.preview(m)
 		return nil, true
 	}
+	return p.update(m, msg), false
+}
+
+func (p *themeOverlay) update(m *Model, msg tea.Msg) tea.Cmd {
+	if p.saving {
+		return nil
+	}
+	before := p.ti.Value()
 	var cmd tea.Cmd
 	p.ti, cmd = p.ti.Update(msg)
-	p.filter()
-	p.preview(m)
-	return cmd, false
+	if p.ti.Value() != before {
+		p.filter()
+		p.preview(m)
+	}
+	return cmd
 }

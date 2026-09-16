@@ -108,10 +108,20 @@ func (e *envOverlay) key(m *Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		e.saving = true
 		return e.save(m), false
 	}
-	e.escArmed = false
+	return e.update(msg), false
+}
+
+func (e *envOverlay) update(msg tea.Msg) tea.Cmd {
+	if e.saving {
+		return nil
+	}
+	before := e.ta.Value()
 	var cmd tea.Cmd
 	e.ta, cmd = e.ta.Update(msg)
-	return cmd, false
+	if e.ta.Value() != before {
+		e.escArmed = false
+	}
+	return cmd
 }
 
 // save writes the buffer and re-registers every value in it as a secret,

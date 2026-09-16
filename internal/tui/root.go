@@ -456,6 +456,19 @@ func (m *Model) forward(msg tea.Msg) tea.Cmd {
 		case tea.MouseClickMsg, tea.MouseWheelMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 			return nil
 		}
+		// Clipboard commands return messages, not keypresses. Keep those
+		// messages (and terminal paste events) with the focused editor.
+		switch o := m.ov.(type) {
+		case *envOverlay:
+			return o.update(msg)
+		case *inputOverlay:
+			return o.update(m, msg)
+		case *paletteOverlay:
+			return o.update(msg)
+		case *themeOverlay:
+			return o.update(m, msg)
+		}
+		return nil
 	}
 	switch m.mode {
 	case modeFleet:
