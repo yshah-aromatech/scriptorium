@@ -17,6 +17,7 @@ import (
 func TestMcpNoTokenExitsOneWithExactMessage(t *testing.T) {
 	setupApp(t)
 	t.Setenv("MCP_AUTH_TOKEN", "")
+	t.Setenv("MCP_ENABLED", "true")
 
 	var out, errw bytes.Buffer
 	code := cli.Main([]string{"--mcp"}, &out, &errw)
@@ -29,6 +30,23 @@ func TestMcpNoTokenExitsOneWithExactMessage(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Errorf("stdout = %q, want empty (no listener should ever have started)", out.String())
+	}
+}
+
+func TestMcpDisabledAndInvalidNeverListen(t *testing.T) {
+	setupApp(t)
+	t.Setenv("MCP_AUTH_TOKEN", "")
+	for _, value := range []string{"false", "typo"} {
+		t.Setenv("MCP_ENABLED", value)
+		var out, errw bytes.Buffer
+		code := cli.Main([]string{"--mcp"}, &out, &errw)
+		if value == "false" {
+			if code != 0 || !strings.Contains(out.String(), "disabled") || errw.Len() != 0 {
+				t.Fatalf("disabled: %d %s %s", code, &out, &errw)
+			}
+		} else if code != 1 || !strings.Contains(errw.String(), "MCP_ENABLED must be") {
+			t.Fatalf("invalid: %d %s", code, &errw)
+		}
 	}
 }
 

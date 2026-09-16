@@ -47,6 +47,8 @@ Styled with the [Night Owl (dark)](https://terminalcolors.com/themes/night-owl/d
 
 Mouse: wheel scrolls the hovered pane; click focuses/selects; drag over the output pane selects and copies text.
 
+In History, press `Enter` to preview a run's log, then `y` to copy the full log file. Logs over 72 KB require a working local clipboard helper (`wl-copy`, `xclip`, or `xsel`); otherwise copying reports an error instead of truncating the log.
+
 Paste into the `.env` editor, argument/schedule/filter/search prompts, and theme/command searches using your terminal's paste shortcut (`Cmd+V` on macOS, usually `Ctrl+Shift+V` on Linux/Windows, or the terminal's Paste menu). This also works over SSH. `Ctrl+V` in these fields reads the clipboard on the machine running Scriptorium, when available. Multiline paste stays multiline in the `.env` editor; `Ctrl+S` saves. Pasting into a prompt does not submit it — press `Enter` separately.
 
 ## Releasing (maintainers)
@@ -163,11 +165,21 @@ POSTed as JSON after every run (`{"event":"script_run", ...}`; `{"event":"test"}
 
 Setup:
 
-1. `MCP_AUTH_TOKEN=$(openssl rand -hex 32)` in `.env` — the server refuses to start without one.
-2. `scriptorium --install-mcp-service` installs it as a systemd service (root → system unit; non-root → user unit + lingering, so it survives logout/reboot). `scriptorium --mcp` runs it in the foreground instead.
+1. Set `MCP_ENABLED=true` in the app's `.env`. Generate a token with `openssl rand -hex 32` and paste it as `MCP_AUTH_TOKEN=<generated value>` — `.env` does not execute shell commands, and the server refuses to start without a token.
+2. Regular `install.sh` already registers the systemd service, even while disabled (root → system unit; non-root → user unit + lingering, so it survives logout/reboot). Run `scriptorium --restart` after editing `.env` to start it. `scriptorium --mcp` runs it in the foreground instead.
 3. In n8n: an **AI Agent** node with an **MCP Client Tool** sub-node, Endpoint `http://<server-ip>:8765/mcp`, Server Transport **HTTP Streamable**, Bearer credential holding the token.
 
 MCP/API-triggered runs go through the same pipeline as manual/cron runs (lock, dep install, log, history, webhook with `"trigger": "mcp"`).
+
+### Reloading config and controlling the service (Go app)
+
+After editing `.env` or `config.json`, run `scriptorium --restart` on Linux in the same scope used to install the service: non-root controls `systemctl --user`, root controls the system unit. Use `SCRIPTORIUM_APP_DIR=/path/to/app scriptorium --restart` when needed to select the same app directory as the installed unit. No automatic sudo or scope fallback occurs.
+
+- `MCP_ENABLED=true` permits `--mcp`; regular install and `--restart` start/restart the service. A nonempty `MCP_AUTH_TOKEN` is required before service changes. systemd stops the old listener before starting a fresh process, which reads config from disk.
+- `MCP_ENABLED=false` makes `--mcp` exit successfully without binding either MCP or REST. Regular install registers the unit and stops it; `--restart` also stops it. No token is required while disabled. Set true and a token, then run `--restart` to resume.
+- An absent flag enables MCP only when `MCP_AUTH_TOKEN` is nonempty, preserving legacy configured services while allowing tokenless installs. `.env.example` sets false for new setups. Values use Go boolean syntax (`true`/`false`, `1`/`0`, `t`/`f`, and their standard case variants); empty or invalid values fail service commands. Exported environment values override `.env`, including the flag and token. Keep service settings in `.env` so the control command and service use the same values.
+- `--restart` controls only the installed service. It does not reset data, reinstall units, launch another listener, or relaunch an open TUI. Quit and reopen the TUI to reload its config; stop and rerun foreground `--mcp` on any platform. Ordinary TUI launches never install or start services.
+- Regular install refreshes and boot-enables the unit, then applies the current flag. At boot, the process reads `.env` and exits without listening when disabled. Units use `Restart=on-failure`, so disabled startup exits without a restart loop. Re-running `install.sh` upgrades older units and applies binary/config updates immediately. `--install-mcp-service` remains the installer's registration entry point, not a separate setup step. Missing units and systemd errors return failure; re-run regular install in the same scope if needed. Restart does not change boot enablement. Without systemd, install skips registration and reports foreground mode instead.
 
 ## Themes
 

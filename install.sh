@@ -250,20 +250,19 @@ else
   say "updated scriptorium $OLD_VERSION → ${NEW_VERSION:-(version unknown)} at $LAUNCHER"
 fi
 
-# --- restart hint: the rename above lets a running scriptorium-mcp service
-# finish out its old inode, but it won't pick up the new binary on its own --
-if command -v systemctl >/dev/null 2>&1; then
-  if systemctl is-active --quiet scriptorium-mcp 2>/dev/null; then
-    say "scriptorium-mcp is running the old binary — restart to apply: systemctl restart scriptorium-mcp"
-  elif [ "$(id -u)" != "0" ] && systemctl --user is-active --quiet scriptorium-mcp 2>/dev/null; then
-    say "scriptorium-mcp is running the old binary — restart to apply: systemctl --user restart scriptorium-mcp"
-  fi
-fi
-
 # --- config bootstrap (never overwrites an existing file) -------------------
 mkdir -p "$APP_DIR"
 [ -f "$APP_DIR/config.json" ] || { cp "$EXAMPLES_DIR/config.json.example" "$APP_DIR/config.json"; say "created config.json — set scriptsRepo and n8nWebhookUrl"; }
 [ -f "$APP_DIR/.env" ]        || { cp "$EXAMPLES_DIR/.env.example" "$APP_DIR/.env";               say "created .env — set GITHUB_TOKEN"; }
+
+# Register in the caller's scope, after config exists. Go owns env parsing,
+# token validation and restart/stop policy; never source .env as shell code.
+if command -v systemctl >/dev/null 2>&1; then
+  SCRIPTORIUM_APP_DIR="$APP_DIR" "$LAUNCHER" --install-mcp-service ||
+    die "service registration failed — fix the error above and re-run install.sh"
+else
+  say "NOTE: systemd unavailable — MCP/API can run in the foreground with scriptorium --mcp"
+fi
 
 # --- PATH persistence (v1.1.0): make the install usable in the NEXT shell ---
 # ~/.local/bin joins PATH via the user's shell rc, marker-guarded so three

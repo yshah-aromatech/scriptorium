@@ -2,6 +2,7 @@ package tui
 
 import (
 	"image/color"
+	"os"
 	"strconv"
 	"strings"
 
@@ -142,6 +143,8 @@ func (h *historyModel) onKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		h.sel = max(n-1, 0)
 	case key.Matches(msg, k.Open):
 		return h.openPreview(m, rows)
+	case key.Matches(msg, k.Copy):
+		return h.copyLog(m)
 	case key.Matches(msg, k.FailFilter):
 		return h.toggleScope(m, rows)
 	case key.Matches(msg, k.Start):
@@ -226,6 +229,20 @@ func (h *historyModel) openPreview(m *Model, rows []history.Row) tea.Cmd {
 	}
 	h.preview = &historyPreview{script: row.Script, path: path, lines: lines}
 	return nil
+}
+
+func (h *historyModel) copyLog(m *Model) tea.Cmd {
+	if h.preview == nil {
+		return status(StatusWarn, "open a log with enter before copying")
+	}
+	path := h.preview.path
+	return func() tea.Msg {
+		text, err := os.ReadFile(path)
+		if err != nil {
+			return status(StatusErr, "log copy failed: "+err.Error())()
+		}
+		return m.copyClipboard(string(text), true)()
+	}
 }
 
 // ---------------------------------------------------------------------------

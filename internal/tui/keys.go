@@ -230,6 +230,9 @@ func (m *Model) primaryHints(md mode, fc focus) []key.Binding {
 		}
 		return []key.Binding{k.Up, k.Down, k.Focus, k.Start, k.Args, k.Kill, k.Sync}
 	case modeHistory:
+		if m.history.preview != nil {
+			return []key.Binding{displayBinding(k.Copy, "copy full log"), k.Up, k.Down, k.Open, k.Start, displayBinding(k.FailFilter, "scope")}
+		}
 		return []key.Binding{k.Up, k.Down, k.Open, k.Start, displayBinding(k.FailFilter, "scope")}
 	case modeSchedules:
 		return []key.Binding{k.Up, k.Down, k.ScheduleEdit}

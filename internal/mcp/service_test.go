@@ -32,13 +32,49 @@ func TestServiceUnitGolden(t *testing.T) {
 		"# system units without User= don't set HOME, and the app expands ~/.scriptorium\n" +
 		"# with it — %h is the service manager's home (/root for the system manager)\n" +
 		"Environment=HOME=%h\n" +
-		"Restart=always\n" +
+		"Restart=on-failure\n" +
 		"RestartSec=5\n" +
 		"\n" +
 		"[Install]\n" +
 		"WantedBy=default.target\n"
 	if got != want {
 		t.Errorf("ServiceUnit() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestRestartScopeAndDisable(t *testing.T) {
+	for _, root := range []bool{true, false} {
+		for _, enabled := range []bool{true, false} {
+			var calls []string
+			in := &mcp.Installer{IsRoot: func() bool { return root }, Run: func(bin string, args ...string) error {
+				calls = append(calls, bin+" "+strings.Join(args, " "))
+				return nil
+			}}
+			token, action := "", "stop"
+			if enabled {
+				token, action = "token", "restart"
+			}
+			if err := in.Restart(enabled, token); err != nil {
+				t.Fatal(err)
+			}
+			want := "systemctl "
+			if !root {
+				want += "--user "
+			}
+			want += action + " scriptorium-mcp"
+			if len(calls) != 1 || calls[0] != want {
+				t.Fatalf("calls=%v, want %s", calls, want)
+			}
+		}
+	}
+	in := &mcp.Installer{Run: func(string, ...string) error { t.Fatal("missing token must not stop running service"); return nil }}
+	if err := in.Restart(true, ""); err == nil {
+		t.Fatal("missing token accepted")
+	}
+	wantErr := errors.New("no unit")
+	in.Run = func(string, ...string) error { return wantErr }
+	if err := in.Restart(false, ""); !errors.Is(err, wantErr) {
+		t.Fatalf("error not propagated: %v", err)
 	}
 }
 
@@ -52,7 +88,7 @@ func TestInstallRequiresTokenBeforeAnySideEffect(t *testing.T) {
 		Root: t.TempDir(),
 		Run:  func(string, ...string) error { calls++; return nil },
 	}
-	err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "")
+	err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "", true)
 	if err == nil {
 		t.Fatal("Install with empty token = nil error, want an error")
 	}
@@ -62,6 +98,37 @@ func TestInstallRequiresTokenBeforeAnySideEffect(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Errorf("Run called %d times, want 0", calls)
+	}
+}
+
+func TestInstallDisabledRegistersAndStopsWithoutToken(t *testing.T) {
+	for _, root := range []bool{true, false} {
+		var calls []string
+		in := &mcp.Installer{
+			Root: t.TempDir(), IsRoot: func() bool { return root },
+			HomeDir: func() (string, error) { return "/home/sto", nil }, Username: func() string { return "sto" },
+			Run: func(bin string, args ...string) error {
+				calls = append(calls, bin+" "+strings.Join(args, " "))
+				return nil
+			},
+		}
+		if err := in.Install("/opt/scriptorium", "/usr/bin/scriptorium", "", false); err != nil {
+			t.Fatal(err)
+		}
+		prefix, unit := "systemctl ", "/etc/systemd/system/scriptorium-mcp.service"
+		want := []string{}
+		if !root {
+			prefix, unit = "systemctl --user ", "/home/sto/.config/systemd/user/scriptorium-mcp.service"
+			want = append(want, "loginctl enable-linger sto")
+		}
+		want = append(want, prefix+"daemon-reload", prefix+"enable scriptorium-mcp", prefix+"stop scriptorium-mcp")
+		if strings.Join(calls, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("calls: %v, want %v", calls, want)
+		}
+		data, err := os.ReadFile(filepath.Join(in.Root, unit))
+		if err != nil || string(data) != mcp.ServiceUnit("/opt/scriptorium", "/usr/bin/scriptorium") {
+			t.Fatalf("unit: %s, %v", data, err)
+		}
 	}
 }
 
@@ -82,7 +149,7 @@ func TestInstallRootPath(t *testing.T) {
 		},
 		Out: func(string) {},
 	}
-	if err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "tok"); err != nil {
+	if err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "tok", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,7 +202,7 @@ func TestInstallUserPath(t *testing.T) {
 		},
 		Out: func(string) {},
 	}
-	if err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "tok"); err != nil {
+	if err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "tok", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -191,7 +258,7 @@ func TestInstallUserPathLingerSurvivesNoSessionBus(t *testing.T) {
 		},
 		Out: func(string) {},
 	}
-	err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "tok")
+	err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "tok", true)
 	if err == nil {
 		t.Fatal("Install() = nil error, want the propagated systemctl failure")
 	}
@@ -214,7 +281,7 @@ func TestLingerIsUserScopeOnly(t *testing.T) {
 		},
 		Out: func(string) {},
 	}
-	if err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "tok"); err != nil {
+	if err := in.Install("/opt/scriptorium", "/usr/local/bin/scriptorium", "tok", true); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range calls {

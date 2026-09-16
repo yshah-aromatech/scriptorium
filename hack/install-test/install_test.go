@@ -83,7 +83,42 @@ func TestInstallShAssetNamingMatchesConvention(t *testing.T) {
 // ---------------------------------------------------------------------
 
 const fixtureConfigExample = `{"scriptsRepo":"https://example.invalid/repo.git","dataDir":"~/.scriptorium"}` + "\n"
-const fixtureEnvExample = "GITHUB_TOKEN=\n"
+const fixtureEnvExample = "GITHUB_TOKEN=\nMCP_ENABLED=false\n"
+
+func executableFixture(content string) string {
+	if strings.HasPrefix(content, "fake-binary") {
+		return "#!/bin/sh\n# " + content + "\nexit 0\n"
+	}
+	return content
+}
+
+func TestRegularInstallRegistersServiceAfterBootstrap(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		home, release, stubBin := t.TempDir(), t.TempDir(), newStubBin(t)
+		appDir := filepath.Join(home, "app with spaces")
+		binary := `#!/bin/sh
+if [ "$1" = "--version" ]; then echo 'scriptorium vTEST'; exit 0; fi
+[ "$1" = "--install-mcp-service" ] || exit 90
+[ -f "$SCRIPTORIUM_APP_DIR/config.json" ] && [ -f "$SCRIPTORIUM_APP_DIR/.env" ] || exit 91
+printf '%s\n' "$SCRIPTORIUM_APP_DIR" >> "$HOME/registered"
+exit ${REGISTER_EXIT:-0}
+`
+		buildRelease(t, release, "amd64", binary)
+		extra := map[string]string{"FAKE_RELEASE_DIR": release, "SCRIPTORIUM_APP_DIR": appDir}
+		if fail {
+			extra["REGISTER_EXIT"] = "1"
+		}
+		res := runInstall(t, copyInstallSh(t, t.TempDir()), home, stubBin, extra)
+		if (res.exitCode != 0) != fail {
+			t.Fatalf("exit=%d: %s", res.exitCode, res.combined())
+		}
+		assertFileContent(t, filepath.Join(home, "registered"), appDir+"\n")
+		assertFileContent(t, filepath.Join(appDir, ".env"), fixtureEnvExample)
+		if strings.Contains(res.combined(), "running the old binary") {
+			t.Fatal("obsolete restart hint")
+		}
+	}
+}
 
 type fileEntry struct {
 	mode int64
@@ -135,7 +170,7 @@ func buildRelease(t *testing.T, releaseDir, arch, binaryContent string) (assetNa
 	assetName = buildinfo.AssetName("linux", arch)
 	tarPath := filepath.Join(releaseDir, assetName)
 	writeTarGz(t, tarPath, map[string]fileEntry{
-		"scriptorium":         {0o755, []byte(binaryContent)},
+		"scriptorium":         {0o755, []byte(executableFixture(binaryContent))},
 		"config.json.example": {0o644, []byte(fixtureConfigExample)},
 		".env.example":        {0o644, []byte(fixtureEnvExample)},
 		"README.md":           {0o644, []byte("# scriptorium\n")},
@@ -192,14 +227,11 @@ fi
 exit 1
 `
 
-// systemctlInactiveStub is the hermetic default: no scriptorium-mcp unit
-// exists in test fixtures, so both system- and user-scope `is-active`
-// checks report inactive (real systemctl's own exit code for that) and
-// install.sh's restart hint never fires unless a test overrides this stub.
+// systemctlInactiveStub makes accidental systemctl calls fail. Fixture
+// binaries mock registration; real service command sequences live in mcp tests.
 const systemctlInactiveStub = "#!/bin/sh\nexit 3\n"
 
-// systemctlActiveStub answers `is-active --quiet` as active regardless of
-// scope, for tests that assert the restart hint fires.
+// systemctlActiveStub ensures install no longer depends on active-state probes.
 const systemctlActiveStub = "#!/bin/sh\nexit 0\n"
 
 func writeStub(t *testing.T, dir, name, content string) {
@@ -657,6 +689,7 @@ func TestNoPathWarningWhenAlreadyOnPath(t *testing.T) {
 
 func assertFileContent(t *testing.T, path, want string) {
 	t.Helper()
+	want = executableFixture(want)
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
@@ -906,7 +939,7 @@ func TestUpdateReplacesRunningBinaryAtomically(t *testing.T) {
 		systemctlStub string
 		wantHint      bool
 	}{
-		{"systemctl-active", systemctlActiveStub, true},
+		{"systemctl-active", systemctlActiveStub, false},
 		{"systemctl-inactive", systemctlInactiveStub, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

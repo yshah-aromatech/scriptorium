@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,92 @@ import (
 
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 )
+
+func TestHistoryCopyFullViewedLog(t *testing.T) {
+	m := historyAt(t, 120, 40)
+	noTools(t)
+	t.Setenv("TMUX", "test")
+	path := filepath.Join(t.TempDir(), "run.log")
+	text := "first 日本語\r\n" + strings.Repeat("long log line\r\n", 200) + "last\r\n"
+	write(t, path, text)
+	m.app.Cfg.LogTailKb = 1
+	m.historyScope = "sync-orders"
+	m.history.onLoaded(m, HistoryLoadedMsg{Rows: []history.Row{
+		{Script: "sync-orders"}, {Script: "sync-orders", LogFile: &path},
+	}})
+	press(m, "enter")
+	if m.history.preview == nil || strings.Contains(strings.Join(m.history.preview.lines, "\n"), "first") {
+		t.Fatal("fixture must open a truncated preview")
+	}
+	press(m, "down") // The selected row is no longer the viewed run.
+	cmd := press(m, "y")
+	m.history.preview = nil // The command must retain the viewed path.
+	got := findMsg[tea.RawMsg](t, cmd)
+	if fmt.Sprint(got.Msg) != tmuxWrap(osc52(text)) {
+		t.Fatal("copy did not preserve the entire viewed file verbatim")
+	}
+	for _, width := range []int{80, 120} {
+		m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		m.history.preview = &historyPreview{path: path, script: "sync-orders"}
+		if !strings.Contains(plainFrame(m), "y copy full log") {
+			t.Fatalf("copy hint missing at width %d", width)
+		}
+	}
+}
+
+func TestHistoryCopyFeedback(t *testing.T) {
+	m := historyAt(t, 120, 40)
+	noTools(t)
+	path := filepath.Join(t.TempDir(), "run.log")
+	for _, tc := range []struct {
+		name, text, want string
+		preview, exists  bool
+	}{
+		{name: "closed", want: "open a log with enter"},
+		{name: "missing", preview: true, want: "log copy failed:"},
+		{name: "empty", preview: true, exists: true, want: "nothing to copy"},
+		{name: "oversize", preview: true, exists: true, text: strings.Repeat("x", clipboardCap+1), want: "full log copy failed:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m.history.preview = nil
+			if tc.preview {
+				m.history.preview = &historyPreview{path: path}
+			}
+			if tc.exists {
+				write(t, path, tc.text)
+			}
+			msg := findMsg[StatusMsg](t, press(m, "y"))
+			if !strings.Contains(msg.Text, tc.want) {
+				t.Fatalf("status = %+v, want %q", msg, tc.want)
+			}
+		})
+	}
+}
+
+func TestHistoryCopyLargeLogToLocalClipboard(t *testing.T) {
+	m := historyAt(t, 120, 40)
+	dir := t.TempDir()
+	record := filepath.Join(dir, "clipboard")
+	tool := filepath.Join(dir, "wl-copy")
+	write(t, tool, fmt.Sprintf("#!/bin/sh\n/bin/cat > %q\n", record))
+	if err := os.Chmod(tool, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	path := filepath.Join(dir, "run.log")
+	text := strings.Repeat("日本語\r\n", clipboardCap/4)
+	write(t, path, text)
+	m.history.preview = &historyPreview{path: path}
+	report := findMsg[ClipboardMsg](t, press(m, "y"))
+	got, err := os.ReadFile(record)
+	if err != nil || string(got) != text {
+		t.Fatalf("full clipboard payload mismatch: %v", err)
+	}
+	msg := findMsg[StatusMsg](t, m.onClipboard(report))
+	if msg.Kind != StatusOK || !strings.Contains(msg.Text, "wl-copy") {
+		t.Fatalf("success feedback = %+v", msg)
+	}
+}
 
 // historyAt switches a fixture model into the History view and runs the load
 // command it schedules, so tests see the same rows the running app would.

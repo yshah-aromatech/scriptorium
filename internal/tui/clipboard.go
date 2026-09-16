@@ -102,11 +102,22 @@ func capClipboard(text string) (string, bool) {
 // copyToClipboard is the whole stack as one command. It is a command because
 // the exec half runs child processes, which may not happen inside Update.
 func (m *Model) copyToClipboard(text string) tea.Cmd {
+	return m.copyClipboard(text, false)
+}
+
+func (m *Model) copyClipboard(text string, full bool) tea.Cmd {
 	if strings.TrimSpace(text) == "" {
 		return status(StatusWarn, "nothing to copy")
 	}
 	env := os.Environ()
 	return func() tea.Msg {
+		// Full-log copies must never replace the clipboard with only a tail.
+		if full && len(text) > clipboardCap {
+			if tool, ok := execCopy(text); ok {
+				return ClipboardMsg{How: tool, Chars: utf8.RuneCountInString(text)}
+			}
+			return status(StatusErr, "full log copy failed: exceeds OSC 52 limit (72KB); install wl-copy, xclip or xsel")()
+		}
 		payload, capped := capClipboard(text)
 		how := []string{"OSC 52"}
 		if capped {

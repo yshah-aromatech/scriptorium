@@ -20,12 +20,14 @@ import (
 
 	"github.com/yshah-aromatech/scriptorium/internal/app"
 	"github.com/yshah-aromatech/scriptorium/internal/buildinfo"
+	"github.com/yshah-aromatech/scriptorium/internal/config"
 	"github.com/yshah-aromatech/scriptorium/internal/deps"
 	"github.com/yshah-aromatech/scriptorium/internal/format"
 	"github.com/yshah-aromatech/scriptorium/internal/history"
 	"github.com/yshah-aromatech/scriptorium/internal/mcp"
 	"github.com/yshah-aromatech/scriptorium/internal/runner"
 	"github.com/yshah-aromatech/scriptorium/internal/scripts"
+	"github.com/yshah-aromatech/scriptorium/internal/secret"
 	"github.com/yshah-aromatech/scriptorium/internal/tui"
 )
 
@@ -96,7 +98,8 @@ var helpLines = []string{
 	"  scriptorium --add-repo <url> [--name <n>] [--branch <b>]   add a scripts repo",
 	"  scriptorium --history [name]        print recent runs (optionally one script)",
 	"  scriptorium --mcp [--port <n>]      serve the MCP server (for n8n AI agents)",
-	"  scriptorium --install-mcp-service   install + start the MCP server as a systemd service",
+	"  scriptorium --install-mcp-service   register MCP/API service (called by install.sh)",
+	"  scriptorium --restart               reload .env and restart (or stop) the installed MCP/API service",
 	"  scriptorium --help",
 	"  scriptorium --version",
 	"",
@@ -114,6 +117,7 @@ type flags struct {
 	historyName     string
 	mcpOnly         bool
 	mcpInstall      bool
+	restart         bool
 	mcpPortOverride int
 	addRepoURL      string
 	addRepoName     string
@@ -170,6 +174,8 @@ func parseFlags(args []string) flags {
 			i++
 		case "--install-mcp-service":
 			f.mcpInstall = true
+		case "--restart":
+			f.restart = true
 		case "--history":
 			f.historyOnly = true
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
@@ -188,12 +194,16 @@ func parseFlags(args []string) flags {
 // Main is cli's whole testable surface: main.go is just
 // os.Exit(cli.Main(os.Args[1:], os.Stdout, os.Stderr)).
 func Main(args []string, stdout, stderr io.Writer) int {
+	f := parseFlags(args)
+	// Service control does not open stores or run startup retention.
+	if f.restart && !f.showHelp && !f.showVersion {
+		return runRestart(stdout, stderr)
+	}
 	a, err := app.Open(ResolveAppDir())
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	f := parseFlags(args)
 	for _, w := range a.Warnings {
 		fmt.Fprintln(stderr, "WARNING: "+w)
 	}
@@ -321,6 +331,15 @@ func resolveMcpPort(cfgPort, override int) int {
 // errors before ever calling into the server — ported verbatim, byte-exact
 // message, before any socket is touched.
 func runMcp(a *app.App, f flags, stdout, stderr io.Writer) int {
+	enabled, err := config.MCPEnabled()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if !enabled {
+		fmt.Fprintln(stdout, "MCP/API disabled (MCP_ENABLED=false)")
+		return 0
+	}
 	token := os.Getenv("MCP_AUTH_TOKEN")
 	if token == "" {
 		fmt.Fprintln(stderr, mcpNoTokenMessage)
@@ -354,15 +373,46 @@ func runInstallMcpService(a *app.App, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--install-mcp-service needs systemd (Linux only)")
 		return 1
 	}
+	enabled, err := config.MCPEnabled()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	in := &mcp.Installer{Out: func(s string) { fmt.Fprintln(stdout, s) }}
-	if err := in.Install(a.Paths.AppDir, exe, os.Getenv("MCP_AUTH_TOKEN")); err != nil {
+	if err := in.Install(a.Paths.AppDir, exe, os.Getenv("MCP_AUTH_TOKEN"), enabled); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	return 0
+}
+
+func runRestart(stdout, stderr io.Writer) int {
+	if runtime.GOOS != "linux" {
+		fmt.Fprintln(stderr, "--restart needs systemd (Linux only); relaunch the TUI or foreground --mcp to reload config")
+		return 1
+	}
+	if err := config.LoadAppEnv(ResolveAppDir(), secret.NewRegistry()); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	enabled, err := config.MCPEnabled()
+	if err == nil {
+		in := &mcp.Installer{}
+		err = in.Restart(enabled, os.Getenv("MCP_AUTH_TOKEN"))
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if enabled {
+		fmt.Fprintln(stdout, "MCP/API service restarted; config reloaded from disk")
+	} else {
+		fmt.Fprintln(stdout, "MCP/API service stopped (MCP_ENABLED=false)")
 	}
 	return 0
 }

@@ -552,6 +552,20 @@ func SaveTheme(appDir, name string) error {
 // environment rather than the app .env file.
 var forceEnvNames = []string{"GITHUB_TOKEN", "OPENROUTER_API_KEY", "AI_API_KEY", "N8N_WEBHOOK_URL", "MCP_AUTH_TOKEN"}
 
+// MCPEnabled preserves token-configured installations when the flag is absent.
+// LoadAppEnv must run first; exported environment values retain precedence.
+func MCPEnabled() (bool, error) {
+	value, set := os.LookupEnv("MCP_ENABLED")
+	if !set {
+		return os.Getenv("MCP_AUTH_TOKEN") != "", nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, errors.New("MCP_ENABLED must be true or false")
+	}
+	return enabled, nil
+}
+
 // LoadAppEnv reads <appDir>/.env into the process environment (an already
 // set variable wins) and registers every value through reg's name gate;
 // it then force-registers the known secret names directly from the

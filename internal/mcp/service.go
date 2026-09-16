@@ -34,7 +34,7 @@ WorkingDirectory=%s
 # system units without User= don't set HOME, and the app expands ~/.scriptorium
 # with it — %%h is the service manager's home (/root for the system manager)
 Environment=HOME=%%h
-Restart=always
+Restart=on-failure
 RestartSec=5
 
 [Install]
@@ -92,22 +92,42 @@ func (in *Installer) println(s string) {
 	}
 }
 
+// Restart controls only an existing unit in the caller's scope. systemd
+// serializes stop/start, and ExecStart uses --mcp, never --restart.
+func (in *Installer) Restart(enabled bool, token string) error {
+	action := "stop"
+	if enabled {
+		if token == "" {
+			return errors.New("MCP_AUTH_TOKEN is not set — service not restarted")
+		}
+		action = "restart"
+	}
+	args := []string{action, "scriptorium-mcp"}
+	if !in.isRootFn() {
+		args = append([]string{"--user"}, args...)
+	}
+	if err := in.run("systemctl", args...); err != nil {
+		return fmt.Errorf("systemctl %v: %w (re-run install.sh in the same user/root scope if the unit is missing)", args, err)
+	}
+	return nil
+}
+
 // Install ports Install-StoMcpService: writes the unit (root path:
 // /etc/systemd/system; non-root: ~/.config/systemd/user + linger), then
-// daemon-reload/enable/restart (never enable --now, so re-running the
-// command after a config change actually applies it).
-func (in *Installer) Install(appDir, execPath, token string) error {
-	if token == "" {
+// daemon-reload/enable and restart or stop according to enabled. The unit
+// remains boot-enabled; --mcp reads the flag again at every startup.
+func (in *Installer) Install(appDir, execPath, token string, enabled bool) error {
+	if enabled && token == "" {
 		return errors.New("MCP_AUTH_TOKEN is not set — add it to .env next to the app first (the service would just crash-loop without it)")
 	}
 	unit := ServiceUnit(appDir, execPath)
 	if in.isRootFn() {
-		return in.installSystem(unit)
+		return in.installSystem(unit, enabled, token)
 	}
-	return in.installUser(unit)
+	return in.installUser(unit, enabled, token)
 }
 
-func (in *Installer) installSystem(unit string) error {
+func (in *Installer) installSystem(unit string, enabled bool, token string) error {
 	unitFile := filepath.Join(in.Root, "/etc/systemd/system/scriptorium-mcp.service")
 	if err := os.MkdirAll(filepath.Dir(unitFile), 0o755); err != nil {
 		return err
@@ -123,17 +143,17 @@ func (in *Installer) installSystem(unit string) error {
 	}
 	// restart, not enable --now, so re-running the command after e.g. a
 	// mcpPort change actually applies it
-	if err := in.run("systemctl", "restart", "scriptorium-mcp"); err != nil {
+	if err := in.Restart(enabled, token); err != nil {
 		return err
 	}
 
-	in.println("installed + started system service: " + unitFile)
+	in.println(fmt.Sprintf("registered system service (MCP enabled=%t): %s", enabled, unitFile))
 	in.println("check:   systemctl status scriptorium-mcp")
 	in.println("logs:    journalctl -u scriptorium-mcp -f")
 	return nil
 }
 
-func (in *Installer) installUser(unit string) error {
+func (in *Installer) installUser(unit string, enabled bool, token string) error {
 	home, err := in.homeDirFn()
 	if err != nil {
 		return err
@@ -165,11 +185,11 @@ func (in *Installer) installUser(unit string) error {
 	if err := in.run("systemctl", "--user", "enable", "scriptorium-mcp"); err != nil {
 		return err
 	}
-	if err := in.run("systemctl", "--user", "restart", "scriptorium-mcp"); err != nil {
+	if err := in.Restart(enabled, token); err != nil {
 		return err
 	}
 
-	in.println("installed + started user service: " + unitFile)
+	in.println(fmt.Sprintf("registered user service (MCP enabled=%t): %s", enabled, unitFile))
 	in.println("check:   systemctl --user status scriptorium-mcp")
 	in.println("logs:    journalctl --user -u scriptorium-mcp -f")
 	return nil
