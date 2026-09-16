@@ -182,8 +182,7 @@ exit 1
 `
 
 const python3Stub = `#!/bin/sh
-if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ "$3" = "--help" ]; then
-  echo "usage: venv (fake)"
+if [ "$1" = "-m" ] && { [ "$2" = "venv" ] || [ "$2" = "pip" ]; }; then
   exit 0
 fi
 if [ "$1" = "--version" ]; then
@@ -221,6 +220,7 @@ func newStubBin(t *testing.T) string {
 	writeStub(t, dir, "curl", curlStub)
 	writeStub(t, dir, "uname", unameStub)
 	writeStub(t, dir, "python3", python3Stub)
+	writeStub(t, dir, "crontab", "#!/bin/sh\nexit 0\n")
 	writeStub(t, dir, "systemctl", systemctlInactiveStub)
 	return dir
 }
@@ -1035,7 +1035,7 @@ func prereqScenario(t *testing.T, stubs map[string]string) (runResult, string) {
 	}
 
 	stubBin := t.TempDir()
-	base := map[string]string{"curl": curlStub, "uname": unameStub, "python3": python3Stub}
+	base := map[string]string{"curl": curlStub, "uname": unameStub, "python3": python3Stub, "git": "#!/bin/sh\nexit 0\n", "crontab": "#!/bin/sh\nexit 0\n"}
 	for name, body := range base {
 		writeStub(t, stubBin, name, body)
 	}
@@ -1196,6 +1196,30 @@ func TestPrereqVenvRealCheck(t *testing.T) {
 	}
 }
 
+func TestPrereqMissingGitAndCron(t *testing.T) {
+	res, rec := prereqScenario(t, map[string]string{
+		"id": idRootStub, "apt-get": recorderStub,
+		"pwsh": "#!/bin/sh\nexit 0\n", "git": "", "crontab": "",
+	})
+	if res.exitCode != 0 || !strings.Contains(rec, "apt-get install -y git cron ca-certificates") {
+		t.Fatalf("missing system dependencies not installed: exit=%d\n%s\n%s", res.exitCode, rec, res.combined())
+	}
+}
+
+func TestPrereqPythonIncomplete(t *testing.T) {
+	for _, broken := range []string{"pip", "venv"} {
+		t.Run(broken, func(t *testing.T) {
+			res, rec := prereqScenario(t, map[string]string{
+				"id": idRootStub, "apt-get": recorderStub, "pwsh": "#!/bin/sh\nexit 0\n",
+				"python3": "#!/bin/sh\nif [ \"$2\" = \"" + broken + "\" ] && [ \"$3\" != --help ]; then exit 1; fi\nexit 0\n",
+			})
+			if res.exitCode != 0 || !strings.Contains(rec, "apt-get install -y python3 python3-venv python3-pip") {
+				t.Fatalf("broken %s not repaired: exit=%d\n%s\n%s", broken, res.exitCode, rec, res.combined())
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------
 // 10. pwsh snap fallback (v1.1.1 hotfix): the per-version Microsoft repo can
 //     set up fine yet not carry a powershell package at all (e.g. non-LTS
@@ -1257,8 +1281,8 @@ func TestPrereqPwshWarnsBothRoutesWhenNoSnapEither(t *testing.T) {
 	if res.exitCode != 0 {
 		t.Fatalf("exit = %d — a missing pwsh must never fail the install\n%s\nrecord:\n%s", res.exitCode, res.combined(), rec)
 	}
-	if strings.Contains(rec, "snap") {
-		t.Errorf("snap ran despite not being on PATH:\n%s", rec)
+	if !strings.Contains(rec, "apt-get install -y snapd") {
+		t.Errorf("missing snapd was not installed:\n%s", rec)
 	}
 	out := res.combined()
 	// snap isn't even installed here, so the first runnable step must be

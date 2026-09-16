@@ -26,13 +26,13 @@ die() { printf '\033[38;2;255;100;100m==>\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- prerequisites (v1.1.0, owner directive — reverses the v1.0 ruling) -----
 # On apt systems, missing prerequisites are INSTALLED, not warned about:
-# PowerShell 7 via the Microsoft repo (it upgrades the dependency scan from
+# Git, cron, installer tools, PowerShell 7 via the Microsoft repo (it upgrades the dependency scan from
 # the regex fallback to the real AST scanner) and python3 + pip + venv (the
 # venv is verified by actually running it — Debian ships python3 without a
 # working venv module). Privilege ladder: root runs apt directly; otherwise
 # `sudo -n` when a credential is cached; otherwise prompt for sudo ONCE on a
 # real terminal; with no sudo at all each package becomes a WARN carrying the
-# exact manual command. One failed prerequisite never aborts the install.
+# exact manual command. Failed system-tool installation aborts before download.
 
 APT_READY="" # root | sudo | none
 apt_probe() {
@@ -67,17 +67,18 @@ install_powershell() {
   # the powershell package from it. On non-LTS Ubuntu the per-version MS repo
   # can set up fine yet not carry a powershell package at all (v1.1.1: e.g.
   # 25.04) — fall back to snap before giving up.
+  ID=ubuntu
   VERSION_ID=""
   [ -r /etc/os-release ] && . /etc/os-release
   PMP_DIR="$(mktemp -d)"
   PMP_DEB="$PMP_DIR/packages-microsoft-prod.deb"
   say "installing PowerShell 7 via the Microsoft apt repo..."
-  if curl -fsSL -o "$PMP_DEB" "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb" &&
+  if curl -fsSL -o "$PMP_DEB" "https://packages.microsoft.com/config/${ID}/${VERSION_ID}/packages-microsoft-prod.deb" &&
     as_root dpkg -i "$PMP_DEB" >/dev/null &&
     as_root apt-get update -y >/dev/null &&
     as_root apt-get install -y powershell; then
     say "PowerShell 7 installed"
-  elif command -v snap >/dev/null 2>&1; then
+  elif command -v snap >/dev/null 2>&1 || { as_root apt-get update -y >/dev/null && as_root apt-get install -y snapd && command -v snap >/dev/null 2>&1; }; then
     say "PowerShell 7 not available via the Microsoft apt repo — trying snap instead..."
     if as_root snap install powershell --classic; then
       say "PowerShell 7 installed via snap"
@@ -101,25 +102,43 @@ install_python() {
 
 MISSING_PWSH=0
 MISSING_PY=0
+BASE_PACKAGES=()
+for requirement in git:git crontab:cron curl:curl tar:tar gzip:gzip; do
+  command -v "${requirement%%:*}" >/dev/null 2>&1 || BASE_PACKAGES+=("${requirement#*:}")
+done
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  BASE_PACKAGES+=(coreutils)
+fi
 command -v pwsh >/dev/null 2>&1 || MISSING_PWSH=1
-# the REAL venv check: `command -v python3` passes on Debian systems whose
-# venv module is a stub that only prints "install python3-venv"
-if ! command -v python3 >/dev/null 2>&1 || ! python3 -m venv --help >/dev/null 2>&1; then
+# Creating a venv exercises ensurepip; --help passes even when it is missing.
+PY_PROBE="$(mktemp -d)"
+if ! command -v python3 >/dev/null 2>&1 ||
+  ! python3 -m pip --version >/dev/null 2>&1 ||
+  ! python3 -m venv "$PY_PROBE/venv" >/dev/null 2>&1; then
   MISSING_PY=1
 fi
+rm -rf "$PY_PROBE"
 
-if [ "$MISSING_PWSH" = 1 ] || [ "$MISSING_PY" = 1 ]; then
+if [ "$MISSING_PWSH" = 1 ] || [ "$MISSING_PY" = 1 ] || [ "${#BASE_PACKAGES[@]}" -gt 0 ]; then
   if command -v apt-get >/dev/null 2>&1; then
     apt_probe
     if [ "$APT_READY" = "none" ]; then
+      [ "${#BASE_PACKAGES[@]}" -eq 0 ] || say "WARN: missing system dependencies — install with: sudo apt-get install -y ${BASE_PACKAGES[*]} ca-certificates"
       [ "$MISSING_PWSH" = 1 ] && say "WARN: PowerShell 7 (pwsh) is missing and sudo is unavailable — install it with: sudo apt-get install -y snapd && sudo snap install powershell --classic (or via the Microsoft repo: https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux)"
       [ "$MISSING_PY" = 1 ] && say "WARN: python3/venv/pip are missing and sudo is unavailable — install them with: sudo apt-get install -y python3 python3-venv python3-pip"
     else
+      if [ "${#BASE_PACKAGES[@]}" -gt 0 ]; then
+        say "installing system dependencies: ${BASE_PACKAGES[*]} + ca-certificates..."
+        as_root apt-get update -y >/dev/null &&
+          as_root apt-get install -y "${BASE_PACKAGES[@]}" ca-certificates ||
+          die "system dependency installation failed — fix apt errors and re-run"
+      fi
       [ "$MISSING_PWSH" = 1 ] && install_powershell
       [ "$MISSING_PY" = 1 ] && install_python
     fi
   else
     # non-apt systems: hints, unchanged
+    [ "${#BASE_PACKAGES[@]}" -eq 0 ] || say "NOTE: install missing system dependencies with your package manager: ${BASE_PACKAGES[*]}"
     [ "$MISSING_PWSH" = 1 ] && say "NOTE: PowerShell 7 (pwsh) not found — install: https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux"
     [ "$MISSING_PY" = 1 ] && say "NOTE: python3 with a working venv not found — install python3, python3-venv and python3-pip with your package manager"
   fi

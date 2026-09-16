@@ -59,7 +59,7 @@ Build and publish releases locally, not through GitHub Actions. CI runs tests, v
 curl -fsSL https://raw.githubusercontent.com/yshah-aromatech/scriptorium/main/install.sh | bash
 ```
 
-This downloads the latest release for your architecture (linux amd64/arm64), verifies its checksum, and installs it to `~/.local/bin/scriptorium`, creating `config.json` + `.env` from the examples in `~/scriptorium` (override with `SCRIPTORIUM_APP_DIR`). On apt systems it also installs the runtime prerequisites — PowerShell 7 via the Microsoft repo, and python3 + pip + venv — escalating via sudo where it has to and downgrading each to a warning with the exact manual command where it can't. It adds `~/.local/bin` to your shell rc (marker-guarded, never duplicated) when it isn't on your PATH. Re-running the same one-liner later is the updater: it verifies and replaces the binary and prints `updated scriptorium vOLD → vNEW`. Prefer to build from source instead:
+This downloads the latest release for your architecture (linux amd64/arm64), verifies its checksum, and installs it to `~/.local/bin/scriptorium`, creating `config.json` + `.env` from the examples in `~/scriptorium` (override with `SCRIPTORIUM_APP_DIR`). On apt systems it also installs missing dependencies: Git, cron, download/extraction/checksum tools, PowerShell 7, and python3 + pip + venv. System package installation includes CA certificates. Python checks verify pip and actually create a venv. PowerShell uses the Microsoft repo for your distribution, falling back to snap (installing snapd if needed). The installer requests sudo when needed; without administrator access it prints manual installation commands. It adds `~/.local/bin` to your shell rc (marker-guarded, never duplicated) when it isn't on your PATH. Re-running the same one-liner later is the updater: it verifies and replaces the binary and prints `updated scriptorium vOLD → vNEW`. Script-specific Python packages and PowerShell modules install through the app after configuring your script repositories. Prefer to build from source instead:
 
 ```bash
 git clone https://github.com/yshah-aromatech/scriptorium.git && cd scriptorium && ./install.sh
@@ -75,7 +75,7 @@ Then:
 
 ### PowerShell 7
 
-The app binary itself has no PowerShell dependency — only *running PowerShell scripts* needs `pwsh` on the machine, same as needing Python for Python scripts. Without `pwsh`, PowerShell scripts still run, just with a degraded (regex-based) dependency scan instead of the real AST scan. Since v1.1.0, install.sh installs `pwsh` for you on apt systems (via the Microsoft repo, matched to your `/etc/os-release` release); with no usable sudo it prints the manual command instead:
+The app binary itself has no PowerShell dependency — only *running PowerShell scripts* needs `pwsh` on the machine, same as needing Python for Python scripts. Without `pwsh`, dependency scanning falls back to regex, but PowerShell scripts cannot run. The installer installs `pwsh` for you on apt systems (via the Microsoft repo, matched to your `/etc/os-release` release, with a snap fallback); with no usable sudo it prints the manual command instead:
 
 ```bash
 # what install.sh runs for you — adjust the ubuntu/24.04 path for your release
